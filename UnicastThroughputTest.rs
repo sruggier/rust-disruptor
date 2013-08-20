@@ -52,8 +52,8 @@ fn run_single_threaded_benchmark() {
 fn run_task_pipe_benchmark() {
     let iterations = NUM_ITERATIONS;
 
-    let (result_port, result_chan): (Port<u64>, Chan<u64>) = stream();
-    let (input_port, input_chan): (Port<u64>, Chan<u64>) = stream();
+    let (result_port, result_chan) = stream::<u64>();
+    let (input_port, input_chan) = stream::<u64>();
 
     let before = precise_time_ns();
 
