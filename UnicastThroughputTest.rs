@@ -2,6 +2,8 @@ extern mod extra;
 use extra::time::precise_time_ns;
 use std::u64;
 
+mod disruptor;
+
 /**
  * Given a start time, finish time, and number of iterations, calculates and
  * returns the number of operations per second.
