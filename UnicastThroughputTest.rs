@@ -61,7 +61,7 @@ fn run_task_pipe_benchmark() {
 
     // Listen on input_port, summing all the received numbers, then return the
     // sum through result_chan.
-    do spawn || {
+    do spawn {
         let mut sum = 0u64;
         let mut i = input_port.recv();
         while i != u64::max_value {
