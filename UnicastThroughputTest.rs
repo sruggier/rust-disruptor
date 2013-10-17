@@ -1,7 +1,9 @@
 extern mod extra;
 use extra::time::precise_time_ns;
 use std::u64;
+use std::task::{spawn_sched,SingleThreaded};
 
+use disruptor::{SinglePublisher,SpinWaitStrategy};
 mod disruptor;
 
 /**
@@ -88,7 +90,53 @@ fn run_task_pipe_benchmark() {
     println(fmt!("Pipes: %? ops/sec, result wait: %? ns", ops, wait_latency));
 }
 
+fn run_disruptor_benchmark() {
+    let iterations = NUM_ITERATIONS;
+    let mut publisher = SinglePublisher::<u64, SpinWaitStrategy>::new(8192, SpinWaitStrategy);
+    let consumer = publisher.create_consumer_chain(1)[0];
+    let (result_port, result_chan) = stream::<u64>();
+
+    let before = precise_time_ns();
+
+    // spawn_sched needed for now, because the consumer thread busy-waits
+    // rather than voluntarily descheduling.
+    do spawn_sched(SingleThreaded) {
+        let mut sum = 0u64;
+
+        loop {
+            let mut i = u64::max_value;
+            do consumer.consume |value: &u64| {
+                i = *value;
+            }
+            debug!("%?", i);
+            if i == u64::max_value {
+                result_chan.send(sum);
+                break;
+            }
+            sum += i;
+        }
+    }
+
+    // Send value
+    for num in range(0, iterations) {
+        publisher.publish(num as u64)
+    }
+    publisher.publish(u64::max_value);
+
+    let loop_end = precise_time_ns();
+    let result = result_port.recv();
+    let after = precise_time_ns();
+
+    assert!(result == EXPECTED_VALUE);
+    let ops = calculate_ops_per_second(before, after, iterations);
+    let wait_latency = after - loop_end;
+    println(fmt!("Pipes: %? ops/sec, result wait: %? ns", ops, wait_latency));
+}
+
 fn main() {
     run_single_threaded_benchmark();
+    run_disruptor_benchmark();
+    run_disruptor_benchmark();
+    run_task_pipe_benchmark();
     run_task_pipe_benchmark();
 }
