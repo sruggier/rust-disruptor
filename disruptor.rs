@@ -112,7 +112,7 @@ impl<T> Drop for RingBufferData<T> {
 struct SequenceNumber(uint);
 
 /**
- * The initial value of new SequenceNumbers.
+ * Represents an initial state where no slots have been published or consumed.
  */
 static SEQUENCE_INITIAL: uint = 0;
 
