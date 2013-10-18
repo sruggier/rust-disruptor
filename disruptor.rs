@@ -102,6 +102,33 @@ impl<T> Drop for RingBufferData<T> {
 }
 
 /**
+ * Values of this object are used as indices into the ring buffer (modulo the buffer size). The
+ * current value represents the latest slot that a publisher or consumer is still processing. In
+ * other words, a value of 0 means that no slots have been published or consumed, and that 0 is the
+ * current slot being processed. A value of 1 means that slot 0 has be released for processing by
+ * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
+ * processing.
+ */
+struct SequenceNumber(uint);
+
+/**
+ * The initial value of new SequenceNumbers.
+ */
+static SEQUENCE_INITIAL: uint = 0;
+
+impl SequenceNumber {
+    /**
+     * Returns self modulo `buffer_size`, exploiting the assumption that the size will always be a
+     * power of two by using a masking operation instead of the modulo operator.
+     */
+    fn as_index(self, buffer_size: uint) -> uint {
+        assert!(buffer_size.population_count() == 1, "buffer_size must be a power of two (received {:?})", buffer_size);
+        let index_mask = buffer_size - 1;
+        *self & index_mask
+    }
+}
+
+/**
  * A ring buffer that takes `SequenceNumber` values for get and set operations, performing wrapping
  * automatically. Memory is managed using reference counting.
  *
@@ -252,28 +279,6 @@ fn test_calculate_available_publisher() {
 }
 
 /**
- * Values of this object are used as indices into the ring buffer (modulo the buffer size). The
- * current value represents the latest slot that a publisher or consumer is still processing. In
- * other words, a value of 0 means that no slots have been published or consumed, and that 0 is the
- * current slot being processed. A value of 1 means that slot 0 has be released for processing by
- * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
- * processing.
- */
-struct SequenceNumber(uint);
-
-impl SequenceNumber {
-    /**
-     * Returns self modulo `buffer_size`, exploiting the assumption that the size will always be a
-     * power of two by using a masking operation instead of the modulo operator.
-     */
-    fn as_index(self, buffer_size: uint) -> uint {
-        assert!(buffer_size.population_count() == 1, "buffer_size must be a power of two (received {:?})", buffer_size);
-        let index_mask = buffer_size - 1;
-        *self & index_mask
-    }
-}
-
-/**
  * Mutable reference to an atomic uint. Returns values as SequenceNumber to disambiguate from
  * indices and other uint values. Memory is managed via reference counting.
  */
@@ -281,11 +286,6 @@ struct Sequence {
     // TODO: prevent false sharing of the underlying AtomicUint
     value_arc: UnsafeArc<AtomicUint>
 }
-
-/**
- * The initial value of new SequenceNumbers.
- */
-static SEQUENCE_INITIAL: uint = 0;
 
 impl Sequence {
     /// Allocates a new sequence.
