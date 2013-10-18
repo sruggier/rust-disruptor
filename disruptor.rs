@@ -540,6 +540,18 @@ impl<W: PublishingWaitStrategy> SinglePublisherSequenceBarrier<W> {
     fn advance(&mut self, batch_size: uint) {
         self.sequence.advance(batch_size);
     }
+
+    /**
+     * Assign a new set of dependencies to this barrier.
+     *
+     * # TODO
+     *
+     * After settling on a design for concurrent producers and perhaps concurrent consumers,
+     * redesign dependencies to be immutable after the object is constructed.
+     */
+    fn setDependencies(&mut self, dependencies: ~[SequenceReader]) {
+        self.dependencies = dependencies;
+    }
 }
 
 impl<W: PublishingWaitStrategy> SequenceBarrier for SinglePublisherSequenceBarrier<W> {
@@ -666,7 +678,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
             dependencies = ~[c.sequence_barrier.sb.sequence.clone_immut()];
             consumers.push(c);
         }
-        self.sequence_barrier.dependencies = dependencies;
+        self.sequence_barrier.setDependencies(dependencies);
         consumers
     }
 
