@@ -117,6 +117,11 @@ struct SequenceNumber(uint);
 static SEQUENCE_INITIAL: uint = 0;
 
 impl SequenceNumber {
+    /// Returns `SEQUENCE_INITIAL` as a `SequenceNumber`.
+    fn initial() -> SequenceNumber {
+        SequenceNumber(SEQUENCE_INITIAL)
+    }
+
     /**
      * Returns self modulo `buffer_size`, exploiting the assumption that the size will always be a
      * power of two by using a masking operation instead of the modulo operator.
@@ -368,11 +373,11 @@ fn test_sequencereader() {
 /// Helps consumers wait on upstream dependencies.
 trait ProcessingWaitStrategy : PublishingWaitStrategy {
     /**
-     * Waits for `dependencies` to release the next `n` slots. For strategies that block, only the
-     * publisher will attempt to wake the task. Therefore, `cursor` is needed so that once the
-     * publisher has advanced sufficiently, the task will stop blocking and busy-wait on its
-     * immediate dependencies for the event to become available for processing. Once the publisher
-     * has released the necessary slots, the rest of the pipeline should release them in a
+     * Waits for `cursor` to release the next `n` slots. For strategies that block, only the
+     * publisher will attempt to wake the task. Therefore, the publisher's `cursor` is needed so
+     * that once the publisher has advanced sufficiently, the task will stop blocking and busy-wait
+     * on its immediate dependencies for the event to become available for processing. Once the
+     * publisher has released the necessary slots, the rest of the pipeline should release them in a
      * relatively bounded amount of time, so it's probably worth wasting some CPU time to achieve
      * lower latency.
      *
@@ -383,24 +388,21 @@ trait ProcessingWaitStrategy : PublishingWaitStrategy {
      * solution where we work with the task scheduler to switch to another task without involving
      * the kernel, if possible.
      */
-    fn waitFor(
+    fn waitForPublisher(
         &self,
         n: uint,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        dependencies: &[SequenceReader],
-        buffer_size: uint,
-        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
-    );
+        cached_cursor_value: SequenceNumber,
+        buffer_size: uint
+    ) -> SequenceNumber;
 }
 /**
  * Helps the publisher wait to avoid overwriting values that are still being consumed.
  */
 trait PublishingWaitStrategy : Clone {
     /**
-     * Like `ProcessingWaitStrategy::waitFor`, but since the publisher owns the cursor, it will only
-     * be waiting for consumers to finish processing items that have already been published, as
-     * opposed to waiting for new items to be published.
+     * Wait for upstream consumers to finish processing items that have already been published.
      */
     fn waitForConsumers(
         &self,
@@ -429,22 +431,22 @@ trait PublishingWaitStrategy : Clone {
 pub struct SpinWaitStrategy;
 
 impl ProcessingWaitStrategy for SpinWaitStrategy {
-    fn waitFor(
+    fn waitForPublisher(
         &self,
         n: uint,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        dependencies: &[SequenceReader],
-        buffer_size: uint,
-        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
-    ) {
-        // First, wait for enough slots to get published
-        let mut available = calculate_available(cursor.get(), waiting_sequence, buffer_size);
+        cached_cursor_value: SequenceNumber,
+        buffer_size: uint
+    ) -> SequenceNumber {
+        let mut available = calculate_available_consumer(cached_cursor_value, waiting_sequence, buffer_size);
+        let mut cursor_value = cached_cursor_value;
         while n > available {
-            available = calculate_available(cursor.get(), waiting_sequence, buffer_size);
+            cursor_value = cursor.get();
+            available = calculate_available_consumer(cursor_value, waiting_sequence, buffer_size);
         }
 
-        self.waitForConsumers(n, waiting_sequence, dependencies, buffer_size, calculate_available);
+        cursor_value
     }
 }
 impl PublishingWaitStrategy for SpinWaitStrategy {
@@ -567,6 +569,11 @@ struct SingleConsumerSequenceBarrier<W> {
      * A reference to the publisher's sequence.
      */
     cursor: SequenceReader,
+    /**
+     * Contains the last value retrieved from the publisher's task. Caching allows for batching in
+     * cases where the upstream dependency has pulled ahead.
+     */
+    cached_cursor_value: SequenceNumber,
 }
 
 impl<W: ProcessingWaitStrategy> SingleConsumerSequenceBarrier<W> {
@@ -582,7 +589,8 @@ impl<W: ProcessingWaitStrategy> SingleConsumerSequenceBarrier<W> {
                 wait_strategy,
                 buffer_size
             ),
-            cursor: cursor
+            cursor: cursor,
+            cached_cursor_value: SequenceNumber::initial(),
         }
     }
 }
@@ -594,7 +602,8 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrie
 
     fn nextN(&mut self, batch_size: uint) {
         let current_sequence = self.get_current();
-        self.sb.wait_strategy.waitFor(batch_size, current_sequence, &self.cursor, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
+        self.cached_cursor_value = self.sb.wait_strategy.waitForPublisher(batch_size, current_sequence, &self.cursor, self.cached_cursor_value, self.sb.buffer_size);
+        self.sb.wait_strategy.waitForConsumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
     }
 
     fn releaseN(&mut self, batch_size: uint) {
