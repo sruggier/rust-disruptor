@@ -284,26 +284,46 @@ fn test_calculate_available_publisher() {
 }
 
 /**
+ * The underlying data referenced by Sequence.
+ */
+struct SequenceData {
+    // Prevent false sharing by padding either side of the value with 60 bytes of data.
+    // TODO: If uint is 64 bits wide, this is more padding than needed.
+    padding1: [u32, ..15],
+    value: AtomicUint,
+    padding2: [u32, ..15],
+}
+
+impl SequenceData {
+    fn new(initial_value: uint) -> SequenceData {
+        SequenceData {
+            padding1: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            value: AtomicUint::new(initial_value),
+            padding2: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        }
+    }
+}
+
+/**
  * Mutable reference to an atomic uint. Returns values as SequenceNumber to disambiguate from
  * indices and other uint values. Memory is managed via reference counting.
  */
 struct Sequence {
-    // TODO: prevent false sharing of the underlying AtomicUint
-    value_arc: UnsafeArc<AtomicUint>
+    value_arc: UnsafeArc<SequenceData>
 }
 
 impl Sequence {
     /// Allocates a new sequence.
     fn new() -> Sequence {
         Sequence {
-            value_arc: UnsafeArc::new(AtomicUint::new(SEQUENCE_INITIAL))
+            value_arc: UnsafeArc::new(SequenceData::new(SEQUENCE_INITIAL)),
         }
     }
 
     /// See SequenceReader's get method
     fn get(&self) -> SequenceNumber {
         unsafe {
-            SequenceNumber((*self.value_arc.get_immut()).load(Acquire))
+            SequenceNumber((*self.value_arc.get_immut()).value.load(Acquire))
         }
     }
 
@@ -314,7 +334,7 @@ impl Sequence {
      */
     fn get_owned(&self) -> SequenceNumber {
         unsafe {
-            SequenceNumber((*self.value_arc.get_immut()).load(Relaxed))
+            SequenceNumber((*self.value_arc.get_immut()).value.load(Relaxed))
         }
     }
 
@@ -336,7 +356,7 @@ impl Sequence {
     fn advance(&mut self, n: uint) {
         unsafe {
             let p = self.value_arc.get();
-            (*p).fetch_add(n, Release);
+            (*p).value.fetch_add(n, Release);
         }
     }
 }
