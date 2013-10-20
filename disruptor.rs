@@ -421,7 +421,7 @@ trait ProcessingWaitStrategy : PublishingWaitStrategy {
      * solution where we work with the task scheduler to switch to another task without involving
      * the kernel, if possible.
      */
-    fn waitForPublisher(
+    fn wait_for_publisher(
         &self,
         n: uint,
         waiting_sequence: SequenceNumber,
@@ -437,7 +437,7 @@ trait PublishingWaitStrategy : Clone {
     /**
      * Wait for upstream consumers to finish processing items that have already been published.
      */
-    fn waitForConsumers(
+    fn wait_for_consumers(
         &self,
         n: uint,
         waiting_sequence: SequenceNumber,
@@ -464,7 +464,7 @@ trait PublishingWaitStrategy : Clone {
 pub struct SpinWaitStrategy;
 
 impl ProcessingWaitStrategy for SpinWaitStrategy {
-    fn waitForPublisher(
+    fn wait_for_publisher(
         &self,
         n: uint,
         waiting_sequence: SequenceNumber,
@@ -483,7 +483,7 @@ impl ProcessingWaitStrategy for SpinWaitStrategy {
     }
 }
 impl PublishingWaitStrategy for SpinWaitStrategy {
-    fn waitForConsumers(
+    fn wait_for_consumers(
         &self,
         n: uint,
         waiting_sequence: SequenceNumber,
@@ -594,7 +594,7 @@ impl<W: PublishingWaitStrategy> SequenceBarrier for SinglePublisherSequenceBarri
 
     fn nextN(&mut self, batch_size: uint) {
         let current_sequence = self.sequence.get_owned();
-        self.wait_strategy.waitForConsumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher)
+        self.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher)
     }
 
     fn releaseN(&mut self, batch_size: uint) {
@@ -647,8 +647,8 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrie
 
     fn nextN(&mut self, batch_size: uint) {
         let current_sequence = self.get_current();
-        self.cached_cursor_value = self.sb.wait_strategy.waitForPublisher(batch_size, current_sequence, &self.cursor, self.cached_cursor_value, self.sb.buffer_size);
-        self.sb.wait_strategy.waitForConsumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
+        self.cached_cursor_value = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence, &self.cursor, self.cached_cursor_value, self.sb.buffer_size);
+        self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
     }
 
     fn releaseN(&mut self, batch_size: uint) {
