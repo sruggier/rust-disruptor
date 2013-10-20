@@ -4,7 +4,7 @@ use std::option::{Option};
 use std::ptr;
 use std::vec;
 use std::unstable::sync::UnsafeArc;
-use std::unstable::atomics::{AtomicUint,Relaxed,Acquire,Release};
+use std::unstable::atomics::{AtomicUint,Acquire,Release};
 
 /**
  * Raw pointer to a single nullable element of T. We are going to communicate between tasks by
@@ -290,8 +290,11 @@ struct SequenceData {
     // Prevent false sharing by padding either side of the value with 60 bytes of data.
     // TODO: If uint is 64 bits wide, this is more padding than needed.
     padding1: [u32, ..15],
+    /// The published value of the sequence, visible to waiting consumers.
     value: AtomicUint,
-    padding2: [u32, ..15],
+    /// We can avoid atomic operations by using this cached value whenever possible.
+    private_value: uint,
+    padding2: [u32, ..14],
 }
 
 impl SequenceData {
@@ -299,7 +302,8 @@ impl SequenceData {
         SequenceData {
             padding1: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             value: AtomicUint::new(initial_value),
-            padding2: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            private_value: initial_value,
+            padding2: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         }
     }
 }
@@ -320,22 +324,32 @@ impl Sequence {
         }
     }
 
-    /// See SequenceReader's get method
-    fn get(&self) -> SequenceNumber {
+    /// Get a reference to the underlying data. Internal helper.
+    fn get_data<'s>(&'s self) -> &'s SequenceData {
         unsafe {
-            SequenceNumber((*self.value_arc.get_immut()).value.load(Acquire))
+            &(*self.value_arc.get_immut())
         }
     }
 
+    /// Get a mutable reference to the underlying data. Internal helper.
+    fn get_mut_data<'s>(&'s mut self) -> &'s mut SequenceData {
+        unsafe {
+            &mut(*self.value_arc.get())
+        }
+    }
+
+    /// See SequenceReader's get method
+    fn get(&self) -> SequenceNumber {
+        SequenceNumber(self.get_data().value.load(Acquire))
+    }
+
     /**
-     * Gets the value of the Sequence, using relaxed ordering semantics. This should only be called
-     * from the task that owns the sequence number (in other words, the only task that writes to the
-     * sequence number)
+     * Gets the internally cached value of the Sequence. This should only be called from the task
+     * that owns the sequence number (in other words, the only task that writes to the sequence
+     * number)
      */
     fn get_owned(&self) -> SequenceNumber {
-        unsafe {
-            SequenceNumber((*self.value_arc.get_immut()).value.load(Relaxed))
-        }
+        SequenceNumber(self.get_data().private_value)
     }
 
     /**
@@ -354,10 +368,9 @@ impl Sequence {
      * are visible other tasks before this write.
      */
     fn advance(&mut self, n: uint) {
-        unsafe {
-            let p = self.value_arc.get();
-            (*p).value.fetch_add(n, Release);
-        }
+        let d = self.get_mut_data();
+        d.private_value += n;
+        d.value.store(d.private_value, Release);
     }
 }
 
