@@ -133,6 +133,43 @@ impl SequenceNumber {
     }
 }
 
+/// UnsafeArc, but with unchecked versions of the get and get_immut functions. The use of atomic
+/// operations in those functions is a significant slowdown.
+///
+/// FIXME: remove this if/when UnsafeArc exposes similar functions.
+struct UncheckedUnsafeArc<T> {
+    arc: UnsafeArc<T>,
+    data: *mut T,
+}
+
+impl<T: Send> UncheckedUnsafeArc<T> {
+    fn new(data: T) -> UncheckedUnsafeArc<T> {
+        let arc = UnsafeArc::new(data);
+        let data = arc.get();
+        UncheckedUnsafeArc {
+            arc: arc,
+            data: data,
+        }
+    }
+
+    unsafe fn get<'s>(&'s mut self) -> &'s mut T {
+        &mut *self.data
+    }
+
+    unsafe fn get_immut<'s>(&'s self) -> &'s T {
+        &*self.data
+    }
+}
+
+impl<T: Send> Clone for UncheckedUnsafeArc<T> {
+    fn clone(&self) -> UncheckedUnsafeArc<T> {
+        UncheckedUnsafeArc {
+            arc: self.arc.clone(),
+            data: self.data,
+        }
+    }
+}
+
 /**
  * A ring buffer that takes `SequenceNumber` values for get and set operations, performing wrapping
  * automatically. Memory is managed using reference counting.
@@ -142,7 +179,7 @@ impl SequenceNumber {
  * It is the caller's responsibility to avoid data races when reading and writing elements.
  */
 struct RingBuffer<T> {
-    data: UnsafeArc<RingBufferData<T>>,
+    data: UncheckedUnsafeArc<RingBufferData<T>>,
 }
 
 impl<T: Send> Clone for RingBuffer<T> {
@@ -160,14 +197,13 @@ impl<T: Send> RingBuffer<T> {
     fn new(size: uint) -> RingBuffer<T> {
         assert!(size.population_count() == 1, "RingBuffer size must be a power of two (received {:?})", size);
         let data = RingBufferData::new(size);
-        RingBuffer { data: UnsafeArc::new(data) }
+        RingBuffer { data: UncheckedUnsafeArc::new(data) }
     }
 
     /// Get the size of the underlying buffer.
     fn size(&self) -> uint {
         unsafe {
-            (*self.data.get_immut()).entries.len()
-
+            self.data.get_immut().entries.len()
         }
     }
 
@@ -176,14 +212,14 @@ impl<T: Send> RingBuffer<T> {
      * the buffer, and the value is moved in into that element of the buffer.
      */
     unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
-        let d = &mut(*self.data.get());
+        let d = self.data.get();
         let index = sequence.as_index(d.entries.len());
         d.entries[index].set(value);
     }
 
     /// Get an immutable reference to the value pointed to by `sequence`.
     unsafe fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
-        let d = &(*self.data.get_immut());
+        let d = self.data.get_immut();
         let index = sequence.as_index(d.entries.len());
         d.entries[index].get()
     }
@@ -313,34 +349,22 @@ impl SequenceData {
  * indices and other uint values. Memory is managed via reference counting.
  */
 struct Sequence {
-    value_arc: UnsafeArc<SequenceData>
+    value_arc: UncheckedUnsafeArc<SequenceData>
 }
 
 impl Sequence {
     /// Allocates a new sequence.
     fn new() -> Sequence {
         Sequence {
-            value_arc: UnsafeArc::new(SequenceData::new(SEQUENCE_INITIAL)),
-        }
-    }
-
-    /// Get a reference to the underlying data. Internal helper.
-    fn get_data<'s>(&'s self) -> &'s SequenceData {
-        unsafe {
-            &(*self.value_arc.get_immut())
-        }
-    }
-
-    /// Get a mutable reference to the underlying data. Internal helper.
-    fn get_mut_data<'s>(&'s mut self) -> &'s mut SequenceData {
-        unsafe {
-            &mut(*self.value_arc.get())
+            value_arc: UncheckedUnsafeArc::new(SequenceData::new(SEQUENCE_INITIAL)),
         }
     }
 
     /// See SequenceReader's get method
     fn get(&self) -> SequenceNumber {
-        SequenceNumber(self.get_data().value.load(Acquire))
+        unsafe {
+            SequenceNumber(self.value_arc.get_immut().value.load(Acquire))
+        }
     }
 
     /**
@@ -349,7 +373,9 @@ impl Sequence {
      * number)
      */
     fn get_owned(&self) -> SequenceNumber {
-        SequenceNumber(self.get_data().private_value)
+        unsafe {
+            SequenceNumber(self.value_arc.get_immut().private_value)
+        }
     }
 
     /**
@@ -368,9 +394,11 @@ impl Sequence {
      * are visible other tasks before this write.
      */
     fn advance(&mut self, n: uint) {
-        let d = self.get_mut_data();
-        d.private_value += n;
-        d.value.store(d.private_value, Release);
+        unsafe {
+            let d = self.value_arc.get();
+            d.private_value += n;
+            d.value.store(d.private_value, Release);
+        }
     }
 }
 
