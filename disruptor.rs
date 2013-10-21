@@ -1,8 +1,10 @@
 use std::clone::Clone;
 use std::cast;
+use std::cmp;
 use std::option::{Option};
 use std::ptr;
 use std::vec;
+use std::uint;
 use std::unstable::sync::UnsafeArc;
 use std::unstable::atomics::{AtomicUint,Acquire,Release};
 
@@ -390,15 +392,33 @@ impl Sequence {
     }
 
     /**
-     * Add n to the sequence and ensure that other writes that have taken place before the call
-     * are visible other tasks before this write.
+     * Add n to the cached, private version of the sequence, without making the new value visible to
+     * other threads.
      */
     fn advance(&mut self, n: uint) {
         unsafe {
+            self.value_arc.get().private_value += n;
+        }
+    }
+
+    /**
+     *  Publishes the private sequence value to other threads, along with any other writes (for
+     *  example, to the corresponding item in the ring buffer) that have taken place before the
+     *  call.
+     */
+    fn flush(&mut self) {
+        unsafe {
             let d = self.value_arc.get();
-            d.private_value += n;
             d.value.store(d.private_value, Release);
         }
+    }
+
+    /**
+     * Advance, then immediately make the change visible to other threads.
+     */
+    fn advance_and_flush(&mut self, n: uint) {
+        self.advance(n);
+        self.flush();
     }
 }
 
@@ -425,22 +445,24 @@ fn test_sequencereader() {
     let mut sequence =  Sequence::new();
     let reader = sequence.clone_immut();
     assert!(0 == *reader.get());
-    sequence.advance(1);
+    sequence.advance_and_flush(1);
     assert!(1 == *reader.get());
-    sequence.advance(11);
+    sequence.advance_and_flush(11);
     assert!(12 == *reader.get());
 }
 
 /// Helps consumers wait on upstream dependencies.
 trait ProcessingWaitStrategy : PublishingWaitStrategy {
     /**
-     * Waits for `cursor` to release the next `n` slots. For strategies that block, only the
-     * publisher will attempt to wake the task. Therefore, the publisher's `cursor` is needed so
-     * that once the publisher has advanced sufficiently, the task will stop blocking and busy-wait
-     * on its immediate dependencies for the event to become available for processing. Once the
-     * publisher has released the necessary slots, the rest of the pipeline should release them in a
-     * relatively bounded amount of time, so it's probably worth wasting some CPU time to achieve
-     * lower latency.
+     * Wait for `cursor` to release the next `n` slots, then return the actual number of available
+     * slots, which may be greater than `n`.
+     *
+     * For strategies that block, only the publisher will attempt to wake the task. Therefore, the
+     * publisher's `cursor` is needed so that once the publisher has advanced sufficiently, the task
+     * will stop blocking and busy-wait on its immediate dependencies for the event to become
+     * available for processing. Once the publisher has released the necessary slots, the rest of
+     * the pipeline should release them in a relatively bounded amount of time, so it's probably
+     * worth wasting some CPU time to achieve lower latency.
      *
      * # TODO
      *
@@ -454,16 +476,17 @@ trait ProcessingWaitStrategy : PublishingWaitStrategy {
         n: uint,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        cached_cursor_value: SequenceNumber,
         buffer_size: uint
-    ) -> SequenceNumber;
+    ) -> uint;
 }
 /**
  * Helps the publisher wait to avoid overwriting values that are still being consumed.
  */
 trait PublishingWaitStrategy : Clone {
     /**
-     * Wait for upstream consumers to finish processing items that have already been published.
+     * Wait for upstream consumers to finish processing items that have already been published, then
+     * returns the actual number of available items, which may be greater than n. Returns
+     * uint::max_value if there are no dependencies.
      */
     fn wait_for_consumers(
         &self,
@@ -472,7 +495,7 @@ trait PublishingWaitStrategy : Clone {
         dependencies: &[SequenceReader],
         buffer_size: uint,
         calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
-    );
+    ) -> uint;
 
     /**
      * Wakes up any consumers that have blocked waiting for new items to be published.
@@ -497,17 +520,15 @@ impl ProcessingWaitStrategy for SpinWaitStrategy {
         n: uint,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        cached_cursor_value: SequenceNumber,
         buffer_size: uint
-    ) -> SequenceNumber {
-        let mut available = calculate_available_consumer(cached_cursor_value, waiting_sequence, buffer_size);
-        let mut cursor_value = cached_cursor_value;
+    ) -> uint {
+        let mut available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
         while n > available {
-            cursor_value = cursor.get();
-            available = calculate_available_consumer(cursor_value, waiting_sequence, buffer_size);
+            // busy wait
+            available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
         }
 
-        cursor_value
+        available
     }
 }
 impl PublishingWaitStrategy for SpinWaitStrategy {
@@ -518,13 +539,18 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
         dependencies: &[SequenceReader],
         buffer_size: uint,
         calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
-    ) {
-        // Iterate over each dependency in turn, waiting for them to release the next `n` items
-        for consumer_sequence in dependencies.iter() {
-            while n > calculate_available(consumer_sequence.get(), waiting_sequence, buffer_size) {
-                // busy wait
+    ) -> uint {
+
+        let mut available = 0;
+        while available < n {
+            // busy wait
+            available = uint::max_value;
+            for consumer_sequence in dependencies.iter() {
+                let a = calculate_available(consumer_sequence.get(), waiting_sequence, buffer_size);
+                available = cmp::min(available, a);
             }
         }
+        available
     }
 
     fn notifyAllWaiters(&mut self) {
@@ -582,6 +608,11 @@ struct SinglePublisherSequenceBarrier<W> {
     dependencies: ~[SequenceReader],
     wait_strategy: W,
     buffer_size: uint,
+    /**
+     * Contains the number of available items as of the last time the dependent sequence values were
+     * retrieved.
+     */
+    cached_available: uint,
 }
 
 impl<W: PublishingWaitStrategy> SinglePublisherSequenceBarrier<W> {
@@ -595,11 +626,8 @@ impl<W: PublishingWaitStrategy> SinglePublisherSequenceBarrier<W> {
             dependencies: dependencies,
             wait_strategy: wait_strategy,
             buffer_size: buffer_size,
+            cached_available: 0,
         }
-    }
-
-    fn advance(&mut self, batch_size: uint) {
-        self.sequence.advance(batch_size);
     }
 
     /**
@@ -621,12 +649,17 @@ impl<W: PublishingWaitStrategy> SequenceBarrier for SinglePublisherSequenceBarri
     }
 
     fn nextN(&mut self, batch_size: uint) {
-        let current_sequence = self.sequence.get_owned();
-        self.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher)
+        if (self.cached_available < batch_size) {
+            let current_sequence = self.sequence.get_owned();
+            self.cached_available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher);
+        }
     }
 
     fn releaseN(&mut self, batch_size: uint) {
-        self.advance(batch_size);
+        assert!(self.cached_available >= batch_size);
+        self.cached_available -= batch_size;
+
+        self.sequence.advance_and_flush(batch_size);
         self.wait_strategy.notifyAllWaiters();
     }
 }
@@ -642,11 +675,6 @@ struct SingleConsumerSequenceBarrier<W> {
      * A reference to the publisher's sequence.
      */
     cursor: SequenceReader,
-    /**
-     * Contains the last value retrieved from the publisher's task. Caching allows for batching in
-     * cases where the upstream dependency has pulled ahead.
-     */
-    cached_cursor_value: SequenceNumber,
 }
 
 impl<W: ProcessingWaitStrategy> SingleConsumerSequenceBarrier<W> {
@@ -663,7 +691,6 @@ impl<W: ProcessingWaitStrategy> SingleConsumerSequenceBarrier<W> {
                 buffer_size
             ),
             cursor: cursor,
-            cached_cursor_value: SequenceNumber::initial(),
         }
     }
 }
@@ -674,13 +701,24 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrie
     }
 
     fn nextN(&mut self, batch_size: uint) {
-        let current_sequence = self.get_current();
-        self.cached_cursor_value = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence, &self.cursor, self.cached_cursor_value, self.sb.buffer_size);
-        self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
+        if (self.sb.cached_available < batch_size) {
+            let current_sequence = self.get_current();
+            let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence, &self.cursor, self.sb.buffer_size);
+            let a = self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
+            self.sb.cached_available = cmp::min(available, a);
+        }
     }
 
     fn releaseN(&mut self, batch_size: uint) {
-        self.sb.advance(batch_size);
+        assert!(self.sb.cached_available >= batch_size);
+        self.sb.cached_available -= batch_size;
+
+        self.sb.sequence.advance(batch_size);
+        // If the next call to nextN will result in more waiting, then make our progress visible to
+        // downstream consumers now.
+        if (self.sb.cached_available < batch_size) {
+            self.sb.sequence.flush();
+        }
     }
 }
 
