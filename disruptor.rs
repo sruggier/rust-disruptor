@@ -330,9 +330,10 @@ struct SequenceData {
     padding1: [u32, ..15],
     /// The published value of the sequence, visible to waiting consumers.
     value: AtomicUint,
+    padding2: [u32, ..15],
     /// We can avoid atomic operations by using this cached value whenever possible.
     private_value: uint,
-    padding2: [u32, ..14],
+    padding3: [u32, ..15],
 }
 
 impl SequenceData {
@@ -340,8 +341,9 @@ impl SequenceData {
         SequenceData {
             padding1: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             value: AtomicUint::new(initial_value),
+            padding2: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             private_value: initial_value,
-            padding2: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            padding3: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         }
     }
 }
