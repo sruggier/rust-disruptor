@@ -129,7 +129,7 @@ impl SequenceNumber {
      * power of two by using a masking operation instead of the modulo operator.
      */
     fn as_index(self, buffer_size: uint) -> uint {
-        assert!(buffer_size.population_count() == 1, "buffer_size must be a power of two (received {:?})", buffer_size);
+        // assert!(buffer_size.population_count() == 1, "buffer_size must be a power of two (received {:?})", buffer_size);
         let index_mask = buffer_size - 1;
         *self & index_mask
     }
