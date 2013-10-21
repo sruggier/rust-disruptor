@@ -137,6 +137,7 @@ fn main() {
     run_single_threaded_benchmark();
     run_disruptor_benchmark();
     run_disruptor_benchmark();
+    run_disruptor_benchmark();
     run_task_pipe_benchmark();
     run_task_pipe_benchmark();
 }
