@@ -454,7 +454,7 @@ fn test_sequencereader() {
 }
 
 /// Helps consumers wait on upstream dependencies.
-trait ProcessingWaitStrategy : PublishingWaitStrategy {
+pub trait ProcessingWaitStrategy : PublishingWaitStrategy {
     /**
      * Wait for `cursor` to release the next `n` slots, then return the actual number of available
      * slots, which may be greater than `n`.
@@ -484,7 +484,7 @@ trait ProcessingWaitStrategy : PublishingWaitStrategy {
 /**
  * Helps the publisher wait to avoid overwriting values that are still being consumed.
  */
-trait PublishingWaitStrategy : Clone {
+pub trait PublishingWaitStrategy : Clone + Send {
     /**
      * Wait for upstream consumers to finish processing items that have already been published, then
      * returns the actual number of available items, which may be greater than n. Returns
