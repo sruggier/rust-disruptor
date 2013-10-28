@@ -1,12 +1,14 @@
+use extra::sync::{Mutex};
 use std::clone::Clone;
 use std::cast;
 use std::cmp;
 use std::option::{Option};
 use std::ptr;
+use std::task;
 use std::vec;
 use std::uint;
 use std::unstable::sync::UnsafeArc;
-use std::unstable::atomics::{AtomicUint,Acquire,Release};
+use std::unstable::atomics::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
 
 /**
  * Raw pointer to a single nullable element of T. We are going to communicate between tasks by
@@ -474,7 +476,7 @@ pub trait ProcessingWaitStrategy : PublishingWaitStrategy {
      * the kernel, if possible.
      */
     fn wait_for_publisher(
-        &self,
+        &mut self,
         n: uint,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
@@ -501,6 +503,12 @@ pub trait PublishingWaitStrategy : Clone + Send {
 
     /**
      * Wakes up any consumers that have blocked waiting for new items to be published.
+     *
+     * # Safety notes
+     *
+     * This must be called only after signalling that the slot is published, or it will not always
+     * work, and consumers waiting using a blocking wait strategy may sleep indefinitely (until a
+     * second item is published).
      */
     fn notifyAllWaiters(&mut self);
 }
@@ -518,7 +526,7 @@ pub struct SpinWaitStrategy;
 
 impl ProcessingWaitStrategy for SpinWaitStrategy {
     fn wait_for_publisher(
-        &self,
+        &mut self,
         n: uint,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
@@ -556,6 +564,219 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
     }
 
     fn notifyAllWaiters(&mut self) {
+    }
+}
+
+/**
+ * Spins for a short time, then sleeps on a wait condition until the publisher signals. This comes
+ * at a cost, however: the publisher has to perform an extra read-modify-write operation on a shared
+ * atomic variable every time it publishes new items. The operation should be uncontended, unless it
+ * happens at the same time that a waiter is about to fall asleep. See below for details and a proof
+ * of correctness.
+ *
+ * # Design issues
+ *
+ * When a waiting task goes to sleep, it cannot sleep without a timeout unless it is certain that
+ * the publisher will wake it up when the next slot is published. The conventional solution to this
+ * problem would be to have the publisher acquire a lock after every publish, to guarantee that
+ * waiting consumers are woken up immediately. This would impose a prohibitive performance penalty
+ * if it happened here. In the common case, where the publisher does not need to signal, it would be
+ * good to avoid using locks altogether. However, any alternative solutions need to make the
+ * following guarantees:
+ *  - If a consumer decides to wait, the publisher must signal when it releases the slot that the
+ *    consumer was waiting for
+ *  - The publisher must signal _after_ the consumer has fallen asleep, or the consumer will not be
+ *    woken up
+ *
+ * # Approach
+ *
+ * We need a way for the publisher to synchronize with potential waiters at the point where it
+ * checks if it needs to signal or not. If it finds that it does not need to signal, we need to be
+ * able to prove that the consumer will not sleep. If it does see a need to signal, then it must be
+ * assured that it will do so after the consumer has fallen asleep.
+ *
+ * # Algorithm
+ *
+ * The publisher executes the following steps whenever releasing items:
+ *  - Release items via an atomic operation with release semantics (before calling notifyAllWaiters)
+ *  - Check if there are any waiters using a read-modify-write operation on a shared variable (with
+ *    rel-acq semantics)
+ *  - If so, acquire the lock and signal on the wait condition
+ *
+ * The consumer executes the following steps before going to sleep:
+ *  - Acquire the lock
+ *  - Express an intent to sleep using a read-modify-write operation (with rel-acq semantics) on the
+ *    shared variable
+ *  - Check for any newly released items
+ *  - If none, go to sleep, otherwise release the lock and finish waiting
+ *
+ * # Proof of correctness
+ *
+ * Two things need to be proven to show correctness:
+ *  - the publisher will signal when necessary
+ *  - the signal happens only after the waiter(s) have gone to sleep.
+ *
+ * Due to the use of read-modify-write operations, the race between publisher and consumer to access
+ * the shared variable has two simple outcomes: either the publisher checks first and refrains from
+ * signalling, or the consumer signals intent to sleep first, which the publisher will then see and
+ * act upon.
+ *
+ * If the publisher accesses the shared variable before consumer has signalled intent to sleep: as
+ * long as the item has been released before the access, we can say that:
+ *  - the item release happens before the publisher's shared variable access
+ *  - which happens before the consumer's shared variable access
+ *  - which happens before the consumer's final check for a newly released item before sleeping
+ * Therefore, if the publisher concludes that it doesn't need to signal, it is certain that the
+ * consumer will see the newly released item and refrain from sleeping. In other words, a consumer
+ * cannot go to sleep without the publisher seeing its intent to do so.
+ *
+ * An alternate proof based on the consumer deciding to sleep: due to acquire semantics on the
+ * shared variable access, we know that the consumer accesses the shared variable before checking
+ * for available items.  If the consumer, after taking the lock but before going to sleep, doesn't
+ * see a newly released item, the following happens-before ordering is implied: consumer shared
+ * variable access -> consumer check for new item -> publisher release of new item -> publisher
+ * access of shared variable. Therefore, if the waiter decides to sleep after seeing no progress
+ * from the publisher, we can say for sure that the publisher will see the signalled intent to
+ * sleep, acquire the lock, and signal on the wait condition.
+ *
+ * Regarding the second issue of whether the waiter goes to sleep before the signal wakes it up,
+ * observe that the consumer only expresses intent to sleep (through the shared variable) after
+ * acquiring the lock. Thus, the producer cannot see the signal until after the consumer acquires
+ * the lock, and cannot acquire the lock and signal until after the consumer has atomically released
+ * the lock and slept.
+ *
+ * Unfortunately, this proof depends on having release semantics on the publisher side, and acquire
+ * semantics on the waiting side. Release semantics require a store operation, while Acquire
+ * semantics require a load operation. Therefore, the publisher needs to load the shared variable to
+ * see if it needs to signal or not, while simultaneously storing to it in order to gain release
+ * semantics.  Likewise, in addition to modifying the shared variable to signal intent, the waiters
+ * need to also perform a load in order to have acquire semantics. This is why read-modify-write
+ * operations are needed, and not just the cheaper load/store operations.
+ */
+pub struct BlockingWaitStrategy {
+    d: UncheckedUnsafeArc<BlockingWaitStrategyData>
+}
+
+struct BlockingWaitStrategyData {
+    /// True if any tasks are waiting for new slots to be released by the publisher.
+    signal_needed: AtomicBool,
+    /// Waiting consumers block on, and are signalled by, this.
+    wait_condition: Mutex,
+}
+
+impl BlockingWaitStrategy {
+    pub fn new() -> BlockingWaitStrategy {
+        let d = BlockingWaitStrategyData {
+            signal_needed: AtomicBool::new(false),
+            wait_condition: Mutex::new_with_condvars(1),
+        };
+        BlockingWaitStrategy {
+            d: UncheckedUnsafeArc::new(d)
+        }
+    }
+}
+
+impl Clone for BlockingWaitStrategy {
+    /**
+     * Returns a shallow copy, that waits and signals on the same wait condition.
+     */
+    fn clone(&self) -> BlockingWaitStrategy {
+        BlockingWaitStrategy {
+            d: self.d.clone()
+        }
+    }
+}
+
+impl ProcessingWaitStrategy for BlockingWaitStrategy {
+    fn wait_for_publisher(
+        &mut self,
+        n: uint,
+        waiting_sequence: SequenceNumber,
+        cursor: &SequenceReader,
+        buffer_size: uint
+    ) -> uint {
+        // This is a tradeoff: one gains lower latency and increased throughput, at the expense of
+        // wasted CPU cycles.  When the CPU is oversubscribed, though, more retries could actually
+        // reduce throughput. The increased power usage is also undesirable in general.
+        // TODO: Ultimately, this will have to be exposed to the caller, since the ideal value
+        // depends on the frequency of published items, and which tradeoff the caller wants to make.
+        let max_tries = 2500;
+        let mut tries = 0;
+        let mut available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+        while n > available && tries < max_tries {
+            // busy wait
+            available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+            tries += 1;
+        }
+
+        if available >= n {
+            return available;
+        }
+
+        // Transition to blocking on wait condition
+
+        let d;
+        unsafe {
+            d = self.d.get();
+        }
+
+        // Grab lock on wait condition
+        do d.wait_condition.lock_cond |cond| {
+            while n > available {
+                // Communicate intent to wait to publisher
+                let _dummy: bool = d.signal_needed.swap(true, AcqRel);
+                // Verify that no slot was published
+                available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+                if n > available {
+                    // Sleep
+                    cond.wait();
+                    available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+                }
+            }
+        }
+
+        available
+    }
+}
+
+impl PublishingWaitStrategy for BlockingWaitStrategy {
+    fn wait_for_consumers(
+        &self,
+        n: uint,
+        waiting_sequence: SequenceNumber,
+        dependencies: &[SequenceReader],
+        buffer_size: uint,
+        calculate_available: &fn(
+            gating_sequence: SequenceNumber,
+            waiting_sequence: SequenceNumber,
+            batch_size: uint
+        ) -> uint
+    ) -> uint {
+        SpinWaitStrategy.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size,
+                calculate_available)
+    }
+
+    fn notifyAllWaiters(&mut self) {
+        let d;
+        unsafe {
+            d = self.d.get();
+        }
+
+        // Check if there are any waiters, resetting the value to false
+        let signal_needed = d.signal_needed.swap(false, AcqRel);
+
+        // If so, acquire the lock and signal on the wait condition
+        if signal_needed {
+            do d.wait_condition.lock_cond |cond| {
+                cond.broadcast();
+            }
+
+            // This is a bit of a hack to work around the fact that the Mutex will occasionally
+            // start executing the publisher's when the consumer unlocks it, starving the consumer.
+            // Doing this should cause the consumer to execute again, avoiding deadlock. At the same
+            // time, it's mostly off the fast path, so performance shouldn't be hurt much.
+            task::deschedule();
+        }
     }
 }
 

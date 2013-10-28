@@ -1,9 +1,9 @@
 extern mod extra;
 use extra::time::precise_time_ns;
 use std::u64;
-use std::task::{spawn_sched,SingleThreaded};
+use std::task::{spawn_sched,SchedMode,SingleThreaded,DefaultScheduler};
 
-use disruptor::{SinglePublisher,SpinWaitStrategy};
+use disruptor::{SinglePublisher,ProcessingWaitStrategy,SpinWaitStrategy,BlockingWaitStrategy};
 mod disruptor;
 
 /**
@@ -90,9 +90,10 @@ fn run_task_pipe_benchmark() {
     println(fmt!("Pipes: %? ops/sec, result wait: %? ns", ops, wait_latency));
 }
 
-fn run_disruptor_benchmark() {
+fn run_disruptor_benchmark<W: ProcessingWaitStrategy>(w: W, mode: SchedMode) {
     let iterations = NUM_ITERATIONS;
-    let mut publisher = SinglePublisher::<u64, SpinWaitStrategy>::new(8192, SpinWaitStrategy);
+    let wait_str = format!("{:?}", w);
+    let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_consumer_chain(1)[0];
     let (result_port, result_chan) = stream::<u64>();
 
@@ -100,7 +101,7 @@ fn run_disruptor_benchmark() {
 
     // spawn_sched needed for now, because the consumer thread busy-waits
     // rather than voluntarily descheduling.
-    do spawn_sched(SingleThreaded) {
+    do spawn_sched(mode) {
         let mut sum = 0u64;
 
         loop {
@@ -130,14 +131,25 @@ fn run_disruptor_benchmark() {
     assert!(result == EXPECTED_VALUE);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
-    println(fmt!("Pipes: %? ops/sec, result wait: %? ns", ops, wait_latency));
+    println!("Disruptor ({}): {} ops/sec, result wait: {} ns", wait_str, ops, wait_latency);
+}
+
+fn run_disruptor_benchmark_spin() {
+    run_disruptor_benchmark(SpinWaitStrategy, SingleThreaded);
+}
+
+fn run_disruptor_benchmark_block() {
+    run_disruptor_benchmark(BlockingWaitStrategy::new(), DefaultScheduler);
 }
 
 fn main() {
     run_single_threaded_benchmark();
-    run_disruptor_benchmark();
-    run_disruptor_benchmark();
-    run_disruptor_benchmark();
+    run_disruptor_benchmark_block();
+    run_disruptor_benchmark_block();
+    run_disruptor_benchmark_block();
+    run_disruptor_benchmark_spin();
+    run_disruptor_benchmark_spin();
+    run_disruptor_benchmark_spin();
     run_task_pipe_benchmark();
     run_task_pipe_benchmark();
 }
