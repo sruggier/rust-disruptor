@@ -57,7 +57,7 @@ fn run_single_threaded_benchmark() {
     let result = triangle_number(NUM_ITERATIONS-1);
     let ops = get_ops_per_second(before, NUM_ITERATIONS-1);
     assert!(result == EXPECTED_VALUE);
-    println(fmt!("Single threaded: %? ops/sec", ops))
+    println!("Single threaded: {:?} ops/sec", ops);
 }
 
 fn run_task_pipe_benchmark() {
@@ -94,7 +94,7 @@ fn run_task_pipe_benchmark() {
     assert!(result == EXPECTED_VALUE);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
-    println(fmt!("Pipes: %? ops/sec, result wait: %? ns", ops, wait_latency));
+    println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
 }
 
 fn run_disruptor_benchmark<W: ProcessingWaitStrategy>(w: W, mode: SchedMode) {
@@ -116,7 +116,7 @@ fn run_disruptor_benchmark<W: ProcessingWaitStrategy>(w: W, mode: SchedMode) {
             do consumer.consume |value: &u64| {
                 i = *value;
             }
-            debug!("%?", i);
+            debug!("{:?}", i);
             if i == u64::max_value {
                 result_chan.send(sum);
                 break;

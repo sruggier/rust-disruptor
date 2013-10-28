@@ -269,7 +269,7 @@ fn calculate_available_consumer(
         gating += 2*buffer_size;
     }
     let available = gating - waiting;
-    assert!(available <= buffer_size, fmt!("available: %?, gating:%?, waiting: %?", available, gating, waiting));
+    assert!(available <= buffer_size, "available: {:?}, gating: {:?}, waiting: {:?}", available, gating, waiting);
     available
 }
 
