@@ -933,7 +933,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
             batch_size: uint
         ) -> uint
     ) -> uint {
-        SpinWaitStrategy.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size,
+        YieldWaitStrategy::new().wait_for_consumers(n, waiting_sequence, dependencies, buffer_size,
                 calculate_available)
     }
 
