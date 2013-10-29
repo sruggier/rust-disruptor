@@ -10,7 +10,7 @@ use extra::time::precise_time_ns;
 use std::u64;
 use std::task::{spawn_sched,SchedMode,SingleThreaded,DefaultScheduler};
 
-use disruptor::{SinglePublisher,ProcessingWaitStrategy,SpinWaitStrategy,BlockingWaitStrategy};
+use disruptor::{SinglePublisher,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy};
 mod disruptor;
 
 /**
@@ -145,6 +145,10 @@ fn run_disruptor_benchmark_spin() {
     run_disruptor_benchmark(SpinWaitStrategy, SingleThreaded);
 }
 
+fn run_disruptor_benchmark_yield() {
+    run_disruptor_benchmark(YieldWaitStrategy::new(), DefaultScheduler);
+}
+
 fn run_disruptor_benchmark_block() {
     run_disruptor_benchmark(BlockingWaitStrategy::new(), DefaultScheduler);
 }
@@ -154,6 +158,9 @@ fn main() {
     run_disruptor_benchmark_block();
     run_disruptor_benchmark_block();
     run_disruptor_benchmark_block();
+    run_disruptor_benchmark_yield();
+    run_disruptor_benchmark_yield();
+    run_disruptor_benchmark_yield();
     run_disruptor_benchmark_spin();
     run_disruptor_benchmark_spin();
     run_disruptor_benchmark_spin();

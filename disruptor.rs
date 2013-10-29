@@ -521,6 +521,25 @@ pub trait PublishingWaitStrategy : Clone + Send {
 }
 
 /**
+ * Given a list of dependencies, retrieves the current value of each and returns the minimum number
+ * of available items out of all the dependencies.
+ */
+fn calculate_available_list(
+    waiting_sequence: SequenceNumber,
+    dependencies: &[SequenceReader],
+    buffer_size: uint,
+    calculate_available: & &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
+) -> uint {
+    let mut available = uint::max_value;
+    for consumer_sequence in dependencies.iter() {
+        let a = (*calculate_available)(consumer_sequence.get(), waiting_sequence, buffer_size);
+        available = cmp::min(available, a);
+    }
+    available
+}
+
+
+/**
  * Waits using simple busy waiting.
  *
  * # Safety notes
@@ -557,20 +576,186 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
         buffer_size: uint,
         calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
     ) -> uint {
-
         let mut available = 0;
         while available < n {
             // busy wait
-            available = uint::max_value;
-            for consumer_sequence in dependencies.iter() {
-                let a = calculate_available(consumer_sequence.get(), waiting_sequence, buffer_size);
-                available = cmp::min(available, a);
-            }
+            available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
+                &calculate_available);
         }
         available
     }
 
     fn notifyAllWaiters(&mut self) {
+    }
+}
+
+/**
+ * Spin on a consumer gating sequence until either the desired number of elements becomes available,
+ * or a maximum number of retries is reached.
+ *
+ * # Return value
+ *
+ * The number of available items, which may be less than `n` if the maximum amount of tries was
+ * reached.
+ */
+fn spin_for_consumer_retries(
+    n: uint,
+    waiting_sequence: SequenceNumber,
+    dependencies: &[SequenceReader],
+    buffer_size: uint,
+    calculate_available: & &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint,
+    max_tries: uint
+) -> uint {
+    let mut tries = 0;
+    let mut available = 0;
+    while available < n && tries < max_tries {
+        // busy wait
+        available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
+            calculate_available);
+        tries += 1;
+    }
+    available
+}
+
+/**
+ * Spin on a publisher gating sequence until either the desired number of elements becomes available,
+ * or a maximum number of retries is reached.
+ *
+ * # Return value
+ *
+ * The number of available items, which may be less than `n` if the maximum amount of tries was
+ * reached.
+ */
+fn spin_for_publisher_retries(
+    n: uint,
+    waiting_sequence: SequenceNumber,
+    cursor: &SequenceReader,
+    buffer_size: uint,
+    max_tries: uint
+) -> uint {
+    let mut tries = 0;
+    let mut available = 0;
+    while n > available && tries < max_tries {
+        // busy wait
+        available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+        tries += 1;
+    }
+    available
+}
+
+pub static default_max_spin_tries_publisher: uint = 2500;
+pub static default_max_spin_tries_consumer: uint = 2500;
+
+/**
+ * A wait strategy for use cases where high throughput and low latency are a priority, but it is
+ * also desirable to avoid starving other tasks, such as when there are more tasks than CPU cores.
+ * Spins for a small number of retries, then yields to other tasks repeatedly until enough items are
+ * released. This will almost always be a better choice than SpinWaitStrategy, except in cases where
+ * latency is paramount, and the caller has taken steps to pin the publisher and consumers to their
+ * own threads, or even cores.
+ */
+struct YieldWaitStrategy {
+    max_spin_tries_publisher: uint,
+    max_spin_tries_consumer: uint,
+}
+
+impl YieldWaitStrategy {
+    /**
+     * Create a YieldWaitStrategy that will spin for the default number of times before yielding.
+     */
+    pub fn new() -> YieldWaitStrategy {
+        YieldWaitStrategy::new_with_retry_count(
+            default_max_spin_tries_publisher,
+            default_max_spin_tries_consumer
+        )
+    }
+
+    /**
+     * Create a YieldWaitStrategy, explicitly specifying how many times to spin before
+     * transitioning to a yielding strategy.
+     *
+     * # Arguments
+     *
+     * The two arguments represent the maximum number of times to spin while waiting for the
+     * publisher or other consumers. This is a tradeoff: one gains lower latency and increased
+     * throughput, at the expense of wasted CPU cycles.  When the CPU is oversubscribed, though,
+     * more retries could actually reduce throughput. The increased power usage is also undesirable
+     * in general. The ideal value depends on how important reduced latency and/or increased
+     * throughput are to a given use case, how frequently items are published, and how quickly
+     * consumers process new items.
+     */
+    pub fn new_with_retry_count(
+        max_spin_tries_publisher: uint,
+        max_spin_tries_consumer: uint
+    ) -> YieldWaitStrategy {
+        YieldWaitStrategy {
+            max_spin_tries_publisher: max_spin_tries_publisher,
+            max_spin_tries_consumer: max_spin_tries_consumer,
+        }
+    }
+}
+
+impl Clone for YieldWaitStrategy {
+    fn clone(&self) -> YieldWaitStrategy {
+        YieldWaitStrategy::new_with_retry_count(
+            self.max_spin_tries_publisher, self.max_spin_tries_consumer)
+    }
+}
+
+impl PublishingWaitStrategy for YieldWaitStrategy {
+    fn wait_for_consumers(
+        &self,
+        n: uint,
+        waiting_sequence: SequenceNumber,
+        dependencies: &[SequenceReader],
+        buffer_size: uint,
+        calculate_available: &fn(
+            gating_sequence: SequenceNumber,
+            waiting_sequence: SequenceNumber,
+            batch_size: uint
+        ) -> uint
+    ) -> uint {
+        let mut available = spin_for_consumer_retries(n, waiting_sequence, dependencies, buffer_size,
+            &calculate_available, self.max_spin_tries_consumer);
+
+        if available >= n {
+            return available;
+        }
+
+        while n > available {
+            available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
+                &calculate_available);
+            task::deschedule();
+        }
+
+        available
+    }
+
+    fn notifyAllWaiters(&mut self) {
+    }
+}
+
+impl ProcessingWaitStrategy for YieldWaitStrategy {
+    fn wait_for_publisher(
+        &mut self,
+        n: uint,
+        waiting_sequence: SequenceNumber,
+        cursor: &SequenceReader,
+        buffer_size: uint
+    ) -> uint {
+        let mut available = spin_for_publisher_retries(n, waiting_sequence, cursor, buffer_size,
+            self.max_spin_tries_publisher);
+
+        if available >= n {
+            return available;
+        }
+
+        while available < n {
+            available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+            task::deschedule();
+        }
+
+        available
     }
 }
 
@@ -702,19 +887,8 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
         cursor: &SequenceReader,
         buffer_size: uint
     ) -> uint {
-        // This is a tradeoff: one gains lower latency and increased throughput, at the expense of
-        // wasted CPU cycles.  When the CPU is oversubscribed, though, more retries could actually
-        // reduce throughput. The increased power usage is also undesirable in general.
-        // TODO: Ultimately, this will have to be exposed to the caller, since the ideal value
-        // depends on the frequency of published items, and which tradeoff the caller wants to make.
-        let max_tries = 2500;
-        let mut tries = 0;
-        let mut available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
-        while n > available && tries < max_tries {
-            // busy wait
-            available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
-            tries += 1;
-        }
+        let mut available = spin_for_publisher_retries(n, waiting_sequence, cursor, buffer_size,
+            2500);
 
         if available >= n {
             return available;
