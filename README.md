@@ -1,8 +1,9 @@
 # A disruptor implementation for Rust
 
-This is an API that allows for high-performance communication between Rust
+This is a library that allows for high-performance communication between Rust
 tasks, fulfilling use cases similar to the built-in pipes API, but with better
-performance.
+performance. The core approach and many of the algorithms are based on ideas
+from the [LMAX Disruptor](http://lmax-exchange.github.io/disruptor/) project.
 
 # Building
 
