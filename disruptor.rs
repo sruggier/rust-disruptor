@@ -335,13 +335,16 @@ fn test_calculate_available_publisher() {
  * with other threads.
  */
 struct UintPadding {
-    // TODO: If uint is 64 bits wide, this is more padding than needed.
-    padding: [u8, ..60]
+    padding: [u8, ..uint_padding_size]
 }
+
+// This is calculated to be (cache line size - uint size), in bytes
+#[cfg(target_word_size = "32")] static uint_padding_size: uint = 60;
+#[cfg(target_word_size = "64")] static uint_padding_size: uint = 56;
 
 impl UintPadding {
     fn new() -> UintPadding {
-        UintPadding { padding: [0, ..60] }
+        UintPadding { padding: [0, ..uint_padding_size] }
     }
 }
 
@@ -349,7 +352,7 @@ impl UintPadding {
  * The underlying data referenced by Sequence.
  */
 struct SequenceData {
-    // Prevent false sharing by padding either side of the value with 60 bytes of data.
+    // Prevent false sharing by padding either side of the value
     padding1: UintPadding,
     /// The published value of the sequence, visible to waiting consumers.
     value: AtomicUint,
