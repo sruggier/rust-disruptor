@@ -331,28 +331,42 @@ fn test_calculate_available_publisher() {
 }
 
 /**
+ * Used on either side of Uint values to fill the remainder of a cache line, to avoid false sharing
+ * with other threads.
+ */
+struct UintPadding {
+    // TODO: If uint is 64 bits wide, this is more padding than needed.
+    padding: [u8, ..60]
+}
+
+impl UintPadding {
+    fn new() -> UintPadding {
+        UintPadding { padding: [0, ..60] }
+    }
+}
+
+/**
  * The underlying data referenced by Sequence.
  */
 struct SequenceData {
     // Prevent false sharing by padding either side of the value with 60 bytes of data.
-    // TODO: If uint is 64 bits wide, this is more padding than needed.
-    padding1: [u32, ..15],
+    padding1: UintPadding,
     /// The published value of the sequence, visible to waiting consumers.
     value: AtomicUint,
-    padding2: [u32, ..15],
+    padding2: UintPadding,
     /// We can avoid atomic operations by using this cached value whenever possible.
     private_value: uint,
-    padding3: [u32, ..15],
+    padding3: UintPadding,
 }
 
 impl SequenceData {
     fn new(initial_value: uint) -> SequenceData {
         SequenceData {
-            padding1: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            padding1: UintPadding::new(),
             value: AtomicUint::new(initial_value),
-            padding2: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            padding2: UintPadding::new(),
             private_value: initial_value,
-            padding3: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            padding3: UintPadding::new(),
         }
     }
 }
