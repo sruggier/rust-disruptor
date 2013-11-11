@@ -6,6 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 extern mod extra;
+use extra::getopts;
 use extra::time::precise_time_ns;
 use std::u64;
 use std::task::{spawn_sched,SchedMode,SingleThreaded,DefaultScheduler};
@@ -30,10 +31,8 @@ fn get_ops_per_second(before: u64, iterations: u64) -> u64 {
     calculate_ops_per_second(before, after, iterations)
 }
 
-/// Number of iterations to use on all benchmarks
-static NUM_ITERATIONS: u64 = 1000 * 1000 * 100;
-/// Expected value for the 99,999,999th triangle number
-static EXPECTED_VALUE: u64 = 4999999950000000u64;
+/// Default number of iterations to use on all benchmarks
+static NUM_ITERATIONS: u64 = 1000 * 1000 * 100 - 1;
 
 /**
  * Calculates the nth triangle number by summing the numbers from 1 to n in a
@@ -49,19 +48,23 @@ fn triangle_number(n: u64) -> u64 {
 }
 
 /**
- * Single threaded version of the benchmark. Meaningless, because the compiler
- * evaluates the loop at compile time when optimizations are on.
+ * Single threaded version of the benchmark. Returns the calculated value, for
+ * use in other tests.
  */
-fn run_single_threaded_benchmark() {
+fn run_single_threaded_benchmark(iterations: u64) -> u64 {
     let before = precise_time_ns();
-    let result = triangle_number(NUM_ITERATIONS-1);
-    let ops = get_ops_per_second(before, NUM_ITERATIONS-1);
-    assert!(result == EXPECTED_VALUE);
-    println!("Single threaded: {:?} ops/sec", ops);
+    let result = triangle_number(iterations);
+    let ops = get_ops_per_second(before, iterations);
+    println!("Single threaded: {:?} ops/sec (result was {})", ops, result);
+
+    result
 }
 
-fn run_task_pipe_benchmark() {
-    let iterations = NUM_ITERATIONS;
+fn verify_result(result: u64, expected_value: u64) {
+    assert!(result == expected_value, "Result: {}, Expected value: {}", result, expected_value);
+}
+
+fn run_task_pipe_benchmark(iterations: u64, expected_value: u64) {
 
     let (result_port, result_chan) = stream::<u64>();
     let (input_port, input_chan) = stream::<u64>();
@@ -80,9 +83,9 @@ fn run_task_pipe_benchmark() {
         result_chan.send(sum);
     }
 
-    // Send every number from 0 to NUM_ITERATIONS - 1, and then tell the task
+    // Send every number from 1 to (iterations + 1), and then tell the task
     // to finish and return by sending uint::max_value.
-    for num in range(0, iterations) {
+    for num in range(1, iterations + 1) {
         input_chan.send(num as u64);
     }
     input_chan.send(u64::max_value);
@@ -91,14 +94,13 @@ fn run_task_pipe_benchmark() {
     let result = result_port.recv();
     let after = precise_time_ns();
 
-    assert!(result == EXPECTED_VALUE);
+    verify_result(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
     println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
 }
 
-fn run_disruptor_benchmark<W: ProcessingWaitStrategy>(w: W, mode: SchedMode) {
-    let iterations = NUM_ITERATIONS;
+fn run_disruptor_benchmark<W: ProcessingWaitStrategy>(iterations: u64, expected_value: u64, w: W, mode: SchedMode) {
     let wait_str = format!("{:?}", w);
     let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_consumer_chain(1)[0];
@@ -125,8 +127,9 @@ fn run_disruptor_benchmark<W: ProcessingWaitStrategy>(w: W, mode: SchedMode) {
         }
     }
 
-    // Send value
-    for num in range(0, iterations) {
+    // Send every number from 1 to (iterations + 1), and then tell the task
+    // to finish and return by sending uint::max_value.
+    for num in range(1, iterations + 1) {
         publisher.publish(num as u64)
     }
     publisher.publish(u64::max_value);
@@ -135,35 +138,85 @@ fn run_disruptor_benchmark<W: ProcessingWaitStrategy>(w: W, mode: SchedMode) {
     let result = result_port.recv();
     let after = precise_time_ns();
 
-    assert!(result == EXPECTED_VALUE);
+    verify_result(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
     println!("Disruptor ({}): {} ops/sec, result wait: {} ns", wait_str, ops, wait_latency);
 }
 
-fn run_disruptor_benchmark_spin() {
-    run_disruptor_benchmark(SpinWaitStrategy, SingleThreaded);
+fn run_disruptor_benchmark_spin(iterations: u64, expected_value: u64) {
+    run_disruptor_benchmark(iterations, expected_value, SpinWaitStrategy, SingleThreaded);
 }
 
-fn run_disruptor_benchmark_yield() {
-    run_disruptor_benchmark(YieldWaitStrategy::new(), DefaultScheduler);
+fn run_disruptor_benchmark_yield(iterations: u64, expected_value: u64) {
+    run_disruptor_benchmark(iterations, expected_value, YieldWaitStrategy::new(), DefaultScheduler);
 }
 
-fn run_disruptor_benchmark_block() {
-    run_disruptor_benchmark(BlockingWaitStrategy::new(), DefaultScheduler);
+fn run_disruptor_benchmark_block(iterations: u64, expected_value: u64) {
+    run_disruptor_benchmark(iterations, expected_value, BlockingWaitStrategy::new(), DefaultScheduler);
+}
+
+fn usage(argv0: &str, opts: ~[getopts::groups::OptGroup]) -> ! {
+    let brief = format!("Usage: {} [OPTIONS]", argv0);
+    println!("{}", getopts::groups::usage(brief, opts));
+    // Exit immediately
+    fail!();
+}
+
+/**
+ * Retrieve a parsed representation of the command-line arguments, or die
+ * trying. If the user has requested a help string or given an invalid
+ * argument, this will print out help information and exit.
+ */
+fn parse_args() -> getopts::Matches {
+    use extra::getopts::groups::{optflag,optopt};
+
+    let opts = ~[
+        optflag("h", "help", "show this message and exit"),
+        optopt("n", "iterations", "how many iterations to perform in each benchmark", "N"),
+    ];
+
+    let args = std::os::args();
+    let arg_flags = args.tail();
+    let argv0 = &args[0];
+
+    let matches = match getopts::groups::getopts(arg_flags, opts) {
+        Ok(m) => m,
+        Err(fail) => {
+            println!("{}\nUse '{} --help' to see a list of valid options.", fail.to_err_msg(), *argv0);
+            fail!();
+        }
+    };
+    if (matches.opt_present("h")) {
+        usage(*argv0, opts);
+    }
+
+    matches
 }
 
 fn main() {
-    run_single_threaded_benchmark();
-    run_disruptor_benchmark_block();
-    run_disruptor_benchmark_block();
-    run_disruptor_benchmark_block();
-    run_disruptor_benchmark_yield();
-    run_disruptor_benchmark_yield();
-    run_disruptor_benchmark_yield();
-    run_disruptor_benchmark_spin();
-    run_disruptor_benchmark_spin();
-    run_disruptor_benchmark_spin();
-    run_task_pipe_benchmark();
-    run_task_pipe_benchmark();
+    let matches = parse_args();
+
+    let iterations = match matches.opt_str("n") {
+        Some(n_str) => {
+            match std::u64::parse_bytes(n_str.as_bytes(), 10u) {
+                Some(n) => n,
+                None => fail!("Expected a positive number of iterations, received {}", n_str)
+            }
+        }
+        None => NUM_ITERATIONS
+    };
+
+    let expected_value = run_single_threaded_benchmark(iterations);
+    run_disruptor_benchmark_block(iterations, expected_value);
+    run_disruptor_benchmark_block(iterations, expected_value);
+    run_disruptor_benchmark_block(iterations, expected_value);
+    run_disruptor_benchmark_yield(iterations, expected_value);
+    run_disruptor_benchmark_yield(iterations, expected_value);
+    run_disruptor_benchmark_yield(iterations, expected_value);
+    run_disruptor_benchmark_spin(iterations, expected_value);
+    run_disruptor_benchmark_spin(iterations, expected_value);
+    run_disruptor_benchmark_spin(iterations, expected_value);
+    run_task_pipe_benchmark(iterations, expected_value);
+    run_task_pipe_benchmark(iterations, expected_value);
 }
