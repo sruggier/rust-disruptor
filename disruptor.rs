@@ -329,8 +329,6 @@ fn test_calculate_available_publisher() {
     assert!(0 == calculate_available_publisher(SequenceNumber(1), SequenceNumber(3), 2));
     assert!(1 == calculate_available_publisher(SequenceNumber(2), SequenceNumber(3), 2));
     assert!(2 == calculate_available_publisher(SequenceNumber(3), SequenceNumber(3), 2));
-
-
 }
 
 /**
