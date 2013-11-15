@@ -264,7 +264,7 @@ fn calculate_available_consumer(
 ) -> uint {
     let mut gating = *gating_sequence;
     let waiting = *waiting_sequence;
-    // This condition should never happen until wrapping is implemented
+    // Handle wrapping
     if gating < waiting {
         gating += 2*buffer_size;
     }
@@ -302,8 +302,11 @@ fn calculate_available_publisher(
     buffer_size: uint
 ) -> uint {
     let mut available = *gating_sequence + buffer_size - *waiting_sequence;
+    // Handle wrapping
     if available > buffer_size {
-        // Should never happen until wrapping is implemented
+        // In this case, we know that the value of available is exactly 2*buffer_size more than it
+        // should be. Mask out the 2*buffer_size extra slots, taking advantage of the fact that
+        // buffer_size is a power of 2.
         let index_mask = buffer_size - 1;
         available &= index_mask;
     }
@@ -422,10 +425,23 @@ impl Sequence {
     /**
      * Add n to the cached, private version of the sequence, without making the new value visible to
      * other threads.
+     *
+     * To avoid overflow when uint is 32 bits wide, this function also wraps the sequence number
+     * around when it reaches 2*buffer_size. This results in two easily distinguishable states for
+     * the availability calculations to handle. Consumer sequences are normally behind gating
+     * sequences. However, the gating sequence will wrap first, remain behind for buffer_size slots,
+     * and then the waiting sequence will wrap. The publisher is normally ahead of the sequence it
+     * depends on, but after wrapping, it will be temporarily behind the gating sequence.
      */
-    fn advance(&mut self, n: uint) {
+    fn advance(&mut self, n: uint, buffer_size: uint) {
         unsafe {
-            self.value_arc.get().private_value += n;
+            let d = self.value_arc.get();
+            d.private_value += n;
+            if (d.private_value >= 2*buffer_size) {
+                // Given that buffer_size is a power of two, wrap by masking out the high bits
+                let wrap_mask = 2*buffer_size - 1;
+                d.private_value &= wrap_mask;
+            }
         }
     }
 
@@ -444,8 +460,8 @@ impl Sequence {
     /**
      * Advance, then immediately make the change visible to other threads.
      */
-    fn advance_and_flush(&mut self, n: uint) {
-        self.advance(n);
+    fn advance_and_flush(&mut self, n: uint, buffer_size: uint) {
+        self.advance(n, buffer_size);
         self.flush();
     }
 }
@@ -470,12 +486,16 @@ impl SequenceReader {
 
 #[test]
 fn test_sequencereader() {
+    // For the purposes of this test, it doessn't matter what the buffer size is, as long as it's
+    // larger than the tested sequence numbers
+    let buffer_size = 8192;
+
     let mut sequence =  Sequence::new();
     let reader = sequence.clone_immut();
     assert!(0 == *reader.get());
-    sequence.advance_and_flush(1);
+    sequence.advance_and_flush(1, buffer_size);
     assert!(1 == *reader.get());
-    sequence.advance_and_flush(11);
+    sequence.advance_and_flush(11, buffer_size);
     assert!(12 == *reader.get());
 }
 
@@ -1080,7 +1100,7 @@ impl<W: PublishingWaitStrategy> SequenceBarrier for SinglePublisherSequenceBarri
         assert!(self.cached_available >= batch_size);
         self.cached_available -= batch_size;
 
-        self.sequence.advance_and_flush(batch_size);
+        self.sequence.advance_and_flush(batch_size, self.buffer_size);
         self.wait_strategy.notifyAllWaiters();
     }
 }
@@ -1134,7 +1154,7 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrie
         assert!(self.sb.cached_available >= batch_size);
         self.sb.cached_available -= batch_size;
 
-        self.sb.sequence.advance(batch_size);
+        self.sb.sequence.advance(batch_size, self.sb.buffer_size);
         // If the next call to nextN will result in more waiting, then make our progress visible to
         // downstream consumers now.
         if (self.sb.cached_available < batch_size) {
