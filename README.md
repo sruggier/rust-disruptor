@@ -20,7 +20,8 @@ MIT and Apache 2 licenses.
 
 This is a basic proof-of-concept, currently, so most functionality is missing.
 However, current users can enjoy the following features:
- * Unicast pipelines consisting of a single publisher and one or more consumers.
+ * Unicast pipelines consisting of a single publisher and one or more stages of
+   consumer.
  * A general purpose blocking wait strategy that causes the receiver to
    eventually block if no items are sent
  * A spinning wait strategy that roughly triples performance compared to the
