@@ -25,6 +25,9 @@ However, current users can enjoy the following features:
    eventually block if no items are sent
  * A spinning wait strategy that roughly triples performance compared to the
    blocking strategy.
+ * A yielding wait strategy that has comparable performance to the spinning
+   strategy when the CPU is idle, but doesn't waste as many CPU cycles when
+   other software is executing.
 
 # Roadmap
 
