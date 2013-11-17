@@ -898,7 +898,12 @@ impl fmt::Default for YieldWaitStrategy {
  * operations are needed, and not just the cheaper load/store operations.
  */
 pub struct BlockingWaitStrategy {
-    d: UncheckedUnsafeArc<BlockingWaitStrategyData>
+    d: UncheckedUnsafeArc<BlockingWaitStrategyData>,
+    // Deep copyable fields that don't need to be shared
+    /// Number of times to wait before blocking
+    max_spin_tries_publisher: uint,
+    /// Number of times to wait for a consumer sequence before yielding
+    max_spin_tries_consumer: uint,
 }
 
 struct BlockingWaitStrategyData {
@@ -910,12 +915,34 @@ struct BlockingWaitStrategyData {
 
 impl BlockingWaitStrategy {
     pub fn new() -> BlockingWaitStrategy {
+        BlockingWaitStrategy::new_with_retry_count(
+            default_max_spin_tries_publisher,
+            default_max_spin_tries_consumer
+        )
+    }
+
+    /**
+     * Create a BlockingWaitStrategy, explicitly specifying how many times to spin before
+     * transitioning to a yielding strategy.
+     *
+     * # Arguments
+     *
+     * See YieldWaitStrategy::new_with_retry_count for a more detailed description of what the
+     * arguments mean. This wait strategy will block instead of yielding when the maximum number of
+     * retries is reached while waiting for the publisher.
+     */
+    pub fn new_with_retry_count(
+        max_spin_tries_publisher: uint,
+        max_spin_tries_consumer: uint
+    ) -> BlockingWaitStrategy {
         let d = BlockingWaitStrategyData {
             signal_needed: AtomicBool::new(false),
             wait_condition: Mutex::new_with_condvars(1),
         };
         BlockingWaitStrategy {
-            d: UncheckedUnsafeArc::new(d)
+            d: UncheckedUnsafeArc::new(d),
+            max_spin_tries_publisher: max_spin_tries_publisher,
+            max_spin_tries_consumer: max_spin_tries_consumer,
         }
     }
 }
@@ -926,7 +953,9 @@ impl Clone for BlockingWaitStrategy {
      */
     fn clone(&self) -> BlockingWaitStrategy {
         BlockingWaitStrategy {
-            d: self.d.clone()
+            d: self.d.clone(),
+            max_spin_tries_publisher: self.max_spin_tries_publisher,
+            max_spin_tries_consumer: self.max_spin_tries_consumer,
         }
     }
 }
@@ -940,14 +969,13 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
         buffer_size: uint
     ) -> uint {
         let mut available = spin_for_publisher_retries(n, waiting_sequence, cursor, buffer_size,
-            2500);
+            self.max_spin_tries_publisher);
 
         if available >= n {
             return available;
         }
 
         // Transition to blocking on wait condition
-
         let d;
         unsafe {
             d = self.d.get();
@@ -985,8 +1013,11 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
             batch_size: uint
         ) -> uint
     ) -> uint {
-        YieldWaitStrategy::new().wait_for_consumers(n, waiting_sequence, dependencies, buffer_size,
-                calculate_available)
+        let w = YieldWaitStrategy::new_with_retry_count(
+            self.max_spin_tries_publisher, self.max_spin_tries_consumer
+        );
+
+        w.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size, calculate_available)
     }
 
     fn notifyAllWaiters(&mut self) {
@@ -1014,8 +1045,12 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
 }
 
 impl fmt::Default for BlockingWaitStrategy {
-    fn fmt(_obj: &BlockingWaitStrategy, f: &mut fmt::Formatter) {
-        write!(f.buf, "disruptor::BlockingWaitStrategy");
+    fn fmt(obj: &BlockingWaitStrategy, f: &mut fmt::Formatter) {
+        write!(f.buf,
+            "disruptor::BlockingWaitStrategy\\{p: {}, c: {}\\}",
+            obj.max_spin_tries_publisher,
+            obj.max_spin_tries_consumer
+        );
     }
 }
 
