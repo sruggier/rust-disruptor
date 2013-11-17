@@ -8,6 +8,7 @@
 extern mod extra;
 use extra::getopts;
 use extra::time::precise_time_ns;
+use std::fmt;
 use std::u64;
 use std::task::{spawn_sched,SchedMode,SingleThreaded,DefaultScheduler};
 
@@ -100,8 +101,9 @@ fn run_task_pipe_benchmark(iterations: u64, expected_value: u64) {
     println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
 }
 
-fn run_disruptor_benchmark<W: ProcessingWaitStrategy>(iterations: u64, expected_value: u64, w: W, mode: SchedMode) {
-    let wait_str = format!("{:?}", w);
+fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations: u64, expected_value: u64, w: W, mode: SchedMode) {
+    // generate a formatted string representation of w before it's moved into publisher
+    let wait_str = format!("{}", w);
     let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_consumer_chain(1)[0];
     let (result_port, result_chan) = stream::<u64>();

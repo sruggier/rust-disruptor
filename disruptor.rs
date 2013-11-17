@@ -9,6 +9,7 @@ use extra::sync::{Mutex};
 use std::clone::Clone;
 use std::cast;
 use std::cmp;
+use std::fmt;
 use std::option::{Option};
 use std::ptr;
 use std::task;
@@ -624,6 +625,12 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
     }
 }
 
+impl fmt::Default for SpinWaitStrategy {
+    fn fmt(_obj: &SpinWaitStrategy, f: &mut fmt::Formatter) {
+        write!(f.buf, "disruptor::SpinWaitStrategy");
+    }
+}
+
 /**
  * Spin on a consumer gating sequence until either the desired number of elements becomes available,
  * or a maximum number of retries is reached.
@@ -791,6 +798,16 @@ impl ProcessingWaitStrategy for YieldWaitStrategy {
         }
 
         available
+    }
+}
+
+impl fmt::Default for YieldWaitStrategy {
+    fn fmt(obj: &YieldWaitStrategy, f: &mut fmt::Formatter) {
+        write!(f.buf,
+            "disruptor::YieldWaitStrategy\\{p: {}, c: {}\\}",
+            obj.max_spin_tries_publisher,
+            obj.max_spin_tries_consumer
+        );
     }
 }
 
@@ -993,6 +1010,12 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
             // time, it's mostly off the fast path, so performance shouldn't be hurt much.
             task::deschedule();
         }
+    }
+}
+
+impl fmt::Default for BlockingWaitStrategy {
+    fn fmt(_obj: &BlockingWaitStrategy, f: &mut fmt::Formatter) {
+        write!(f.buf, "disruptor::BlockingWaitStrategy");
     }
 }
 
