@@ -465,6 +465,30 @@ impl Sequence {
     }
 }
 
+/// Ensure sequences correctly handle buffer sizes of 2^(uint::bits-1).
+#[test]
+fn test_sequence_overflow() {
+    // The maximum buffer size is half of 2^(uint::bits) (for example, 2^31), and uint::max_value
+    // is 2*buffer_size - 1. The sequence will wrap to 0 at 2*buffer_size.
+    let max_buffer_size = 1 << (uint::bits - 1);
+
+    let mut s = Sequence::new();
+    assert_eq!(*s.get(), SEQUENCE_INITIAL);
+
+    // Add 1
+    s.advance_and_flush(1, max_buffer_size);
+    let incremented_value = s.get();
+    assert_eq!(*incremented_value, SEQUENCE_INITIAL + 1);
+
+    // Advance to max_buffer_size
+    s.advance_and_flush(max_buffer_size - *incremented_value, max_buffer_size);
+    assert_eq!(*s.get(), max_buffer_size);
+
+    // Overflow to 2*max_buffer_size + 1 and confirm expected result (1)
+    s.advance_and_flush(max_buffer_size + 1, max_buffer_size);
+    assert_eq!(*s.get(), 1);
+}
+
 /**
  * Immutable reference to a sequence. Can be safely given to other tasks. Reads with acquire
  * semantics.
