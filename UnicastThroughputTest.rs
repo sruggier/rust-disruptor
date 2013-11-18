@@ -61,7 +61,7 @@ fn run_single_threaded_benchmark(iterations: u64) -> u64 {
     result
 }
 
-fn run_task_pipe_benchmark(iterations: u64, expected_value: u64) {
+fn run_task_pipe_benchmark(iterations: u64) {
 
     let (result_port, result_chan) = stream::<u64>();
     let (input_port, input_chan) = stream::<u64>();
@@ -91,13 +91,14 @@ fn run_task_pipe_benchmark(iterations: u64, expected_value: u64) {
     let result = result_port.recv();
     let after = precise_time_ns();
 
+    let expected_value = triangle_number(iterations);
     assert_eq!(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
     println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
 }
 
-fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations: u64, expected_value: u64, w: W, mode: SchedMode) {
+fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations: u64, w: W, mode: SchedMode) {
     // generate a formatted string representation of w before it's moved into publisher
     let wait_str = format!("{}", w);
     let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
@@ -136,22 +137,23 @@ fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations:
     let result = result_port.recv();
     let after = precise_time_ns();
 
+    let expected_value = triangle_number(iterations);
     assert_eq!(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
     println!("Disruptor ({}): {} ops/sec, result wait: {} ns", wait_str, ops, wait_latency);
 }
 
-fn run_disruptor_benchmark_spin(iterations: u64, expected_value: u64) {
-    run_disruptor_benchmark(iterations, expected_value, SpinWaitStrategy, SingleThreaded);
+fn run_disruptor_benchmark_spin(iterations: u64) {
+    run_disruptor_benchmark(iterations, SpinWaitStrategy, SingleThreaded);
 }
 
-fn run_disruptor_benchmark_yield(iterations: u64, expected_value: u64) {
-    run_disruptor_benchmark(iterations, expected_value, YieldWaitStrategy::new(), DefaultScheduler);
+fn run_disruptor_benchmark_yield(iterations: u64) {
+    run_disruptor_benchmark(iterations, YieldWaitStrategy::new(), DefaultScheduler);
 }
 
-fn run_disruptor_benchmark_block(iterations: u64, expected_value: u64) {
-    run_disruptor_benchmark(iterations, expected_value, BlockingWaitStrategy::new(), DefaultScheduler);
+fn run_disruptor_benchmark_block(iterations: u64) {
+    run_disruptor_benchmark(iterations, BlockingWaitStrategy::new(), DefaultScheduler);
 }
 
 fn usage(argv0: &str, opts: ~[getopts::groups::OptGroup]) -> ! {
@@ -205,16 +207,16 @@ fn main() {
         None => NUM_ITERATIONS
     };
 
-    let expected_value = run_single_threaded_benchmark(iterations);
-    run_disruptor_benchmark_block(iterations, expected_value);
-    run_disruptor_benchmark_block(iterations, expected_value);
-    run_disruptor_benchmark_block(iterations, expected_value);
-    run_disruptor_benchmark_yield(iterations, expected_value);
-    run_disruptor_benchmark_yield(iterations, expected_value);
-    run_disruptor_benchmark_yield(iterations, expected_value);
-    run_disruptor_benchmark_spin(iterations, expected_value);
-    run_disruptor_benchmark_spin(iterations, expected_value);
-    run_disruptor_benchmark_spin(iterations, expected_value);
-    run_task_pipe_benchmark(iterations, expected_value);
-    run_task_pipe_benchmark(iterations, expected_value);
+    run_single_threaded_benchmark(iterations);
+    run_disruptor_benchmark_block(iterations);
+    run_disruptor_benchmark_block(iterations);
+    run_disruptor_benchmark_block(iterations);
+    run_disruptor_benchmark_yield(iterations);
+    run_disruptor_benchmark_yield(iterations);
+    run_disruptor_benchmark_yield(iterations);
+    run_disruptor_benchmark_spin(iterations);
+    run_disruptor_benchmark_spin(iterations);
+    run_disruptor_benchmark_spin(iterations);
+    run_task_pipe_benchmark(iterations);
+    run_task_pipe_benchmark(iterations);
 }
