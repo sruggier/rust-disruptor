@@ -436,11 +436,11 @@ impl Sequence {
         unsafe {
             let d = self.value_arc.get();
             d.private_value += n;
-            if (d.private_value >= 2*buffer_size) {
-                // Given that buffer_size is a power of two, wrap by masking out the high bits
-                let wrap_mask = 2*buffer_size - 1;
-                d.private_value &= wrap_mask;
-            }
+            // Given that buffer_size is a power of two, wrap by masking out the high bits. This
+            // operation is a noop if the value is less than 2*buffer_size, so it's unnecessary to
+            // check before wrapping.
+            let wrap_mask = 2*buffer_size - 1;
+            d.private_value &= wrap_mask;
         }
     }
 
