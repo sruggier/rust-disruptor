@@ -61,10 +61,6 @@ fn run_single_threaded_benchmark(iterations: u64) -> u64 {
     result
 }
 
-fn verify_result(result: u64, expected_value: u64) {
-    assert!(result == expected_value, "Result: {}, Expected value: {}", result, expected_value);
-}
-
 fn run_task_pipe_benchmark(iterations: u64, expected_value: u64) {
 
     let (result_port, result_chan) = stream::<u64>();
@@ -95,7 +91,7 @@ fn run_task_pipe_benchmark(iterations: u64, expected_value: u64) {
     let result = result_port.recv();
     let after = precise_time_ns();
 
-    verify_result(result, expected_value);
+    assert_eq!(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
     println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
@@ -140,7 +136,7 @@ fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations:
     let result = result_port.recv();
     let after = precise_time_ns();
 
-    verify_result(result, expected_value);
+    assert_eq!(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
     println!("Disruptor ({}): {} ops/sec, result wait: {} ns", wait_str, ops, wait_latency);
