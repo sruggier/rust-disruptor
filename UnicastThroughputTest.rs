@@ -217,6 +217,7 @@ fn main() {
     run_disruptor_benchmark_spin(iterations);
     run_disruptor_benchmark_spin(iterations);
     run_disruptor_benchmark_spin(iterations);
-    run_task_pipe_benchmark(iterations);
-    run_task_pipe_benchmark(iterations);
+    // The pipes are slower, so we avoid long execution times by running fewer iterations
+    run_task_pipe_benchmark(iterations/100);
+    run_task_pipe_benchmark(iterations/100);
 }
