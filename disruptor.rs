@@ -74,6 +74,17 @@ impl<T> Slot<T> {
     }
 
     /**
+     * Moves the value out of the slot and returns it.
+     *
+     * # Failure
+     *
+     * When called a second time, this function doubles as a convenient way to end your task.
+     */
+    unsafe fn take(&mut self) -> T {
+        (*self.payload).take_unwrap()
+    }
+
+    /**
      * Deallocates the owned box. This cannot happen automatically, so it is the caller's
      * responsibility to call this at the right time, then avoid dereferencing `payload` after doing
      * so.
@@ -234,6 +245,19 @@ impl<T: Send> RingBuffer<T> {
         let d = self.data.get_immut();
         let index = sequence.as_index(d.entries.len());
         d.entries[index].get()
+    }
+
+    /**
+     * Take the value pointed to by `sequence`, moving it out of the RingBuffer.
+     *
+     * # Failure
+     *
+     * This function should only be called once for a given sequence value.
+     */
+    unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
+        let d = self.data.get();
+        let index = sequence.as_index(d.entries.len());
+        d.entries[index].take()
     }
 }
 
@@ -1265,6 +1289,27 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
     }
 
     /**
+     * Creates and returns a single consumer, which will receive items sent through the publisher.
+     */
+    pub fn create_single_consumer_pipeline(&mut self) -> SingleFinalConsumer<T, W> {
+        let (_, c) = self.create_consumer_pipeline(1);
+        c
+    }
+
+    /**
+     * Creates and returns a new SingleConsumer instance that waits on the given list of gating
+     * sequences. Private helper function.
+     */
+    fn make_consumer(&mut self, dependencies: ~[SequenceReader]) -> SingleConsumer<T, W> {
+        SingleConsumer::<T, W>::new(
+            self.rb.clone(),
+            self.sequence_barrier.sequence.clone_immut(),
+            dependencies,
+            self.sequence_barrier.wait_strategy.clone()
+        )
+    }
+
+    /**
      * Create a chain of dependent consumers, and then add the final
      * consumer(s) in the chain as a dependency of the publisher.
      *
@@ -1274,13 +1319,11 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
      *  - List of enum (single or parallel)
      *  - ?
      */
-    pub fn create_consumer_chain(
+    pub fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> ~[SingleConsumer<T, W>] {
-        assert!(self.sequence_barrier.dependencies.len() == 0, "The create_consumer_chain method can only be called once.");
-
-        let mut consumers = vec::with_capacity::<SingleConsumer<T, W>>(count_consumers);
+    ) -> (~[SingleConsumer<T, W>], SingleFinalConsumer<T, W>) {
+        assert!(self.sequence_barrier.dependencies.len() == 0, "The create_consumer_pipeline method can only be called once.");
 
         // Create each stage in the chain, adding the previous stage as a gating dependency
 
@@ -1288,18 +1331,25 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
         // consumers regardless of their position in the pipeline. It's not necessary to provide a
         // second reference to the same sequence, so an empty array is provided instead.
         let mut dependencies = ~[];
-        for _ in range(0, count_consumers) {
-            let c = SingleConsumer::<T, W>::new(
-                self.rb.clone(),
-                self.sequence_barrier.sequence.clone_immut(),
-                dependencies,
-                self.sequence_barrier.wait_strategy.clone()
-            );
+
+        let count_nonfinal_consumers = count_consumers - 1;
+        let mut nonfinal_consumers = vec::with_capacity::<SingleConsumer<T, W>>(count_nonfinal_consumers);
+        let final_consumer;
+        for _ in range(0, count_nonfinal_consumers) {
+            let c = self.make_consumer(dependencies);
             dependencies = ~[c.sequence_barrier.sb.sequence.clone_immut()];
-            consumers.push(c);
+
+            nonfinal_consumers.push(c);
         }
+
+        // Last consumer gets the ability to take ownership
+        let c = self.make_consumer(dependencies);
+        dependencies = ~[c.sequence_barrier.sb.sequence.clone_immut()];
+        final_consumer = SingleFinalConsumer::new(c);
+
         self.sequence_barrier.setDependencies(dependencies);
-        consumers
+
+        (nonfinal_consumers, final_consumer)
     }
 
     pub fn publish(&self, value: T) {
@@ -1361,14 +1411,63 @@ mod single_publisher_tests {
     #[test]
     fn send_single_value() {
         let mut publisher = SinglePublisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
-        let consumer = publisher.create_consumer_chain(1)[0];
+        let consumer = publisher.create_single_consumer_pipeline();
         publisher.publish(1);
         consumer.consume(|value: &int| {
             assert!(*value == 1);
         });
     }
+    #[test]
+    fn send_single_value_via_take() {
+        let mut publisher = SinglePublisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let consumer = publisher.create_single_consumer_pipeline();
+        let value = 1;
+        publisher.publish(value);
+        let received_value = consumer.take();
+        assert_eq!(received_value, value);
+    }
 
     // TODO: test that dependencies hold true by setting up a chain, grabbing a list of timestamps
     // within each task, and then verifying them after for a happens-before relationship. It's not
     // foolproof, but better than nothing.
+}
+
+/**
+ * The last consumer in a disruptor pipeline. Being the last consumer in the pipeline makes it
+ * possible to move values out of the ring buffer, in addition to the functionality available from a
+ * normal SingleConsumer.
+ */
+struct SingleFinalConsumer<T, W> {
+    sc: SingleConsumer<T, W>
+}
+
+impl <T: Send, W: ProcessingWaitStrategy> SingleFinalConsumer<T, W> {
+    /**
+     * Return a new SingleFinalConsumer instance wrapped around a given SingleConsumer instance.
+     * In addition to existing SingleConsumer features, this object also allows the caller to take
+     * ownership of the items that it accesses.
+     */
+    fn new(
+        sc: SingleConsumer<T, W>
+    ) -> SingleFinalConsumer<T, W> {
+        SingleFinalConsumer {
+            sc: sc
+        }
+    }
+
+    /// See the SingleConsumer.consume method.
+    pub fn consume(&self, consume_callback: &fn(value: &T)) { self.sc.consume(consume_callback) }
+
+    /**
+     * Waits for the next value to be available, moves it out of the ring buffer, and returns it.
+     */
+    pub fn take(&self) -> T {
+        unsafe {
+            let sc = &mut cast::transmute_mut(self).sc;
+            sc.sequence_barrier.next();
+            let value = sc.rb.take(sc.sequence_barrier.get_current());
+            sc.sequence_barrier.release();
+            value
+        }
+    }
 }

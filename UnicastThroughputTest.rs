@@ -102,7 +102,7 @@ fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations:
     // generate a formatted string representation of w before it's moved into publisher
     let wait_str = format!("{}", w);
     let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
-    let consumer = publisher.create_consumer_chain(1)[0];
+    let consumer = publisher.create_single_consumer_pipeline();
     let (result_port, result_chan) = stream::<u64>();
 
     let before = precise_time_ns();
@@ -113,11 +113,9 @@ fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations:
         let mut sum = 0u64;
 
         loop {
-            let mut i = u64::max_value;
-            do consumer.consume |value: &u64| {
-                i = *value;
-            }
+            let i = consumer.take();
             debug!("{:?}", i);
+            // In-band magic number value tells us when to break out of the loop
             if i == u64::max_value {
                 result_chan.send(sum);
                 break;
