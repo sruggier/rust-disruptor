@@ -1337,14 +1337,14 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
         let final_consumer;
         for _ in range(0, count_nonfinal_consumers) {
             let c = self.make_consumer(dependencies);
-            dependencies = ~[c.sequence_barrier.sb.sequence.clone_immut()];
+            dependencies = ~[c.get_sequence()];
 
             nonfinal_consumers.push(c);
         }
 
         // Last consumer gets the ability to take ownership
         let c = self.make_consumer(dependencies);
-        dependencies = ~[c.sequence_barrier.sb.sequence.clone_immut()];
+        dependencies = ~[c.get_sequence()];
         final_consumer = SingleFinalConsumer::new(c);
 
         self.sequence_barrier.setDependencies(dependencies);
@@ -1386,6 +1386,13 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleConsumer<T, W> {
             rb: rb,
             sequence_barrier: SingleConsumerSequenceBarrier::new(cursor, dependencies, wait_strategy, size)
         }
+    }
+
+    /**
+     * Returns a read-only reference to this consumer's sequence number.
+     */
+    fn get_sequence(&self) -> SequenceReader {
+        self.sequence_barrier.sb.sequence.clone_immut()
     }
 
     /**
