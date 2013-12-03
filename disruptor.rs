@@ -111,6 +111,38 @@ impl<T> RingBufferData<T> {
             entries: buffer,
         }
     }
+
+    /**
+     * Write a value into the ring buffer. The given sequence number is converted into an index into
+     * the buffer, and the value is moved in into that element of the buffer.
+     */
+    unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
+        let index = sequence.as_index(self.entries.len());
+        self.entries[index].set(value);
+    }
+
+    /// Get the size of the underlying buffer.
+    fn size(&self) -> uint {
+        self.entries.len()
+    }
+
+    /// Get an immutable reference to the value pointed to by `sequence`.
+    unsafe fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
+        let index = sequence.as_index(self.size());
+        self.entries[index].get()
+    }
+
+    /**
+     * Take the value pointed to by `sequence`, moving it out of the RingBuffer.
+     *
+     * # Failure
+     *
+     * This function should only be called once for a given sequence value.
+     */
+    unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
+        let index = sequence.as_index(self.size());
+        self.entries[index].take()
+    }
 }
 
 #[unsafe_destructor]
@@ -223,41 +255,29 @@ impl<T: Send> RingBuffer<T> {
         RingBuffer { data: UncheckedUnsafeArc::new(data) }
     }
 
-    /// Get the size of the underlying buffer.
+    /// See `RingBufferData::size`
     fn size(&self) -> uint {
         unsafe {
-            self.data.get_immut().entries.len()
+            self.data.get_immut().size()
         }
     }
 
-    /**
-     * Write a value into the ring buffer. The given sequence number is converted into an index into
-     * the buffer, and the value is moved in into that element of the buffer.
-     */
+    /// See `RingBufferData::set`
     unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
         let d = self.data.get();
-        let index = sequence.as_index(d.entries.len());
-        d.entries[index].set(value);
+        d.set(sequence, value);
     }
 
-    /// Get an immutable reference to the value pointed to by `sequence`.
+    /// See `RingBufferData::get`
     unsafe fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
         let d = self.data.get_immut();
-        let index = sequence.as_index(d.entries.len());
-        d.entries[index].get()
+        d.get(sequence)
     }
 
-    /**
-     * Take the value pointed to by `sequence`, moving it out of the RingBuffer.
-     *
-     * # Failure
-     *
-     * This function should only be called once for a given sequence value.
-     */
+    /// See `RingBufferData::take`
     unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
         let d = self.data.get();
-        let index = sequence.as_index(d.entries.len());
-        d.entries[index].take()
+        d.take(sequence)
     }
 }
 
