@@ -79,6 +79,10 @@ impl<T> Slot<T> {
      * # Failure
      *
      * When called a second time, this function doubles as a convenient way to end your task.
+     *
+     * # Safety notes
+     *
+     * It's the caller's responsibility not to call this after destroy.
      */
     unsafe fn take(&mut self) -> T {
         (*self.payload).take_unwrap()
@@ -270,19 +274,25 @@ impl<T: Send> RingBuffer<T> {
         }
     }
 
-    /// See `RingBufferData::set`
+    /**
+     * See `RingBufferData::set`
+     *
+     * # Safety notes
+     *
+     * It's the caller's responsibility to avoid data races, so this function is unsafe.
+     */
     unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
         let d = self.data.get();
         d.set(sequence, value);
     }
 
-    /// See `RingBufferData::get`
+    /// See `RingBufferData::get`. Unsafe: allows data races.
     unsafe fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
         let d = self.data.get_immut();
         d.get(sequence)
     }
 
-    /// See `RingBufferData::take`
+    /// See `RingBufferData::take`. Unsafe: allows data races.
     unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
         let d = self.data.get();
         d.take(sequence)
