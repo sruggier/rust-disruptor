@@ -172,7 +172,7 @@ impl<T> Drop for RingBufferData<T> {
  * Values of this object are used as indices into the ring buffer (modulo the buffer size). The
  * current value represents the latest slot that a publisher or consumer is still processing. In
  * other words, a value of 0 means that no slots have been published or consumed, and that 0 is the
- * current slot being processed. A value of 1 means that slot 0 has be released for processing by
+ * current slot being processed. A value of 1 means that slot 0 has been released for processing by
  * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
  * processing.
  */
