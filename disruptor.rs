@@ -1153,6 +1153,13 @@ trait SequenceBarrier {
      */
     fn get_current(&self) -> SequenceNumber;
 
+    // Facilitate the default implementations of next_n and release_n
+    /// Cache the passed in number of available slots for later use in get_cached_available.
+    fn set_cached_available(&mut self, available: uint);
+    /// Return the number of known-available slots as of the last read from the sequence barrier's
+    /// gating sequence.
+    fn get_cached_available(&self) -> uint;
+
     /**
      * Wait for a single slot to be available.
      */
@@ -1170,7 +1177,21 @@ trait SequenceBarrier {
      * always be safe. Alternatively, increase the size of the buffer to support the desired amount
      * of batching.
      */
-    fn next_n(&mut self, batch_size: uint);
+    fn next_n(&mut self, batch_size: uint) {
+        // Avoid waiting if the necessary slots were already available as of the last read. Calls
+        // next_n_real if the slots are not available.
+        if (self.get_cached_available() < batch_size) {
+            let cached_available = self.next_n_real(batch_size);
+            self.set_cached_available(cached_available);
+        }
+    }
+
+    /**
+     * Wait for `batch_size` slots to become available, then return the actual number of available
+     * slots, which may be greater than `batch_size`. This is called only after using up all
+     * available slots from the last time this barrier waited.
+     */
+    fn next_n_real(&mut self, batch_size: uint) -> uint;
 
     /**
      * Release a single slot for downstream consumers.
@@ -1182,51 +1203,19 @@ trait SequenceBarrier {
     /**
      * Release n slots for downstream consumers.
      */
-    fn release_n(&mut self, batch_size: uint);
-}
+    fn release_n(&mut self, batch_size: uint) {
+        // Update the cached value to reflect the newly used up slots, then call release_n_real.
 
-/**
- * Implements caching behaviour in a reusable way, using default trait functions.
- */
-trait CachingSequenceBarrier : SequenceBarrier {
-    // Users of this trait need to implement these four functions
-    /// Cache the passed in number of available slots for later use in get_cached_available.
-    fn set_cached_available(&mut self, available: uint);
-    /// Return the number of known-available slots as of the last read from the sequence barrier's
-    /// gating sequence.
-    fn get_cached_available(&self) -> uint;
-
-    /**
-     * Wait for `batch_size` slots to become available, then return the actual number of available
-     * slots, which may be greater than `batch_size`. This is called only after using up all
-     * available slots from the last time this barrier waited.
-     */
-    fn next_n_wait(&mut self, batch_size: uint) -> uint;
-
-    /// See SequenceBarrier::release_n. This is called every time release_n is called.
-    fn release_n_publish(&mut self, batch_size: uint);
-
-    /**
-     * Implementation of next_n that avoids waiting if the necessary slots were already available as
-     * of the last read. Calls next_n_wait if the slots are not available.
-     */
-    fn cached_next_n(&mut self, batch_size: uint) {
-        if (self.get_cached_available() < batch_size) {
-            let cached_available = self.next_n_wait(batch_size);
-            self.set_cached_available(cached_available);
-        }
-    }
-
-    /// Updates the cached value to reflect the newly used up slots, then calls release_n_publish.
-    fn cached_release_n(&mut self, batch_size: uint) {
         // Subtract batch_size from the cached number of available slots.
         let available = self.get_cached_available();
         assert!(available >= batch_size);
         self.set_cached_available(available - batch_size);
 
-        self.release_n_publish(batch_size);
+        self.release_n_real(batch_size);
     }
 
+    /// Same as `release_n`,but without caching. This is called every time release_n is called.
+    fn release_n_real(&mut self, batch_size: uint);
 }
 
 /**
@@ -1274,25 +1263,17 @@ impl<W: PublishingWaitStrategy> SinglePublisherSequenceBarrier<W> {
 }
 
 impl<W: PublishingWaitStrategy> SequenceBarrier for SinglePublisherSequenceBarrier<W> {
-    fn get_current(&self) -> SequenceNumber {
-        self.sequence.get_owned()
-    }
-    // See CachingSequenceBarrier
-    fn next_n(&mut self, batch_size: uint) { self.cached_next_n(batch_size) }
-    fn release_n(&mut self, batch_size: uint) { self.cached_release_n(batch_size) }
-}
-
-impl<W: PublishingWaitStrategy> CachingSequenceBarrier for SinglePublisherSequenceBarrier<W> {
+    fn get_current(&self) -> SequenceNumber { self.sequence.get_owned() }
     fn set_cached_available(&mut self, available: uint) { self.cached_available = available }
     fn get_cached_available(&self) -> uint { self.cached_available }
 
-    fn next_n_wait(&mut self, batch_size: uint) -> uint {
+    fn next_n_real(&mut self, batch_size: uint) -> uint {
         let current_sequence = self.sequence.get_owned();
         let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher);
         available
     }
 
-    fn release_n_publish(&mut self, batch_size: uint) {
+    fn release_n_real(&mut self, batch_size: uint) {
         self.sequence.advance_and_flush(batch_size, self.buffer_size);
         self.wait_strategy.notifyAllWaiters();
     }
@@ -1330,19 +1311,11 @@ impl<W: ProcessingWaitStrategy> SingleConsumerSequenceBarrier<W> {
 }
 
 impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrier<W> {
-    fn get_current(&self) -> SequenceNumber {
-        self.sb.get_current()
-    }
-    // See CachingSequenceBarrier
-    fn next_n(&mut self, batch_size: uint) { self.cached_next_n(batch_size) }
-    fn release_n(&mut self, batch_size: uint) { self.cached_release_n(batch_size) }
-}
-
-impl<W: ProcessingWaitStrategy> CachingSequenceBarrier for SingleConsumerSequenceBarrier<W> {
+    fn get_current(&self) -> SequenceNumber { self.sb.get_current() }
     fn set_cached_available(&mut self, available: uint) { self.sb.set_cached_available(available) }
     fn get_cached_available(&self) -> uint { self.sb.get_cached_available() }
 
-    fn next_n_wait(&mut self, batch_size: uint) -> uint {
+    fn next_n_real(&mut self, batch_size: uint) -> uint {
         let current_sequence = self.get_current();
         let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence, &self.cursor, self.sb.buffer_size);
         let a = self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
@@ -1350,7 +1323,7 @@ impl<W: ProcessingWaitStrategy> CachingSequenceBarrier for SingleConsumerSequenc
         cmp::min(available, a)
     }
 
-    fn release_n_publish(&mut self, batch_size: uint) {
+    fn release_n_real(&mut self, batch_size: uint) {
         self.sb.sequence.advance(batch_size, self.sb.buffer_size);
         // If the next call to next_n will result in more waiting, then make our progress visible to
         // downstream consumers now.
