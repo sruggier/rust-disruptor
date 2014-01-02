@@ -612,6 +612,7 @@ pub trait ProcessingWaitStrategy : PublishingWaitStrategy {
         buffer_size: uint
     ) -> uint;
 }
+
 /**
  * Helps the publisher wait to avoid overwriting values that are still being consumed.
  */
