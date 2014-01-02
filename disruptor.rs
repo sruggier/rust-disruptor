@@ -1157,7 +1157,7 @@ trait SequenceBarrier {
      * Wait for a single slot to be available.
      */
     fn next(&mut self) {
-        self.nextN(1)
+        self.next_n(1)
     }
 
     /**
@@ -1170,19 +1170,19 @@ trait SequenceBarrier {
      * always be safe. Alternatively, increase the size of the buffer to support the desired amount
      * of batching.
      */
-    fn nextN(&mut self, batch_size: uint);
+    fn next_n(&mut self, batch_size: uint);
 
     /**
      * Release a single slot for downstream consumers.
      */
     fn release(&mut self) {
-        self.releaseN(1);
+        self.release_n(1);
     }
 
     /**
      * Release n slots for downstream consumers.
      */
-    fn releaseN(&mut self, batch_size: uint);
+    fn release_n(&mut self, batch_size: uint);
 }
 
 /**
@@ -1234,14 +1234,14 @@ impl<W: PublishingWaitStrategy> SequenceBarrier for SinglePublisherSequenceBarri
         self.sequence.get_owned()
     }
 
-    fn nextN(&mut self, batch_size: uint) {
+    fn next_n(&mut self, batch_size: uint) {
         if (self.cached_available < batch_size) {
             let current_sequence = self.sequence.get_owned();
             self.cached_available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher);
         }
     }
 
-    fn releaseN(&mut self, batch_size: uint) {
+    fn release_n(&mut self, batch_size: uint) {
         assert!(self.cached_available >= batch_size);
         self.cached_available -= batch_size;
 
@@ -1286,7 +1286,7 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrie
         self.sb.get_current()
     }
 
-    fn nextN(&mut self, batch_size: uint) {
+    fn next_n(&mut self, batch_size: uint) {
         if (self.sb.cached_available < batch_size) {
             let current_sequence = self.get_current();
             let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence, &self.cursor, self.sb.buffer_size);
@@ -1295,12 +1295,12 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrie
         }
     }
 
-    fn releaseN(&mut self, batch_size: uint) {
+    fn release_n(&mut self, batch_size: uint) {
         assert!(self.sb.cached_available >= batch_size);
         self.sb.cached_available -= batch_size;
 
         self.sb.sequence.advance(batch_size, self.sb.buffer_size);
-        // If the next call to nextN will result in more waiting, then make our progress visible to
+        // If the next call to next_n will result in more waiting, then make our progress visible to
         // downstream consumers now.
         if (self.sb.cached_available < batch_size) {
             self.sb.sequence.flush();
