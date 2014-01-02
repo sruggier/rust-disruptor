@@ -1123,9 +1123,11 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
             }
 
             // This is a bit of a hack to work around the fact that the Mutex will occasionally
-            // start executing the publisher's when the consumer unlocks it, starving the consumer.
-            // Doing this should cause the consumer to execute again, avoiding deadlock. At the same
-            // time, it's mostly off the fast path, so performance shouldn't be hurt much.
+            // start executing the publisher's task when the consumer unlocks it, starving the
+            // consumer. Doing this should cause the consumer to execute again, avoiding deadlock.
+            // At the same time, it's mostly off the fast path (this code path is only hit if a long
+            // gap in publishing caused one or more consumers to sleep), so performance shouldn't be
+            // hurt much.
             task::deschedule();
         }
     }
