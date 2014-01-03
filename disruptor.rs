@@ -279,8 +279,12 @@ trait RingBufferTrait<T> : Clone + Send {
      */
     unsafe fn set(&mut self, sequence: SequenceNumber, value: T);
 
-    /// See `RingBufferData::get`. Unsafe: allows data races.
-    unsafe fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T;
+    /**
+     * See `RingBufferData::get`. Unsafe: allows data races.
+     *
+     * Mutable to facilitate transparent transitions to larger buffers.
+     */
+    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s T;
 
     /// See `RingBufferData::take`. Unsafe: allows data races.
     unsafe fn take(&mut self, sequence: SequenceNumber) -> T;
@@ -310,7 +314,7 @@ impl<T: Send> RingBufferTrait<T> for RingBuffer<T> {
         d.set(sequence, value);
     }
 
-    unsafe fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
+    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s T {
         let d = self.data.get_immut();
         d.get(sequence)
     }
@@ -1499,7 +1503,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SingleConsumer<
             // FIXME #5372
             let self_mut = cast::transmute_mut(self);
             self_mut.sequence_barrier.next();
-            consume_callback(self.rb.get(self.sequence_barrier.get_current()));
+            consume_callback(self_mut.rb.get(self.sequence_barrier.get_current()));
             self_mut.sequence_barrier.release();
 
         }
