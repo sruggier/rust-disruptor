@@ -256,23 +256,19 @@ impl<T: Send> Clone for RingBuffer<T> {
     }
 }
 
-impl<T: Send> RingBuffer<T> {
+/**
+ * Allows for different ring buffer implementations to be used by the higher level types in this
+ * module.
+ */
+trait RingBufferTrait<T> : Clone + Send {
     /**
      * Constructs a new RingBuffer with a capacity of `size` elements. The size must be a power of
      * two, a property which will be exploited for performance reasons.
      */
-    fn new(size: uint) -> RingBuffer<T> {
-        assert!(size.population_count() == 1, "RingBuffer size must be a power of two (received {:?})", size);
-        let data = RingBufferData::new(size);
-        RingBuffer { data: UncheckedUnsafeArc::new(data) }
-    }
+    fn new(size: uint) -> Self;
 
     /// See `RingBufferData::size`
-    fn size(&self) -> uint {
-        unsafe {
-            self.data.get_immut().size()
-        }
-    }
+    fn size(&self) -> uint;
 
     /**
      * See `RingBufferData::set`
@@ -281,18 +277,44 @@ impl<T: Send> RingBuffer<T> {
      *
      * It's the caller's responsibility to avoid data races, so this function is unsafe.
      */
+    unsafe fn set(&mut self, sequence: SequenceNumber, value: T);
+
+    /// See `RingBufferData::get`. Unsafe: allows data races.
+    unsafe fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T;
+
+    /// See `RingBufferData::take`. Unsafe: allows data races.
+    unsafe fn take(&mut self, sequence: SequenceNumber) -> T;
+}
+
+impl<T: Send> RingBuffer<T> {
+    fn new(size: uint) -> RingBuffer<T> {
+        RingBufferTrait::new(size)
+    }
+}
+
+impl<T: Send> RingBufferTrait<T> for RingBuffer<T> {
+    fn new(size: uint) -> RingBuffer<T> {
+        assert!(size.population_count() == 1, "RingBuffer size must be a power of two (received {:?})", size);
+        let data = RingBufferData::new(size);
+        RingBuffer { data: UncheckedUnsafeArc::new(data) }
+    }
+
+    fn size(&self) -> uint {
+        unsafe {
+            self.data.get_immut().size()
+        }
+    }
+
     unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
         let d = self.data.get();
         d.set(sequence, value);
     }
 
-    /// See `RingBufferData::get`. Unsafe: allows data races.
     unsafe fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
         let d = self.data.get_immut();
         d.get(sequence)
     }
 
-    /// See `RingBufferData::take`. Unsafe: allows data races.
     unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
         let d = self.data.get();
         d.take(sequence)
@@ -1337,19 +1359,26 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrie
  * Allows callers to wire up dependencies, then send values down the pipeline
  * of dependent consumers.
  */
-struct SinglePublisher<T, W> {
-    rb: RingBuffer<T>,
+struct SinglePublisher<T, W, RB> {
+    rb: RB,
     sequence_barrier: SinglePublisherSequenceBarrier<W>,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
+impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W, RingBuffer<T>> {
     /**
-     * Constructs a new RingBuffer<T> with _size_ elements and wraps it into a
-     * new SinglePublisher<T> object.
+     * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
+     * SinglePublisher<T> object.
      */
-    pub fn new(size: uint, wait_strategy: W) -> SinglePublisher<T, W> {
+    pub fn new(size: uint, wait_strategy: W) -> SinglePublisher<T, W, RingBuffer<T>> {
+        SinglePublisher::new_common(size, wait_strategy)
+    }
+}
+
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SinglePublisher<T, W, RB> {
+    /// Generic constructor that works with any RingBufferTrait-conforming type
+    fn new_common(size: uint, wait_strategy: W) -> SinglePublisher<T, W, RB> {
         SinglePublisher {
-            rb: RingBuffer::<T>::new(size),
+            rb: RingBufferTrait::<T>::new(size),
             sequence_barrier: SinglePublisherSequenceBarrier::new(~[], wait_strategy, size),
         }
     }
@@ -1357,7 +1386,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      */
-    pub fn create_single_consumer_pipeline(&mut self) -> SingleFinalConsumer<T, W> {
+    pub fn create_single_consumer_pipeline(&mut self) -> SingleFinalConsumer<T, W, RB> {
         let (_, c) = self.create_consumer_pipeline(1);
         c
     }
@@ -1366,8 +1395,8 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
      * Creates and returns a new SingleConsumer instance that waits on the given list of gating
      * sequences. Private helper function.
      */
-    fn make_consumer(&mut self, dependencies: ~[SequenceReader]) -> SingleConsumer<T, W> {
-        SingleConsumer::<T, W>::new(
+    fn make_consumer(&mut self, dependencies: ~[SequenceReader]) -> SingleConsumer<T, W, RB> {
+        SingleConsumer::<T, W, RB>::new(
             self.rb.clone(),
             self.sequence_barrier.sequence.clone_immut(),
             dependencies,
@@ -1388,7 +1417,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
     pub fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> (~[SingleConsumer<T, W>], SingleFinalConsumer<T, W>) {
+    ) -> (~[SingleConsumer<T, W, RB>], SingleFinalConsumer<T, W, RB>) {
         assert!(self.sequence_barrier.dependencies.len() == 0, "The create_consumer_pipeline method can only be called once.");
 
         // Create each stage in the chain, adding the previous stage as a gating dependency
@@ -1399,7 +1428,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
         let mut dependencies = ~[];
 
         let count_nonfinal_consumers = count_consumers - 1;
-        let mut nonfinal_consumers = vec::with_capacity::<SingleConsumer<T, W>>(count_nonfinal_consumers);
+        let mut nonfinal_consumers = vec::with_capacity::<SingleConsumer<T, W, RB>>(count_nonfinal_consumers);
         let final_consumer;
         for _ in range(0, count_nonfinal_consumers) {
             let c = self.make_consumer(dependencies);
@@ -1435,18 +1464,18 @@ impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
 /**
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
-struct SingleConsumer<T, W> {
-    rb: RingBuffer<T>,
+struct SingleConsumer<T, W, RB> {
+    rb: RB,
     sequence_barrier: SingleConsumerSequenceBarrier<W>,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> SingleConsumer<T, W> {
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SingleConsumer<T, W, RB> {
     fn new(
-        rb: RingBuffer<T>,
+        rb: RB,
         cursor: SequenceReader,
         dependencies: ~[SequenceReader],
         wait_strategy: W
-    ) -> SingleConsumer<T, W> {
+    ) -> SingleConsumer<T, W, RB> {
         let size = rb.size();
         SingleConsumer {
             rb: rb,
@@ -1510,19 +1539,19 @@ mod single_publisher_tests {
  * possible to move values out of the ring buffer, in addition to the functionality available from a
  * normal SingleConsumer.
  */
-struct SingleFinalConsumer<T, W> {
-    sc: SingleConsumer<T, W>
+struct SingleFinalConsumer<T, W, RB> {
+    sc: SingleConsumer<T, W, RB>
 }
 
-impl <T: Send, W: ProcessingWaitStrategy> SingleFinalConsumer<T, W> {
+impl <T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SingleFinalConsumer<T, W, RB> {
     /**
      * Return a new SingleFinalConsumer instance wrapped around a given SingleConsumer instance.
      * In addition to existing SingleConsumer features, this object also allows the caller to take
      * ownership of the items that it accesses.
      */
     fn new(
-        sc: SingleConsumer<T, W>
-    ) -> SingleFinalConsumer<T, W> {
+        sc: SingleConsumer<T, W, RB>
+    ) -> SingleFinalConsumer<T, W, RB> {
         SingleFinalConsumer {
             sc: sc
         }
