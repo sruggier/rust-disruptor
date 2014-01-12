@@ -1214,8 +1214,8 @@ trait SequenceBarrier {
 
     /**
      * Wait for `batch_size` slots to become available, then return the actual number of available
-     * slots, which may be greater than `batch_size`. This is called only after using up all
-     * available slots from the last time this barrier waited.
+     * slots, which may be greater than `batch_size`. This is called only as a last resort. If extra
+     * slots were available as of the last wait, this function will not be called.
      */
     fn next_n_real(&mut self, batch_size: uint) -> uint;
 
