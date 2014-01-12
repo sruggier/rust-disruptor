@@ -1189,12 +1189,17 @@ trait SequenceBarrier {
     /**
      * Wait for a single slot to be available.
      */
-    fn next(&mut self) {
-        self.next_n(1)
+    fn next<RB>(&mut self, rb: &mut RB) {
+        self.next_n(1, rb)
     }
 
     /**
      * Wait for N slots to be available.
+     *
+     * # Arguments
+     *
+     * * batch_size - How many slots should be available before returning.
+     * * rb - A reference to the underlying ring buffer, currently used to implement resizing.
      *
      * # Safety notes
      *
@@ -1203,11 +1208,11 @@ trait SequenceBarrier {
      * always be safe. Alternatively, increase the size of the buffer to support the desired amount
      * of batching.
      */
-    fn next_n(&mut self, batch_size: uint) {
+    fn next_n<RB>(&mut self, batch_size: uint, rb: &mut RB) {
         // Avoid waiting if the necessary slots were already available as of the last read. Calls
         // next_n_real if the slots are not available.
         if (self.get_cached_available() < batch_size) {
-            let cached_available = self.next_n_real(batch_size);
+            let cached_available = self.next_n_real(batch_size, rb);
             self.set_cached_available(cached_available);
         }
     }
@@ -1217,7 +1222,7 @@ trait SequenceBarrier {
      * slots, which may be greater than `batch_size`. This is called only as a last resort. If extra
      * slots were available as of the last wait, this function will not be called.
      */
-    fn next_n_real(&mut self, batch_size: uint) -> uint;
+    fn next_n_real<RB>(&mut self, batch_size: uint, rb: &mut RB) -> uint;
 
     /**
      * Release a single slot for downstream consumers.
@@ -1293,7 +1298,7 @@ impl<W: PublishingWaitStrategy> SequenceBarrier for SinglePublisherSequenceBarri
     fn set_cached_available(&mut self, available: uint) { self.cached_available = available }
     fn get_cached_available(&self) -> uint { self.cached_available }
 
-    fn next_n_real(&mut self, batch_size: uint) -> uint {
+    fn next_n_real<RB>(&mut self, batch_size: uint, _rb: &mut RB) -> uint {
         let current_sequence = self.sequence.get_owned();
         let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher);
         available
@@ -1337,11 +1342,13 @@ impl<W: ProcessingWaitStrategy> SingleConsumerSequenceBarrier<W> {
 }
 
 impl<W: ProcessingWaitStrategy> SequenceBarrier for SingleConsumerSequenceBarrier<W> {
-    fn get_current(&self) -> SequenceNumber { self.sb.get_current() }
+    fn get_current(&self) -> SequenceNumber {
+        self.sb.get_current()
+    }
     fn set_cached_available(&mut self, available: uint) { self.sb.set_cached_available(available) }
     fn get_cached_available(&self) -> uint { self.sb.get_cached_available() }
 
-    fn next_n_real(&mut self, batch_size: uint) -> uint {
+    fn next_n_real<RB>(&mut self, batch_size: uint, _rb: &mut RB) -> uint {
         let current_sequence = self.get_current();
         let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence, &self.cursor, self.sb.buffer_size);
         let a = self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
@@ -1457,7 +1464,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SinglePublisher
             let self_mut = cast::transmute_mut(self);
             let begin: SequenceNumber = self.sequence_barrier.get_current();
             // Wait for available slot
-            self_mut.sequence_barrier.next();
+            self_mut.sequence_barrier.next(&mut self_mut.rb);
                 self_mut.rb.set(begin, value);
             // Make the item available to downstream consumers
             self_mut.sequence_barrier.release();
@@ -1502,7 +1509,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SingleConsumer<
         unsafe {
             // FIXME #5372
             let self_mut = cast::transmute_mut(self);
-            self_mut.sequence_barrier.next();
+            self_mut.sequence_barrier.next(&mut self_mut.rb);
             consume_callback(self_mut.rb.get(self.sequence_barrier.get_current()));
             self_mut.sequence_barrier.release();
 
@@ -1570,7 +1577,7 @@ impl <T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SingleFinalCon
     pub fn take(&self) -> T {
         unsafe {
             let sc = &mut cast::transmute_mut(self).sc;
-            sc.sequence_barrier.next();
+            sc.sequence_barrier.next(&mut sc.rb);
             let value = sc.rb.take(sc.sequence_barrier.get_current());
             sc.sequence_barrier.release();
             value
