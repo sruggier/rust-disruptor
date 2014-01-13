@@ -1288,7 +1288,7 @@ impl<W: PublishingWaitStrategy> SinglePublisherSequenceBarrier<W> {
      * After settling on a design for concurrent producers and perhaps concurrent consumers,
      * redesign dependencies to be immutable after the object is constructed.
      */
-    fn setDependencies(&mut self, dependencies: ~[SequenceReader]) {
+    fn set_dependencies(&mut self, dependencies: ~[SequenceReader]) {
         self.dependencies = dependencies;
     }
 }
@@ -1453,7 +1453,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SinglePublisher
         dependencies = ~[c.get_sequence()];
         final_consumer = SingleFinalConsumer::new(c);
 
-        self.sequence_barrier.setDependencies(dependencies);
+        self.sequence_barrier.set_dependencies(dependencies);
 
         (nonfinal_consumers, final_consumer)
     }
