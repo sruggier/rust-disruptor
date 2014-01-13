@@ -12,7 +12,7 @@ use std::fmt;
 use std::u64;
 use std::task::{spawn_sched,SchedMode,SingleThreaded,DefaultScheduler};
 
-use disruptor::{SinglePublisher,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy};
+use disruptor::{Publisher,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy};
 mod disruptor;
 
 /**
@@ -101,7 +101,7 @@ fn run_task_pipe_benchmark(iterations: u64) {
 fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations: u64, w: W, mode: SchedMode) {
     // generate a formatted string representation of w before it's moved into publisher
     let wait_str = format!("{}", w);
-    let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
+    let mut publisher = Publisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_single_consumer_pipeline();
     let (result_port, result_chan) = stream::<u64>();
 

@@ -1416,21 +1416,21 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier<SingleConsumerSequenceBarrier<W>
  * Allows callers to wire up dependencies, then send values down the pipeline
  * of dependent consumers.
  */
-struct SinglePublisher<T, W, RB, SB> {
+struct Publisher<T, W, RB, SB> {
     rb: RB,
     sequence_barrier: SB,
 }
 
 impl<T: Send, W: ProcessingWaitStrategy>
-        SinglePublisher<T, W, RingBuffer<T>, SinglePublisherSequenceBarrier<W>> {
+        Publisher<T, W, RingBuffer<T>, SinglePublisherSequenceBarrier<W>> {
 
     /**
      * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
-     * SinglePublisher<T> object.
+     * Publisher<T> object.
      */
     pub fn new(size: uint, wait_strategy: W)
-            -> SinglePublisher<T, W, RingBuffer<T>, SinglePublisherSequenceBarrier<W>> {
-        SinglePublisher::new_common(
+            -> Publisher<T, W, RingBuffer<T>, SinglePublisherSequenceBarrier<W>> {
+        Publisher::new_common(
             size,
             SinglePublisherSequenceBarrier::new(~[], wait_strategy, size)
         )
@@ -1444,11 +1444,11 @@ impl<
         SB: SequenceBarrier<CSB>,
         CSB: SequenceBarrier<CSB>
     >
-        SinglePublisher<T, W, RB, SB> {
+        Publisher<T, W, RB, SB> {
 
     /// Generic constructor that works with any RingBufferTrait-conforming type
-    fn new_common(size: uint, sb: SB) -> SinglePublisher<T, W, RB, SB> {
-        SinglePublisher {
+    fn new_common(size: uint, sb: SB) -> Publisher<T, W, RB, SB> {
+        Publisher {
             rb: RingBufferTrait::<T>::new(size),
             sequence_barrier: sb,
         }
@@ -1457,7 +1457,7 @@ impl<
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      */
-    pub fn create_single_consumer_pipeline(&mut self) -> SingleFinalConsumer<T, W, RB, CSB> {
+    pub fn create_single_consumer_pipeline(&mut self) -> FinalConsumer<T, W, RB, CSB> {
         let (_, c) = self.create_consumer_pipeline(1);
         c
     }
@@ -1475,7 +1475,7 @@ impl<
     pub fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> (~[SingleConsumer<T, W, RB, CSB>], SingleFinalConsumer<T, W, RB, CSB>) {
+    ) -> (~[Consumer<T, W, RB, CSB>], FinalConsumer<T, W, RB, CSB>) {
         assert!(self.sequence_barrier.get_dependencies().len() == 0, "The create_consumer_pipeline method can only be called once.");
 
         // Create each stage in the chain, adding the previous stage as a gating dependency
@@ -1484,12 +1484,12 @@ impl<
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
-                vec::with_capacity::<SingleConsumer<T, W, RB, CSB>>(count_nonfinal_consumers);
+                vec::with_capacity::<Consumer<T, W, RB, CSB>>(count_nonfinal_consumers);
         let final_consumer;
 
         for _ in range(0, count_nonfinal_consumers) {
             let sb_next = sb.new_consumer_barrier();
-            let c = SingleConsumer::new(self.rb.clone(), sb);
+            let c = Consumer::new(self.rb.clone(), sb);
             sb = sb_next;
 
             nonfinal_consumers.push(c);
@@ -1497,8 +1497,8 @@ impl<
 
         // Last consumer gets the ability to take ownership
         let dependencies = ~[sb.get_sequence()];
-        let c = SingleConsumer::new(self.rb.clone(), sb);
-        final_consumer = SingleFinalConsumer::new(c);
+        let c = Consumer::new(self.rb.clone(), sb);
+        final_consumer = FinalConsumer::new(c);
 
         self.sequence_barrier.set_dependencies(dependencies);
 
@@ -1522,18 +1522,15 @@ impl<
 /**
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
-struct SingleConsumer<T, W, RB, SB> {
+struct Consumer<T, W, RB, SB> {
     rb: RB,
     sequence_barrier: SB,
 }
 
 impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBarrier<SB>>
-        SingleConsumer<T, W, RB, SB> {
-    fn new(
-        rb: RB,
-        sb: SB
-    ) -> SingleConsumer<T, W, RB, SB> {
-        SingleConsumer {
+        Consumer<T, W, RB, SB> {
+    fn new(rb: RB, sb: SB) -> Consumer<T, W, RB, SB> {
+        Consumer {
             rb: rb,
             sequence_barrier: sb
         }
@@ -1557,11 +1554,11 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBar
 
 #[cfg(test)]
 mod single_publisher_tests {
-    use super::{SinglePublisher, SpinWaitStrategy};
+    use super::{Publisher, SpinWaitStrategy};
 
     #[test]
     fn send_single_value() {
-        let mut publisher = SinglePublisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let mut publisher = Publisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
         publisher.publish(1);
         consumer.consume(|value: &int| {
@@ -1570,7 +1567,7 @@ mod single_publisher_tests {
     }
     #[test]
     fn send_single_value_via_take() {
-        let mut publisher = SinglePublisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let mut publisher = Publisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
         let value = 1;
         publisher.publish(value);
@@ -1586,27 +1583,27 @@ mod single_publisher_tests {
 /**
  * The last consumer in a disruptor pipeline. Being the last consumer in the pipeline makes it
  * possible to move values out of the ring buffer, in addition to the functionality available from a
- * normal SingleConsumer.
+ * normal Consumer.
  */
-struct SingleFinalConsumer<T, W, RB, SB> {
-    sc: SingleConsumer<T, W, RB, SB>
+struct FinalConsumer<T, W, RB, SB> {
+    sc: Consumer<T, W, RB, SB>
 }
 
-impl <T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBarrier<SB>> SingleFinalConsumer<T, W, RB, SB> {
+impl <T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBarrier<SB>>
+        FinalConsumer<T, W, RB, SB> {
+
     /**
-     * Return a new SingleFinalConsumer instance wrapped around a given SingleConsumer instance.
-     * In addition to existing SingleConsumer features, this object also allows the caller to take
-     * ownership of the items that it accesses.
+     * Return a new FinalConsumer instance wrapped around a given Consumer instance. In
+     * addition to existing Consumer features, this object also allows the caller to take ownership
+     * of the items that it accesses.
      */
-    fn new(
-        sc: SingleConsumer<T, W, RB, SB>
-    ) -> SingleFinalConsumer<T, W, RB, SB> {
-        SingleFinalConsumer {
+    fn new(sc: Consumer<T, W, RB, SB>) -> FinalConsumer<T, W, RB, SB> {
+        FinalConsumer {
             sc: sc
         }
     }
 
-    /// See the SingleConsumer.consume method.
+    /// See the Consumer.consume method.
     pub fn consume(&self, consume_callback: &fn(value: &T)) { self.sc.consume(consume_callback) }
 
     /**
