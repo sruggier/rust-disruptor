@@ -1282,7 +1282,6 @@ struct SinglePublisherSequenceBarrier<W, RB> {
     sequence: Sequence,
     dependencies: ~[SequenceReader],
     wait_strategy: W,
-    buffer_size: uint,
     /**
      * Contains the number of available items as of the last time the dependent sequence values were
      * retrieved.
@@ -1294,22 +1293,20 @@ impl<W: PublishingWaitStrategy, RB> SinglePublisherSequenceBarrier<W, RB> {
     fn new(
         ring_buffer: RB,
         dependencies: ~[SequenceReader],
-        wait_strategy: W,
-        buffer_size: uint
+        wait_strategy: W
     ) -> SinglePublisherSequenceBarrier<W, RB> {
         SinglePublisherSequenceBarrier {
             ring_buffer: ring_buffer,
             sequence: Sequence::new(),
             dependencies: dependencies,
             wait_strategy: wait_strategy,
-            buffer_size: buffer_size,
-            cached_available: 0,
+            cached_available: 0
         }
     }
 }
 
-impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB, SingleConsumerSequenceBarrier<W, RB>>
-        for SinglePublisherSequenceBarrier<W, RB> {
+impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB,
+        SingleConsumerSequenceBarrier<W, RB>> for SinglePublisherSequenceBarrier<W, RB> {
     fn get_current(&self) -> SequenceNumber { self.sequence.get_owned() }
     fn set_cached_available(&mut self, available: uint) { self.cached_available = available }
     fn get_cached_available(&self) -> uint { self.cached_available }
@@ -1333,19 +1330,19 @@ impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB, S
             // consumers regardless of their position in the pipeline. It's not necessary to provide a
             // second reference to the same sequence, so an empty array is provided instead.
             ~[],
-            self.wait_strategy.clone(),
-            self.buffer_size
+            self.wait_strategy.clone()
         )
     }
 
     fn next_n_real(&mut self, batch_size: uint) -> uint {
         let current_sequence = self.sequence.get_owned();
-        let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher);
+        let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence,
+                self.dependencies, self.ring_buffer.size(), calculate_available_publisher);
         available
     }
 
     fn release_n_real(&mut self, batch_size: uint) {
-        self.sequence.advance_and_flush(batch_size, self.buffer_size);
+        self.sequence.advance_and_flush(batch_size, self.ring_buffer.size());
         self.wait_strategy.notifyAllWaiters();
     }
 }
@@ -1368,23 +1365,21 @@ impl<W: ProcessingWaitStrategy, RB> SingleConsumerSequenceBarrier<W, RB> {
         ring_buffer: RB,
         cursor: SequenceReader,
         dependencies: ~[SequenceReader],
-        wait_strategy: W,
-        buffer_size: uint
+        wait_strategy: W
     ) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier {
             sb: SinglePublisherSequenceBarrier::new(
                 ring_buffer,
                 dependencies,
-                wait_strategy,
-                buffer_size
+                wait_strategy
             ),
             cursor: cursor,
         }
     }
 }
 
-impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB, SingleConsumerSequenceBarrier<W, RB>>
-        for SingleConsumerSequenceBarrier<W, RB> {
+impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB,
+        SingleConsumerSequenceBarrier<W, RB>> for SingleConsumerSequenceBarrier<W, RB> {
     fn get_current(&self) -> SequenceNumber { self.sb.get_current() }
     fn set_cached_available(&mut self, available: uint) { self.sb.set_cached_available(available) }
     fn get_cached_available(&self) -> uint { self.sb.get_cached_available() }
@@ -1398,21 +1393,22 @@ impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB, S
             self.sb.ring_buffer.clone(),
             self.cursor.clone_immut(),
             ~[self.sb.sequence.clone_immut()],
-            self.sb.wait_strategy.clone(),
-            self.sb.buffer_size
+            self.sb.wait_strategy.clone()
         )
     }
 
     fn next_n_real(&mut self, batch_size: uint) -> uint {
         let current_sequence = self.get_current();
-        let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence, &self.cursor, self.sb.buffer_size);
-        let a = self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
+        let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence,
+                &self.cursor, self.sb.ring_buffer.size());
+        let a = self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence,
+                self.sb.dependencies, self.sb.ring_buffer.size(), calculate_available_consumer);
         // wait_for_consumers returns uint::max_value if there are no other dependencies
         cmp::min(available, a)
     }
 
     fn release_n_real(&mut self, batch_size: uint) {
-        self.sb.sequence.advance(batch_size, self.sb.buffer_size);
+        self.sb.sequence.advance(batch_size, self.sb.ring_buffer.size());
         // If the next call to next_n will result in more waiting, then make our progress visible to
         // downstream consumers now.
         if (self.sb.cached_available < batch_size) {
@@ -1440,7 +1436,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
             -> Publisher<T, W, SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
 
         let ring_buffer =  RingBufferTrait::<T>::new(size);
-        let sb = SinglePublisherSequenceBarrier::new(ring_buffer, ~[], wait_strategy, size);
+        let sb = SinglePublisherSequenceBarrier::new(ring_buffer, ~[], wait_strategy);
         let p = Publisher::<
             T,
             W,
