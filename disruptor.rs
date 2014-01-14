@@ -1264,11 +1264,6 @@ trait SequenceBarrier<CSB> {
 
     /**
      * Assign a new set of dependencies to this barrier.
-     *
-     * # TODO
-     *
-     * After settling on a design for concurrent producers and perhaps concurrent consumers,
-     * redesign dependencies to be immutable after the object is constructed.
      */
     fn set_dependencies(&mut self, dependencies: ~[SequenceReader]);
 }
