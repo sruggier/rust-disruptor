@@ -1173,7 +1173,7 @@ impl fmt::Default for BlockingWaitStrategy {
  * Responsible for ensuring that the caller does not proceed until one or more dependent sequences
  * have finished working with the subsequent slots.
  */
-trait SequenceBarrier<CSB> {
+trait SequenceBarrier<RB, CSB> {
     /**
      * Get the current value of the sequence associated with this SequenceBarrier.
      */
@@ -1189,8 +1189,8 @@ trait SequenceBarrier<CSB> {
     /**
      * Wait for a single slot to be available.
      */
-    fn next<RB>(&mut self, rb: &mut RB) {
-        self.next_n(1, rb)
+    fn next(&mut self) {
+        self.next_n(1)
     }
 
     /**
@@ -1199,7 +1199,6 @@ trait SequenceBarrier<CSB> {
      * # Arguments
      *
      * * batch_size - How many slots should be available before returning.
-     * * rb - A reference to the underlying ring buffer, currently used to implement resizing.
      *
      * # Safety notes
      *
@@ -1208,11 +1207,11 @@ trait SequenceBarrier<CSB> {
      * always be safe. Alternatively, increase the size of the buffer to support the desired amount
      * of batching.
      */
-    fn next_n<RB>(&mut self, batch_size: uint, rb: &mut RB) {
+    fn next_n(&mut self, batch_size: uint) {
         // Avoid waiting if the necessary slots were already available as of the last read. Calls
         // next_n_real if the slots are not available.
         if (self.get_cached_available() < batch_size) {
-            let cached_available = self.next_n_real(batch_size, rb);
+            let cached_available = self.next_n_real(batch_size);
             self.set_cached_available(cached_available);
         }
     }
@@ -1222,7 +1221,7 @@ trait SequenceBarrier<CSB> {
      * slots, which may be greater than `batch_size`. This is called only as a last resort. If extra
      * slots were available as of the last wait, this function will not be called.
      */
-    fn next_n_real<RB>(&mut self, batch_size: uint, rb: &mut RB) -> uint;
+    fn next_n_real(&mut self, batch_size: uint) -> uint;
 
     /**
      * Release a single slot for downstream consumers.
@@ -1259,6 +1258,12 @@ trait SequenceBarrier<CSB> {
      */
     fn get_sequence(&self) -> SequenceReader;
 
+    /**
+     * Return a mutable reference to the ring buffer associated with this barrier. This can be used
+     * to write and retrieve values to and from the buffer.
+     */
+    fn get_ring_buffer<'s>(&'s mut self) -> &'s mut RB;
+
     /// Returns a borrowed pointer to the dependency list.
     fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader];
 
@@ -1272,7 +1277,8 @@ trait SequenceBarrier<CSB> {
  * Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
  * publisher.
  */
-struct SinglePublisherSequenceBarrier<W> {
+struct SinglePublisherSequenceBarrier<W, RB> {
+    ring_buffer: RB,
     sequence: Sequence,
     dependencies: ~[SequenceReader],
     wait_strategy: W,
@@ -1284,13 +1290,15 @@ struct SinglePublisherSequenceBarrier<W> {
     cached_available: uint,
 }
 
-impl<W: PublishingWaitStrategy> SinglePublisherSequenceBarrier<W> {
+impl<W: PublishingWaitStrategy, RB> SinglePublisherSequenceBarrier<W, RB> {
     fn new(
+        ring_buffer: RB,
         dependencies: ~[SequenceReader],
         wait_strategy: W,
         buffer_size: uint
-    ) -> SinglePublisherSequenceBarrier<W> {
+    ) -> SinglePublisherSequenceBarrier<W, RB> {
         SinglePublisherSequenceBarrier {
+            ring_buffer: ring_buffer,
             sequence: Sequence::new(),
             dependencies: dependencies,
             wait_strategy: wait_strategy,
@@ -1300,8 +1308,8 @@ impl<W: PublishingWaitStrategy> SinglePublisherSequenceBarrier<W> {
     }
 }
 
-impl<W: ProcessingWaitStrategy> SequenceBarrier<SingleConsumerSequenceBarrier<W>>
-        for SinglePublisherSequenceBarrier<W> {
+impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB, SingleConsumerSequenceBarrier<W, RB>>
+        for SinglePublisherSequenceBarrier<W, RB> {
     fn get_current(&self) -> SequenceNumber { self.sequence.get_owned() }
     fn set_cached_available(&mut self, available: uint) { self.cached_available = available }
     fn get_cached_available(&self) -> uint { self.cached_available }
@@ -1314,9 +1322,11 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier<SingleConsumerSequenceBarrier<W>
         self.dependencies = dependencies;
     }
     fn get_sequence(&self) -> SequenceReader { self.sequence.clone_immut() }
+    fn get_ring_buffer<'s>(&'s mut self) -> &'s mut RB { &mut self.ring_buffer }
 
-    fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W> {
+    fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
+            self.ring_buffer.clone(),
             // Our sequence is the publisher's sequence (aka the cursor)
             self.sequence.clone_immut(),
             // The first stage consumers wait on the publisher's sequence, which is provided to all
@@ -1328,7 +1338,7 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier<SingleConsumerSequenceBarrier<W>
         )
     }
 
-    fn next_n_real<RB>(&mut self, batch_size: uint, _rb: &mut RB) -> uint {
+    fn next_n_real(&mut self, batch_size: uint) -> uint {
         let current_sequence = self.sequence.get_owned();
         let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.dependencies, self.buffer_size, calculate_available_publisher);
         available
@@ -1345,23 +1355,25 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier<SingleConsumerSequenceBarrier<W>
  * consumers, but all consumers will process all events. This is unsuitable for when a
  * load-balancing arrangement is desired.
  */
-struct SingleConsumerSequenceBarrier<W> {
-    sb: SinglePublisherSequenceBarrier<W>,
+struct SingleConsumerSequenceBarrier<W, RB> {
+    sb: SinglePublisherSequenceBarrier<W, RB>,
     /**
      * A reference to the publisher's sequence.
      */
     cursor: SequenceReader,
 }
 
-impl<W: ProcessingWaitStrategy> SingleConsumerSequenceBarrier<W> {
+impl<W: ProcessingWaitStrategy, RB> SingleConsumerSequenceBarrier<W, RB> {
     fn new(
+        ring_buffer: RB,
         cursor: SequenceReader,
         dependencies: ~[SequenceReader],
         wait_strategy: W,
         buffer_size: uint
-    ) -> SingleConsumerSequenceBarrier<W> {
+    ) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier {
             sb: SinglePublisherSequenceBarrier::new(
+                ring_buffer,
                 dependencies,
                 wait_strategy,
                 buffer_size
@@ -1371,17 +1383,19 @@ impl<W: ProcessingWaitStrategy> SingleConsumerSequenceBarrier<W> {
     }
 }
 
-impl<W: ProcessingWaitStrategy> SequenceBarrier<SingleConsumerSequenceBarrier<W>>
-        for SingleConsumerSequenceBarrier<W> {
+impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB, SingleConsumerSequenceBarrier<W, RB>>
+        for SingleConsumerSequenceBarrier<W, RB> {
     fn get_current(&self) -> SequenceNumber { self.sb.get_current() }
     fn set_cached_available(&mut self, available: uint) { self.sb.set_cached_available(available) }
     fn get_cached_available(&self) -> uint { self.sb.get_cached_available() }
     fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] { self.sb.get_dependencies() }
     fn set_dependencies(&mut self, dependencies: ~[SequenceReader]) { self.sb.set_dependencies(dependencies) }
     fn get_sequence(&self) -> SequenceReader { self.sb.get_sequence() }
+    fn get_ring_buffer<'s>(&'s mut self) -> &'s mut RB { self.sb.get_ring_buffer() }
 
-    fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W> {
+    fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
+            self.sb.ring_buffer.clone(),
             self.cursor.clone_immut(),
             ~[self.sb.sequence.clone_immut()],
             self.sb.wait_strategy.clone(),
@@ -1389,7 +1403,7 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier<SingleConsumerSequenceBarrier<W>
         )
     }
 
-    fn next_n_real<RB>(&mut self, batch_size: uint, _rb: &mut RB) -> uint {
+    fn next_n_real(&mut self, batch_size: uint) -> uint {
         let current_sequence = self.get_current();
         let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence, &self.cursor, self.sb.buffer_size);
         let a = self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence, self.sb.dependencies, self.sb.buffer_size, calculate_available_consumer);
@@ -1411,24 +1425,30 @@ impl<W: ProcessingWaitStrategy> SequenceBarrier<SingleConsumerSequenceBarrier<W>
  * Allows callers to wire up dependencies, then send values down the pipeline
  * of dependent consumers.
  */
-struct Publisher<T, W, RB, SB> {
-    rb: RB,
+struct Publisher<T, W, SB> {
     sequence_barrier: SB,
 }
 
 impl<T: Send, W: ProcessingWaitStrategy>
-        Publisher<T, W, RingBuffer<T>, SinglePublisherSequenceBarrier<W>> {
+        Publisher<T, W, SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
 
     /**
      * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
      * Publisher<T> object.
      */
     pub fn new(size: uint, wait_strategy: W)
-            -> Publisher<T, W, RingBuffer<T>, SinglePublisherSequenceBarrier<W>> {
-        Publisher::new_common(
-            size,
-            SinglePublisherSequenceBarrier::new(~[], wait_strategy, size)
-        )
+            -> Publisher<T, W, SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
+
+        let ring_buffer =  RingBufferTrait::<T>::new(size);
+        let sb = SinglePublisherSequenceBarrier::new(ring_buffer, ~[], wait_strategy, size);
+        let p = Publisher::<
+            T,
+            W,
+            RingBuffer<T>,
+            SinglePublisherSequenceBarrier<W, RingBuffer<T>>,
+            SingleConsumerSequenceBarrier<W, RingBuffer<T>>
+        >::new_common(sb);
+        p
     }
 }
 
@@ -1436,15 +1456,14 @@ impl<
         T: Send,
         W: ProcessingWaitStrategy,
         RB: RingBufferTrait<T>,
-        SB: SequenceBarrier<CSB>,
-        CSB: SequenceBarrier<CSB>
+        SB: SequenceBarrier<RB, CSB>,
+        CSB: SequenceBarrier<RB, CSB>
     >
-        Publisher<T, W, RB, SB> {
+        Publisher<T, W, SB> {
 
     /// Generic constructor that works with any RingBufferTrait-conforming type
-    fn new_common(size: uint, sb: SB) -> Publisher<T, W, RB, SB> {
+    fn new_common(sb: SB) -> Publisher<T, W, SB> {
         Publisher {
-            rb: RingBufferTrait::<T>::new(size),
             sequence_barrier: sb,
         }
     }
@@ -1452,7 +1471,7 @@ impl<
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      */
-    pub fn create_single_consumer_pipeline(&mut self) -> FinalConsumer<T, W, RB, CSB> {
+    pub fn create_single_consumer_pipeline(&mut self) -> FinalConsumer<T, W, CSB> {
         let (_, c) = self.create_consumer_pipeline(1);
         c
     }
@@ -1470,7 +1489,7 @@ impl<
     pub fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> (~[Consumer<T, W, RB, CSB>], FinalConsumer<T, W, RB, CSB>) {
+    ) -> (~[Consumer<T, W, CSB>], FinalConsumer<T, W, CSB>) {
         assert!(self.sequence_barrier.get_dependencies().len() == 0, "The create_consumer_pipeline method can only be called once.");
 
         // Create each stage in the chain, adding the previous stage as a gating dependency
@@ -1479,12 +1498,12 @@ impl<
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
-                vec::with_capacity::<Consumer<T, W, RB, CSB>>(count_nonfinal_consumers);
+                vec::with_capacity::<Consumer<T, W, CSB>>(count_nonfinal_consumers);
         let final_consumer;
 
         for _ in range(0, count_nonfinal_consumers) {
             let sb_next = sb.new_consumer_barrier();
-            let c = Consumer::new(self.rb.clone(), sb);
+            let c = Consumer::new(sb);
             sb = sb_next;
 
             nonfinal_consumers.push(c);
@@ -1492,7 +1511,7 @@ impl<
 
         // Last consumer gets the ability to take ownership
         let dependencies = ~[sb.get_sequence()];
-        let c = Consumer::new(self.rb.clone(), sb);
+        let c = Consumer::new(sb);
         final_consumer = FinalConsumer::new(c);
 
         self.sequence_barrier.set_dependencies(dependencies);
@@ -1506,8 +1525,11 @@ impl<
             let self_mut = cast::transmute_mut(self);
             let begin: SequenceNumber = self.sequence_barrier.get_current();
             // Wait for available slot
-            self_mut.sequence_barrier.next(&mut self_mut.rb);
-                self_mut.rb.set(begin, value);
+            self_mut.sequence_barrier.next();
+            {
+                let rb = self_mut.sequence_barrier.get_ring_buffer();
+                rb.set(begin, value);
+            }
             // Make the item available to downstream consumers
             self_mut.sequence_barrier.release();
         }
@@ -1517,16 +1539,14 @@ impl<
 /**
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
-struct Consumer<T, W, RB, SB> {
-    rb: RB,
+struct Consumer<T, W, SB> {
     sequence_barrier: SB,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBarrier<SB>>
-        Consumer<T, W, RB, SB> {
-    fn new(rb: RB, sb: SB) -> Consumer<T, W, RB, SB> {
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBarrier<RB, SB>>
+        Consumer<T, W, SB> {
+    fn new(sb: SB) -> Consumer<T, W, SB> {
         Consumer {
-            rb: rb,
             sequence_barrier: sb
         }
     }
@@ -1539,8 +1559,11 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBar
         unsafe {
             // FIXME #5372
             let self_mut = cast::transmute_mut(self);
-            self_mut.sequence_barrier.next(&mut self_mut.rb);
-            consume_callback(self_mut.rb.get(self.sequence_barrier.get_current()));
+            self_mut.sequence_barrier.next();
+            {
+                let rb = self_mut.sequence_barrier.get_ring_buffer();
+                consume_callback(rb.get(self.sequence_barrier.get_current()));
+            }
             self_mut.sequence_barrier.release();
 
         }
@@ -1580,19 +1603,19 @@ mod single_publisher_tests {
  * possible to move values out of the ring buffer, in addition to the functionality available from a
  * normal Consumer.
  */
-struct FinalConsumer<T, W, RB, SB> {
-    sc: Consumer<T, W, RB, SB>
+struct FinalConsumer<T, W, SB> {
+    sc: Consumer<T, W, SB>
 }
 
-impl <T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBarrier<SB>>
-        FinalConsumer<T, W, RB, SB> {
+impl <T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBarrier<RB, SB>>
+        FinalConsumer<T, W, SB> {
 
     /**
      * Return a new FinalConsumer instance wrapped around a given Consumer instance. In
      * addition to existing Consumer features, this object also allows the caller to take ownership
      * of the items that it accesses.
      */
-    fn new(sc: Consumer<T, W, RB, SB>) -> FinalConsumer<T, W, RB, SB> {
+    fn new(sc: Consumer<T, W, SB>) -> FinalConsumer<T, W, SB> {
         FinalConsumer {
             sc: sc
         }
@@ -1607,8 +1630,13 @@ impl <T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>, SB: SequenceBa
     pub fn take(&self) -> T {
         unsafe {
             let sc = &mut cast::transmute_mut(self).sc;
-            sc.sequence_barrier.next(&mut sc.rb);
-            let value = sc.rb.take(sc.sequence_barrier.get_current());
+            sc.sequence_barrier.next();
+            let value;
+            {
+                let current_sequence = sc.sequence_barrier.get_current();
+                let rb = sc.sequence_barrier.get_ring_buffer();
+                 value = rb.take(current_sequence);
+            }
             sc.sequence_barrier.release();
             value
         }
