@@ -1430,7 +1430,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
 
     /**
      * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
-     * Publisher<T> object.
+     * Publisher object.
      */
     pub fn new(size: uint, wait_strategy: W)
             -> Publisher<T, W, SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
