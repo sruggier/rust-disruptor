@@ -261,12 +261,6 @@ impl<T: Send> Clone for RingBuffer<T> {
  * module.
  */
 trait RingBufferTrait<T> : Clone + Send {
-    /**
-     * Constructs a new RingBuffer with a capacity of `size` elements. The size must be a power of
-     * two, a property which will be exploited for performance reasons.
-     */
-    fn new(size: uint) -> Self;
-
     /// See `RingBufferData::size`
     fn size(&self) -> uint;
 
@@ -291,18 +285,18 @@ trait RingBufferTrait<T> : Clone + Send {
 }
 
 impl<T: Send> RingBuffer<T> {
-    fn new(size: uint) -> RingBuffer<T> {
-        RingBufferTrait::new(size)
-    }
-}
-
-impl<T: Send> RingBufferTrait<T> for RingBuffer<T> {
+    /**
+     * Constructs a new RingBuffer with a capacity of `size` elements. The size must be a power of
+     * two, a property which will be exploited for performance reasons.
+     */
     fn new(size: uint) -> RingBuffer<T> {
         assert!(size.population_count() == 1, "RingBuffer size must be a power of two (received {:?})", size);
         let data = RingBufferData::new(size);
         RingBuffer { data: UncheckedUnsafeArc::new(data) }
     }
+}
 
+impl<T: Send> RingBufferTrait<T> for RingBuffer<T> {
     fn size(&self) -> uint {
         unsafe {
             self.data.get_immut().size()
@@ -1435,7 +1429,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
     pub fn new(size: uint, wait_strategy: W)
             -> Publisher<T, W, SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
 
-        let ring_buffer =  RingBufferTrait::<T>::new(size);
+        let ring_buffer =  RingBuffer::<T>::new(size);
         let sb = SinglePublisherSequenceBarrier::new(ring_buffer, ~[], wait_strategy);
         let p = Publisher::<
             T,
