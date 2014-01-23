@@ -260,7 +260,15 @@ impl<T: Send> Clone for RingBuffer<T> {
  * Allows for different ring buffer implementations to be used by the higher level types in this
  * module.
  */
-trait RingBufferTrait<T: Send> : Clone + Send {
+trait RingBufferTrait<T> : RingBufferOps<T> + Clone { }
+// Automatically apply RingBufferTrait to qualifying types
+impl<T: Send, RB: RingBufferOps<T> + Clone> RingBufferTrait<T> for RB {}
+
+/**
+ * Allows the actual operations a ring buffer exposes to be wrapped by other traits without also
+ * bringing in the Send + Clone bounds.
+ */
+trait RingBufferOps<T: Send> : Send {
     /// See `RingBufferData::size`
     fn size(&self) -> uint;
 
@@ -296,7 +304,7 @@ impl<T: Send> RingBuffer<T> {
     }
 }
 
-impl<T: Send> RingBufferTrait<T> for RingBuffer<T> {
+impl<T: Send> RingBufferOps<T> for RingBuffer<T> {
     fn size(&self) -> uint {
         unsafe {
             self.data.get_immut().size()
