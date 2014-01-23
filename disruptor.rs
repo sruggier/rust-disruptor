@@ -260,7 +260,7 @@ impl<T: Send> Clone for RingBuffer<T> {
  * Allows for different ring buffer implementations to be used by the higher level types in this
  * module.
  */
-trait RingBufferTrait<T> : Clone + Send {
+trait RingBufferTrait<T: Send> : Clone + Send {
     /// See `RingBufferData::size`
     fn size(&self) -> uint;
 
@@ -1299,7 +1299,7 @@ impl<W: PublishingWaitStrategy, RB> SinglePublisherSequenceBarrier<W, RB> {
     }
 }
 
-impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB,
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB,
         SingleConsumerSequenceBarrier<W, RB>> for SinglePublisherSequenceBarrier<W, RB> {
     fn get_current(&self) -> SequenceNumber { self.sequence.get_owned() }
     fn set_cached_available(&mut self, available: uint) { self.cached_available = available }
@@ -1372,7 +1372,7 @@ impl<W: ProcessingWaitStrategy, RB> SingleConsumerSequenceBarrier<W, RB> {
     }
 }
 
-impl<T, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB,
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<RB,
         SingleConsumerSequenceBarrier<W, RB>> for SingleConsumerSequenceBarrier<W, RB> {
     fn get_current(&self) -> SequenceNumber { self.sb.get_current() }
     fn set_cached_available(&mut self, available: uint) { self.sb.set_cached_available(available) }
