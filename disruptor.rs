@@ -295,7 +295,7 @@ trait RingBufferOps<T: Send> : Send {
 impl<T: Send> RingBuffer<T> {
     /**
      * Constructs a new RingBuffer with a capacity of `size` elements. The size must be a power of
-     * two, a property which will be exploited for performance reasons.
+     * two, a property that will be exploited for performance reasons.
      */
     fn new(size: uint) -> RingBuffer<T> {
         assert!(size.population_count() == 1, "RingBuffer size must be a power of two (received {:?})", size);
