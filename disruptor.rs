@@ -200,9 +200,12 @@ impl SequenceNumber {
     }
 }
 
-/// Returns the number at which sequence values will be wrapped back to 0 using a mod operation.
+/**
+ * Returns the number at which sequence values will be wrapped back to 0 using a mod operation.
+ * The returned number will be a power of two, and a multiple of buffer_size.
+ */
 fn wrap_boundary(buffer_size: uint) -> uint {
-    2*buffer_size
+    4*buffer_size
 }
 
 /// UnsafeArc, but with unchecked versions of the get and get_immut functions. The use of atomic
@@ -382,9 +385,9 @@ fn test_calculate_available_consumer() {
     assert!(8 == calculate_available_consumer(SequenceNumber(8), SequenceNumber(0), 8));
 
     // Test wrapping (publisher wraps to 0 at wrap_boundary(buffer_size) )
-    assert!(7 == calculate_available_consumer(SequenceNumber(15), SequenceNumber(8), 8));
-    assert!(8 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(8), 8));
-    assert!(7 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(9), 8));
+    assert!(7 == calculate_available_consumer(SequenceNumber(31), SequenceNumber(24), 8));
+    assert!(8 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(24), 8));
+    assert!(7 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(25), 8));
 
 }
 
@@ -402,7 +405,7 @@ fn calculate_available_publisher(
     if available > buffer_size {
         // In this case, we know that the value of available is exactly wrap_boundary(buffer_size)
         // more than it should be. Mask out the extra slots, taking advantage of the fact that
-        // buffer_size is a power of 2.
+        // buffer_size and wrap boundary are powers of 2.
         let index_mask = buffer_size - 1;
         available &= index_mask;
     }
@@ -574,8 +577,8 @@ fn log2(mut power_of_2: uint) -> uint {
 /// Ensure sequences correctly handle buffer sizes of 2^(uint::bits-1).
 #[test]
 fn test_sequence_overflow() {
-    // The maximum buffer size is 2^(uint::bits) / wrap_boundary(1) (for example, 2^31 with the
-    // current boundary of 2*buffer_size). For that size, wrap_boundary(buffer_size) - 1 would
+    // The maximum buffer size is 2^(uint::bits) / wrap_boundary(1) (for example, 2^30 with the
+    // current boundary of 4*buffer_size). For that size, wrap_boundary(buffer_size) - 1 would
     // evaluate to uint::max_value, and unsigned integer arithmetic will naturally take care of the
     // wrapping. The sequence will wrap to 0 at wrap_boundary(buffer_size), i.e. uint::max_value +
     // 1.
@@ -594,8 +597,8 @@ fn test_sequence_overflow() {
     s.advance_and_flush(max_buffer_size - *incremented_value, max_buffer_size);
     assert_eq!(*s.get(), max_buffer_size);
 
-    // Overflow to 2*max_buffer_size + 1 and confirm expected result (1)
-    s.advance_and_flush(max_buffer_size + 1, max_buffer_size);
+    // Overflow to 4*max_buffer_size + 1 and confirm that it wrapped to 1
+    s.advance_and_flush(3*max_buffer_size + 1, max_buffer_size);
     assert_eq!(*s.get(), 1);
 }
 
