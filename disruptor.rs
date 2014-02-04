@@ -200,6 +200,11 @@ impl SequenceNumber {
     }
 }
 
+/// Returns the number at which sequence values will be wrapped back to 0 using a mod operation.
+fn wrap_boundary(buffer_size: uint) -> uint {
+    2*buffer_size
+}
+
 /// UnsafeArc, but with unchecked versions of the get and get_immut functions. The use of atomic
 /// operations in those functions is a significant slowdown.
 ///
@@ -238,8 +243,8 @@ impl<T: Send> Clone for UncheckedUnsafeArc<T> {
 }
 
 /**
- * A ring buffer that takes `SequenceNumber` values for get and set operations, performing wrapping
- * automatically. Memory is managed using reference counting.
+ * A ring buffer that takes `SequenceNumber` values for get and set operations. Buffer lifetime is
+ * managed using reference counting.
  *
  * # Safety notes
  *
@@ -357,7 +362,7 @@ fn calculate_available_consumer(
     let waiting = *waiting_sequence;
     // Handle wrapping
     if gating < waiting {
-        gating += 2*buffer_size;
+        gating += wrap_boundary(buffer_size);
     }
     let available = gating - waiting;
     assert!(available <= buffer_size, "available: {:?}, gating: {:?}, waiting: {:?}", available, gating, waiting);
@@ -376,7 +381,7 @@ fn test_calculate_available_consumer() {
     assert!(1 == calculate_available_consumer(SequenceNumber(1), SequenceNumber(0), 8));
     assert!(8 == calculate_available_consumer(SequenceNumber(8), SequenceNumber(0), 8));
 
-    // Test wrapping (publisher wraps to 0 at 2*buffer_size)
+    // Test wrapping (publisher wraps to 0 at wrap_boundary(buffer_size) )
     assert!(7 == calculate_available_consumer(SequenceNumber(15), SequenceNumber(8), 8));
     assert!(8 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(8), 8));
     assert!(7 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(9), 8));
@@ -395,8 +400,8 @@ fn calculate_available_publisher(
     let mut available = *gating_sequence + buffer_size - *waiting_sequence;
     // Handle wrapping
     if available > buffer_size {
-        // In this case, we know that the value of available is exactly 2*buffer_size more than it
-        // should be. Mask out the 2*buffer_size extra slots, taking advantage of the fact that
+        // In this case, we know that the value of available is exactly wrap_boundary(buffer_size)
+        // more than it should be. Mask out the extra slots, taking advantage of the fact that
         // buffer_size is a power of 2.
         let index_mask = buffer_size - 1;
         available &= index_mask;
@@ -516,20 +521,21 @@ impl Sequence {
      * other threads.
      *
      * To avoid overflow when uint is 32 bits wide, this function also wraps the sequence number
-     * around when it reaches 2*buffer_size. This results in two easily distinguishable states for
-     * the availability calculations to handle. Consumer sequences are normally behind gating
-     * sequences. However, the gating sequence will wrap first, remain behind for buffer_size slots,
-     * and then the waiting sequence will wrap. The publisher is normally ahead of the sequence it
-     * depends on, but after wrapping, it will be temporarily behind the gating sequence.
+     * around when it reaches wrap_boundary(buffer_size). This results in two easily distinguishable
+     * states for the availability calculations to handle. Consumer sequences are normally behind
+     * gating sequences, whether they are owned by other consumers or the publisher. However, the
+     * gating sequence will wrap first, and remain behind until consumers reach the wrapping
+     * boundary, at which point they will also wrap. The publisher is normally ahead of the sequence
+     * it depends on, but after wrapping, it will be temporarily behind the gating sequence.
      */
     fn advance(&mut self, n: uint, buffer_size: uint) {
         unsafe {
             let d = self.value_arc.get();
             d.private_value += n;
             // Given that buffer_size is a power of two, wrap by masking out the high bits. This
-            // operation is a noop if the value is less than 2*buffer_size, so it's unnecessary to
-            // check before wrapping.
-            let wrap_mask = 2*buffer_size - 1;
+            // operation is a noop if the value is less than wrap_boundary(buffer_size), so it's
+            // unnecessary to check before wrapping.
+            let wrap_mask = wrap_boundary(buffer_size) - 1;
             d.private_value &= wrap_mask;
         }
     }
@@ -555,12 +561,26 @@ impl Sequence {
     }
 }
 
+fn log2(mut power_of_2: uint) -> uint {
+    assert!(power_of_2.population_count() == 1, "Argument must be a power of two (received {:?})", power_of_2);
+    let mut exp = 0;
+    while power_of_2 > 1 {
+        exp += 1;
+        power_of_2 >>= 1;
+    }
+    exp
+}
+
 /// Ensure sequences correctly handle buffer sizes of 2^(uint::bits-1).
 #[test]
 fn test_sequence_overflow() {
-    // The maximum buffer size is half of 2^(uint::bits) (for example, 2^31), and uint::max_value
-    // is 2*buffer_size - 1. The sequence will wrap to 0 at 2*buffer_size.
-    let max_buffer_size = 1 << (uint::bits - 1);
+    // The maximum buffer size is 2^(uint::bits) / wrap_boundary(1) (for example, 2^31 with the
+    // current boundary of 2*buffer_size). For that size, wrap_boundary(buffer_size) - 1 would
+    // evaluate to uint::max_value, and unsigned integer arithmetic will naturally take care of the
+    // wrapping. The sequence will wrap to 0 at wrap_boundary(buffer_size), i.e. uint::max_value +
+    // 1.
+    let exp = log2(wrap_boundary(1));
+    let max_buffer_size = 1 << (uint::bits - exp);
 
     let mut s = Sequence::new();
     assert_eq!(*s.get(), SEQUENCE_INITIAL);
