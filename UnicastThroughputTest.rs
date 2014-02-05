@@ -98,10 +98,16 @@ fn run_task_pipe_benchmark(iterations: u64) {
     println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
 }
 
-fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations: u64, w: W, mode: SchedMode) {
-    // generate a formatted string representation of w before it's moved into publisher
-    let wait_str = format!("{}", w);
-    let mut publisher = Publisher::<u64, W>::new(8192, w);
+fn run_disruptor_benchmark<
+    W: disruptor::ProcessingWaitStrategy,
+    SB: disruptor::SequenceBarrier<u64, CSB>,
+    CSB: disruptor::SequenceBarrier<u64, CSB>
+>(
+    iterations: u64,
+    mode: SchedMode,
+    mut publisher: Publisher<u64, W, SB>,
+    desc: ~str
+) {
     let consumer = publisher.create_single_consumer_pipeline();
     let (result_port, result_chan) = stream::<u64>();
 
@@ -139,19 +145,29 @@ fn run_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(iterations:
     assert_eq!(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
-    println!("Disruptor ({}): {} ops/sec, result wait: {} ns", wait_str, ops, wait_latency);
+    println!("Disruptor ({}): {} ops/sec, result wait: {} ns", desc, ops, wait_latency);
+}
+
+fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(
+    iterations: u64,
+    w: W,
+    mode: SchedMode
+) {
+    let desc = format!("{}", w);
+    let publisher = Publisher::<u64, W>::new(8192, w);
+    run_disruptor_benchmark(iterations, mode, publisher, desc);
 }
 
 fn run_disruptor_benchmark_spin(iterations: u64) {
-    run_disruptor_benchmark(iterations, SpinWaitStrategy, SingleThreaded);
+    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy, SingleThreaded);
 }
 
 fn run_disruptor_benchmark_yield(iterations: u64) {
-    run_disruptor_benchmark(iterations, YieldWaitStrategy::new(), DefaultScheduler);
+    run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new(), DefaultScheduler);
 }
 
 fn run_disruptor_benchmark_block(iterations: u64) {
-    run_disruptor_benchmark(iterations, BlockingWaitStrategy::new(), DefaultScheduler);
+    run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new(), DefaultScheduler);
 }
 
 fn usage(argv0: &str, opts: ~[getopts::groups::OptGroup]) -> ! {
