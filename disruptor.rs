@@ -1198,7 +1198,7 @@ impl fmt::Default for BlockingWaitStrategy {
  * Responsible for ensuring that the caller does not proceed until one or more dependent sequences
  * have finished working with the subsequent slots.
  */
-trait SequenceBarrier<T> : RingBufferOps<T> {
+pub trait SequenceBarrier<T> : RingBufferOps<T> {
     /**
      * Get the current value of the sequence associated with this SequenceBarrier.
      */
