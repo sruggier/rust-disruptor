@@ -99,13 +99,12 @@ fn run_task_pipe_benchmark(iterations: u64) {
 }
 
 fn run_disruptor_benchmark<
-    W: disruptor::ProcessingWaitStrategy,
     SB: disruptor::SequenceBarrier<u64> + disruptor::NewConsumerBarrier<CSB>,
     CSB: disruptor::SequenceBarrier<u64> + disruptor::NewConsumerBarrier<CSB>
 >(
     iterations: u64,
     mode: SchedMode,
-    mut publisher: Publisher<u64, W, SB>,
+    mut publisher: Publisher<SB>,
     desc: ~str
 ) {
     let consumer = publisher.create_single_consumer_pipeline();

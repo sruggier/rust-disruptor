@@ -1466,29 +1466,29 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> RingBufferOps<T
  * Allows callers to wire up dependencies, then send values down the pipeline
  * of dependent consumers.
  */
-struct Publisher<T, W, SB> {
+struct Publisher<SB> {
     sequence_barrier: SB,
 }
 
 impl<T: Send, W: ProcessingWaitStrategy>
-        Publisher<T, W, SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
+        Publisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
 
     /**
      * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
      * Publisher object.
      */
     pub fn new(size: uint, wait_strategy: W)
-            -> Publisher<T, W, SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
+            -> Publisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
 
         let ring_buffer =  RingBuffer::<T>::new(size);
         let sb = SinglePublisherSequenceBarrier::new(ring_buffer, ~[], wait_strategy);
-        Publisher::new_common(sb)
+        Publisher::<T, SinglePublisherSequenceBarrier<W, RingBuffer<T>> >::new_common(sb)
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T> > Publisher<T, W, SB> {
+impl<T: Send, SB: SequenceBarrier<T> > Publisher<SB> {
     /// Generic constructor that works with any RingBufferTrait-conforming type
-    fn new_common(sb: SB) -> Publisher<T, W, SB> {
+    fn new_common(sb: SB) -> Publisher<SB> {
         Publisher {
             sequence_barrier: sb,
         }
@@ -1512,14 +1512,13 @@ impl<T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T> > Publisher<T, W
 
 impl<
     T: Send,
-    W: ProcessingWaitStrategy,
     SB: SequenceBarrier<T> + NewConsumerBarrier<CSB>,
     CSB: SequenceBarrier<T> + NewConsumerBarrier<CSB>
-> Publisher<T, W, SB> {
+> Publisher<SB> {
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      */
-    pub fn create_single_consumer_pipeline(&mut self) -> FinalConsumer<T, W, CSB> {
+    pub fn create_single_consumer_pipeline(&mut self) -> FinalConsumer<CSB> {
         let (_, c) = self.create_consumer_pipeline(1);
         c
     }
@@ -1537,7 +1536,7 @@ impl<
     pub fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> (~[Consumer<T, W, CSB>], FinalConsumer<T, W, CSB>) {
+    ) -> (~[Consumer<CSB>], FinalConsumer<CSB>) {
         assert!(self.sequence_barrier.get_dependencies().len() == 0, "The create_consumer_pipeline method can only be called once.");
 
         // Create each stage in the chain, adding the previous stage as a gating dependency
@@ -1546,7 +1545,7 @@ impl<
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
-                vec::with_capacity::<Consumer<T, W, CSB>>(count_nonfinal_consumers);
+                vec::with_capacity::<Consumer<CSB>>(count_nonfinal_consumers);
         let final_consumer;
 
         for _ in range(0, count_nonfinal_consumers) {
@@ -1572,13 +1571,13 @@ impl<
 /**
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
-struct Consumer<T, W, SB> {
+struct Consumer<SB> {
     sequence_barrier: SB,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T>>
-        Consumer<T, W, SB> {
-    fn new(sb: SB) -> Consumer<T, W, SB> {
+impl<T: Send, SB: SequenceBarrier<T>>
+        Consumer<SB> {
+    fn new(sb: SB) -> Consumer<SB> {
         Consumer {
             sequence_barrier: sb
         }
@@ -1637,19 +1636,19 @@ mod single_publisher_tests {
  * possible to move values out of the ring buffer, in addition to the functionality available from a
  * normal Consumer.
  */
-struct FinalConsumer<T, W, SB> {
-    sc: Consumer<T, W, SB>
+struct FinalConsumer<SB> {
+    sc: Consumer<SB>
 }
 
-impl <T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T>>
-        FinalConsumer<T, W, SB> {
+impl <T: Send, SB: SequenceBarrier<T>>
+        FinalConsumer<SB> {
 
     /**
      * Return a new FinalConsumer instance wrapped around a given Consumer instance. In
      * addition to existing Consumer features, this object also allows the caller to take ownership
      * of the items that it accesses.
      */
-    fn new(sc: Consumer<T, W, SB>) -> FinalConsumer<T, W, SB> {
+    fn new(sc: Consumer<SB>) -> FinalConsumer<SB> {
         FinalConsumer {
             sc: sc
         }
