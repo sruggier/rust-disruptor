@@ -1198,7 +1198,7 @@ impl fmt::Default for BlockingWaitStrategy {
  * Responsible for ensuring that the caller does not proceed until one or more dependent sequences
  * have finished working with the subsequent slots.
  */
-trait SequenceBarrier<T, CSB> : RingBufferOps<T> {
+trait SequenceBarrier<T> : RingBufferOps<T> {
     /**
      * Get the current value of the sequence associated with this SequenceBarrier.
      */
@@ -1273,12 +1273,6 @@ trait SequenceBarrier<T, CSB> : RingBufferOps<T> {
     fn release_n_real(&mut self, batch_size: uint);
 
     /**
-     * Constructs a consumer barrier that is set up to wait on this SequenceBarrier's sequence
-     * before it attempts to process items.
-     */
-    fn new_consumer_barrier(&self) -> CSB;
-
-    /**
      * Returns a read-only reference to this barrier's sequence number.
      */
     fn get_sequence(&self) -> SequenceReader;
@@ -1290,6 +1284,18 @@ trait SequenceBarrier<T, CSB> : RingBufferOps<T> {
      * Assign a new set of dependencies to this barrier.
      */
     fn set_dependencies(&mut self, dependencies: ~[SequenceReader]);
+}
+
+/**
+ * Split off from SequenceBarrier to reduce unnecessary type parameter requirements for general
+ * users of the SequenceBarrier type, and users of the Publisher type.
+ */
+trait NewConsumerBarrier<CSB> {
+    /**
+     * Constructs a consumer barrier that is set up to wait on this SequenceBarrier's sequence
+     * before it attempts to process items.
+     */
+    fn new_consumer_barrier(&self) -> CSB;
 }
 
 /**
@@ -1324,8 +1330,7 @@ impl<T: Send, W: PublishingWaitStrategy, RB: RingBufferTrait<T>> SinglePublisher
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
-        SequenceBarrier<T, SingleConsumerSequenceBarrier<W, RB>>
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<T>
         for SinglePublisherSequenceBarrier<W, RB> {
     fn get_current(&self) -> SequenceNumber { self.sequence.get_owned() }
     fn set_cached_available(&mut self, available: uint) { self.cached_available = available }
@@ -1340,6 +1345,22 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
     }
     fn get_sequence(&self) -> SequenceReader { self.sequence.clone_immut() }
 
+    fn next_n_real(&mut self, batch_size: uint) -> uint {
+        let current_sequence = self.sequence.get_owned();
+        let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence,
+                self.dependencies, self.ring_buffer.size(), calculate_available_publisher);
+        available
+    }
+
+    fn release_n_real(&mut self, batch_size: uint) {
+        self.sequence.advance_and_flush(batch_size, self.ring_buffer.size());
+        self.wait_strategy.notifyAllWaiters();
+    }
+}
+
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
+        NewConsumerBarrier<SingleConsumerSequenceBarrier<W, RB>>
+        for SinglePublisherSequenceBarrier<W, RB> {
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
             self.ring_buffer.clone(),
@@ -1351,18 +1372,6 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
             ~[],
             self.wait_strategy.clone()
         )
-    }
-
-    fn next_n_real(&mut self, batch_size: uint) -> uint {
-        let current_sequence = self.sequence.get_owned();
-        let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence,
-                self.dependencies, self.ring_buffer.size(), calculate_available_publisher);
-        available
-    }
-
-    fn release_n_real(&mut self, batch_size: uint) {
-        self.sequence.advance_and_flush(batch_size, self.ring_buffer.size());
-        self.wait_strategy.notifyAllWaiters();
     }
 }
 
@@ -1404,8 +1413,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SingleConsumerS
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
-        SequenceBarrier<T, SingleConsumerSequenceBarrier<W, RB>>
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier<T>
         for SingleConsumerSequenceBarrier<W, RB> {
     fn get_current(&self) -> SequenceNumber { self.sb.get_current() }
     fn set_cached_available(&mut self, available: uint) { self.sb.set_cached_available(available) }
@@ -1413,15 +1421,6 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
     fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] { self.sb.get_dependencies() }
     fn set_dependencies(&mut self, dependencies: ~[SequenceReader]) { self.sb.set_dependencies(dependencies) }
     fn get_sequence(&self) -> SequenceReader { self.sb.get_sequence() }
-
-    fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
-        SingleConsumerSequenceBarrier::new(
-            self.sb.ring_buffer.clone(),
-            self.cursor.clone_immut(),
-            ~[self.sb.sequence.clone_immut()],
-            self.sb.wait_strategy.clone()
-        )
-    }
 
     fn next_n_real(&mut self, batch_size: uint) -> uint {
         let current_sequence = self.get_current();
@@ -1440,6 +1439,19 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
         if (self.sb.cached_available < batch_size) {
             self.sb.sequence.flush();
         }
+    }
+}
+
+impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
+        NewConsumerBarrier<SingleConsumerSequenceBarrier<W, RB>>
+        for SingleConsumerSequenceBarrier<W, RB> {
+    fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
+        SingleConsumerSequenceBarrier::new(
+            self.sb.ring_buffer.clone(),
+            self.cursor.clone_immut(),
+            ~[self.sb.sequence.clone_immut()],
+            self.sb.wait_strategy.clone()
+        )
     }
 }
 
@@ -1474,14 +1486,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
     }
 }
 
-impl<
-        T: Send,
-        W: ProcessingWaitStrategy,
-        SB: SequenceBarrier<T, CSB>,
-        CSB: SequenceBarrier<T, CSB>
-    >
-        Publisher<T, W, SB> {
-
+impl<T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T> > Publisher<T, W, SB> {
     /// Generic constructor that works with any RingBufferTrait-conforming type
     fn new_common(sb: SB) -> Publisher<T, W, SB> {
         Publisher {
@@ -1489,6 +1494,28 @@ impl<
         }
     }
 
+    pub fn publish(&self, value: T) {
+        unsafe {
+            // FIXME #5372
+            let self_mut = cast::transmute_mut(self);
+            let begin: SequenceNumber = self.sequence_barrier.get_current();
+            // Wait for available slot
+            self_mut.sequence_barrier.next();
+            {
+                self_mut.sequence_barrier.set(begin, value);
+            }
+            // Make the item available to downstream consumers
+            self_mut.sequence_barrier.release();
+        }
+    }
+}
+
+impl<
+    T: Send,
+    W: ProcessingWaitStrategy,
+    SB: SequenceBarrier<T> + NewConsumerBarrier<CSB>,
+    CSB: SequenceBarrier<T> + NewConsumerBarrier<CSB>
+> Publisher<T, W, SB> {
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      */
@@ -1540,20 +1567,6 @@ impl<
         (nonfinal_consumers, final_consumer)
     }
 
-    pub fn publish(&self, value: T) {
-        unsafe {
-            // FIXME #5372
-            let self_mut = cast::transmute_mut(self);
-            let begin: SequenceNumber = self.sequence_barrier.get_current();
-            // Wait for available slot
-            self_mut.sequence_barrier.next();
-            {
-                self_mut.sequence_barrier.set(begin, value);
-            }
-            // Make the item available to downstream consumers
-            self_mut.sequence_barrier.release();
-        }
-    }
 }
 
 /**
@@ -1563,7 +1576,7 @@ struct Consumer<T, W, SB> {
     sequence_barrier: SB,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T, SB>>
+impl<T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T>>
         Consumer<T, W, SB> {
     fn new(sb: SB) -> Consumer<T, W, SB> {
         Consumer {
@@ -1628,7 +1641,7 @@ struct FinalConsumer<T, W, SB> {
     sc: Consumer<T, W, SB>
 }
 
-impl <T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T, SB>>
+impl <T: Send, W: ProcessingWaitStrategy, SB: SequenceBarrier<T>>
         FinalConsumer<T, W, SB> {
 
     /**

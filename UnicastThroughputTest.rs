@@ -100,8 +100,8 @@ fn run_task_pipe_benchmark(iterations: u64) {
 
 fn run_disruptor_benchmark<
     W: disruptor::ProcessingWaitStrategy,
-    SB: disruptor::SequenceBarrier<u64, CSB>,
-    CSB: disruptor::SequenceBarrier<u64, CSB>
+    SB: disruptor::SequenceBarrier<u64> + disruptor::NewConsumerBarrier<CSB>,
+    CSB: disruptor::SequenceBarrier<u64> + disruptor::NewConsumerBarrier<CSB>
 >(
     iterations: u64,
     mode: SchedMode,
