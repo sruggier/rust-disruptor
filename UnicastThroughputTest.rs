@@ -12,7 +12,7 @@ use std::fmt;
 use std::u64;
 use std::task::{spawn_sched,SchedMode,SingleThreaded,DefaultScheduler};
 
-use disruptor::{Publisher,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy};
+use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
 mod disruptor;
 
 /**
@@ -98,16 +98,13 @@ fn run_task_pipe_benchmark(iterations: u64) {
     println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
 }
 
-fn run_disruptor_benchmark<
-    SB: disruptor::SequenceBarrier<u64> + disruptor::NewConsumerBarrier<CSB>,
-    CSB: disruptor::SequenceBarrier<u64> + disruptor::NewConsumerBarrier<CSB>
->(
+fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     iterations: u64,
     mode: SchedMode,
-    mut publisher: Publisher<SB>,
+    publisher: Publisher<SB>,
+    consumer: FinalConsumer<CSB>,
     desc: ~str
 ) {
-    let consumer = publisher.create_single_consumer_pipeline();
     let (result_port, result_chan) = stream::<u64>();
 
     let before = precise_time_ns();
@@ -153,8 +150,9 @@ fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>
     mode: SchedMode
 ) {
     let desc = format!("{}", w);
-    let publisher = Publisher::<u64, W>::new(8192, w);
-    run_disruptor_benchmark(iterations, mode, publisher, desc);
+    let mut publisher = Publisher::<u64, W>::new(8192, w);
+    let consumer = publisher.create_single_consumer_pipeline();
+    run_disruptor_benchmark(iterations, mode, publisher, consumer, desc);
 }
 
 fn run_disruptor_benchmark_spin(iterations: u64) {
