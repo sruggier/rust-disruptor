@@ -1198,7 +1198,7 @@ impl fmt::Default for BlockingWaitStrategy {
  * Responsible for ensuring that the caller does not proceed until one or more dependent sequences
  * have finished working with the subsequent slots.
  */
-pub trait SequenceBarrier<T> : RingBufferOps<T> {
+pub trait SequenceBarrier<T> : Send {
     /**
      * Get the current value of the sequence associated with this SequenceBarrier.
      */
@@ -1284,6 +1284,36 @@ pub trait SequenceBarrier<T> : RingBufferOps<T> {
      * Assign a new set of dependencies to this barrier.
      */
     fn set_dependencies(&mut self, dependencies: ~[SequenceReader]);
+
+    // Ring buffer related operations
+
+    /// Returns the size of the underlying ring buffer.
+    fn size(&self) -> uint;
+
+    /**
+     * Stores a value in the sequence barrier's current slot.
+     *
+     * # Safety notes
+     *
+     * It's the caller's responsibility to avoid data races, so this function is unsafe. Races could
+     * occur in cases where multiple barriers are waiting on the same dependency and accessing slots
+     * in parallel.
+     */
+    unsafe fn set(&mut self, value: T);
+
+    /**
+     * Gets the value stored in the sequence barrier's current slot, which would have been stored
+     * there by a different task, in most cases). Unsafe: allows data races.
+     *
+     * Mutable to facilitate transparent transitions to larger buffers.
+     */
+    unsafe fn get<'s>(&'s mut self) -> &'s T;
+
+    /**
+     * Takes the value stored in the sequnce barrier's current slot, moving it out of the ring
+     * buffer. Unsafe: allows data races.
+     */
+    unsafe fn take(&mut self) -> T;
 }
 
 /**
@@ -1356,6 +1386,23 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier
         self.sequence.advance_and_flush(batch_size, self.ring_buffer.size());
         self.wait_strategy.notifyAllWaiters();
     }
+
+    fn size(&self) -> uint { self.ring_buffer.size() }
+
+    unsafe fn set(&mut self, value: T) {
+        let current_sequence = self.get_current();
+        self.ring_buffer.set(current_sequence, value)
+    }
+
+    unsafe fn get<'s>(&'s mut self) -> &'s T {
+        let current_sequence = self.get_current();
+        self.ring_buffer.get(current_sequence)
+    }
+
+    unsafe fn take(&mut self) -> T {
+        let current_sequence = self.get_current();
+        self.ring_buffer.take(current_sequence)
+    }
 }
 
 impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
@@ -1373,13 +1420,6 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
             self.wait_strategy.clone()
         )
     }
-}
-
-impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> RingBufferOps<T> for SinglePublisherSequenceBarrier<W, RB> {
-    fn size(&self) -> uint { self.ring_buffer.size() }
-    unsafe fn set(&mut self, sequence: SequenceNumber, value: T) { self.ring_buffer.set(sequence, value) }
-    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s T { self.ring_buffer.get(sequence) }
-    unsafe fn take(&mut self, sequence: SequenceNumber) -> T { self.ring_buffer.take(sequence) }
 }
 
 /**
@@ -1440,6 +1480,11 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier
             self.sb.sequence.flush();
         }
     }
+
+    fn size(&self) -> uint { self.sb.size() }
+    unsafe fn set(&mut self, value: T) { self.sb.set(value) }
+    unsafe fn get<'s>(&'s mut self, ) -> &'s T { self.sb.get() }
+    unsafe fn take(&mut self) -> T { self.sb.take() }
 }
 
 impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
@@ -1453,13 +1498,6 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
             self.sb.wait_strategy.clone()
         )
     }
-}
-
-impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> RingBufferOps<T> for SingleConsumerSequenceBarrier<W, RB> {
-    fn size(&self) -> uint { self.sb.size() }
-    unsafe fn set(&mut self, sequence: SequenceNumber, value: T) { self.sb.set(sequence, value) }
-    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s T { self.sb.get(sequence) }
-    unsafe fn take(&mut self, sequence: SequenceNumber) -> T { self.sb.take(sequence) }
 }
 
 /**
@@ -1498,11 +1536,10 @@ impl<T: Send, SB: SequenceBarrier<T> > Publisher<SB> {
         unsafe {
             // FIXME #5372
             let self_mut = cast::transmute_mut(self);
-            let begin: SequenceNumber = self.sequence_barrier.get_current();
             // Wait for available slot
             self_mut.sequence_barrier.next();
             {
-                self_mut.sequence_barrier.set(begin, value);
+                self_mut.sequence_barrier.set(value);
             }
             // Make the item available to downstream consumers
             self_mut.sequence_barrier.release();
@@ -1593,8 +1630,7 @@ impl<T: Send, SB: SequenceBarrier<T>>
             let self_mut = cast::transmute_mut(self);
             self_mut.sequence_barrier.next();
             {
-                let current_sequence = self_mut.sequence_barrier.get_current();
-                let item = self_mut.sequence_barrier.get(current_sequence);
+                let item = self_mut.sequence_barrier.get();
                 consume_callback(item);
             }
             self_mut.sequence_barrier.release();
@@ -1666,8 +1702,7 @@ impl <T: Send, SB: SequenceBarrier<T>>
             sc.sequence_barrier.next();
             let value;
             {
-                let current_sequence = sc.sequence_barrier.get_current();
-                 value = sc.sequence_barrier.take(current_sequence);
+                 value = sc.sequence_barrier.take();
             }
             sc.sequence_barrier.release();
             value
