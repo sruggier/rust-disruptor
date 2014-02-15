@@ -114,6 +114,7 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     do spawn_sched(mode) {
         let mut sum = 0u64;
 
+        let mut expected_value = 1u64;
         loop {
             let i = consumer.take();
             debug!("{:?}", i);
@@ -122,6 +123,8 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
                 result_chan.send(sum);
                 break;
             }
+            assert_eq!(i, expected_value);
+            expected_value += 1;
             sum += i;
         }
     }
