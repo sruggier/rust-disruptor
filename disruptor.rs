@@ -152,6 +152,7 @@ impl<T> RingBufferData<T> {
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.size());
         unsafe {
+            assert!(self.entries[index].is_set(), "Take of None at sequence: {:?}", *sequence);
             self.entries[index].take()
         }
     }
