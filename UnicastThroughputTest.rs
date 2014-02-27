@@ -170,6 +170,25 @@ fn run_disruptor_benchmark_block(iterations: u64) {
     run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new(), DefaultScheduler);
 }
 
+fn run_disruptor_benchmark_resizeable(iterations: u64) {
+    let resize_timeout = 6;
+    let mstp = disruptor::default_max_spin_tries_publisher;
+    let mstc = disruptor::default_max_spin_tries_consumer;
+    let mut publisher = Publisher::<u64>::new_resize_after_timeout_with_params(
+        8192,
+        resize_timeout,
+        mstp,
+        mstc
+    );
+    let consumer = publisher.create_single_consumer_pipeline();
+    let desc = format!("disruptor::TimeoutResizeWaitStrategy\\{t: {}, p: {}, c: {}\\}",
+        resize_timeout,
+        mstp,
+        mstc
+    );
+    run_disruptor_benchmark(iterations, DefaultScheduler, publisher, consumer, desc);;
+}
+
 fn usage(argv0: &str, opts: ~[getopts::groups::OptGroup]) -> ! {
     let brief = format!("Usage: {} [OPTIONS]", argv0);
     println!("{}", getopts::groups::usage(brief, opts));
@@ -222,6 +241,7 @@ fn main() {
     };
 
     run_single_threaded_benchmark(iterations);
+    run_disruptor_benchmark_resizeable(iterations);
     run_disruptor_benchmark_block(iterations);
     run_disruptor_benchmark_block(iterations);
     run_disruptor_benchmark_block(iterations);
