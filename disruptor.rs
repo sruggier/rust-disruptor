@@ -41,9 +41,9 @@ impl<T> Slot<T> {
      * Allocates an owned box containing Option<T>, then overrides Rust's memory management by
      * storing it as a raw pointer.
      */
-    unsafe fn new() -> Slot<T> {
+    fn new() -> Slot<T> {
         let payload: ~Option<T> = ~None;
-        let payload_raw: *mut Option<T> = cast::transmute(payload);
+        let payload_raw: *mut Option<T> = unsafe { cast::transmute(payload) };
         Slot {
             payload: payload_raw
         }
@@ -134,7 +134,7 @@ struct RingBufferData<T> {
 impl<T> RingBufferData<T> {
     fn new(size: uint) -> RingBufferData<T> {
         // See Drop below for corresponding slot deallocation
-        let buffer = vec::from_fn(size, |_i| { unsafe { Slot::new() } } );
+        let buffer = vec::from_fn(size, |_i| { Slot::new() } );
         RingBufferData {
             entries: buffer,
         }
