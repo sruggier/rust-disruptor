@@ -1813,14 +1813,6 @@ impl <T: Send, SB: SequenceBarrier<T>>
  * to open new sessions (to avoid degrading service for existing sessions), skipping frames, or any
  * other mechanism that reduces demand as early as possible to avoid wasted effort.
  *
- * TODO: It would be safe for the last consumer in the pipeline to deallocate the old buffer without
- * using reference counting, for a slight performance boost. To support multiple consumers at the
- * last stage in the pipeline without using reference counting, the publisher could start a cleanup
- * task to act as a single, final consumer in the pipeline and deallocate the buffer as needed. The
- * task should be able to finish as soon as it deallocates the last old buffer, as long as a CAS is
- * used to synchronize with the publisher, who may be allocating another buffer as the cleanup task
- * finishes.
- *
  * # Availability calculation following reallocation
  *
  * Although it's not strictly necessary, things are most efficient if the publisher immediately uses
