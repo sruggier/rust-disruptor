@@ -32,19 +32,18 @@ However, current users can enjoy the following features:
 
 # Roadmap
 
-This is a list of things that should probably be implemented in the near future:
+This is a list of things that may be implemented in the near future:
  * Tests for unicast pipelines with more than one consumer
  * Batch publishing APIs (it's supported in the core code, but not in the public
    API yet)
- * More convenient APIs on the consumer side, including moving values out at the
-   end of the pipeline in a way similar to the pipe API
+ * More convenient APIs on the consumer side
  * Consumers that process events from the same stage of the pipeline in parallel
    (in other words, each event is shared by all consumers)
  * Unsafe API to allow parallel consumers to mutate the data they're processing
    (it becomes the caller's responsibility to avoid data races)
- * A safe API to allow parallel consumers mutable access to separate parts of
-   the data (using reflection to perform dynamic checks before running the
-   pipeline)
+ * If possible, a safe API to allow parallel consumers mutable access to
+   separate parts of the data, using reflection to verify safety at runtime
+   before running the pipeline
  * Add more unit tests in general
  * Add a more diverse set of performance tests
  * Implement some performance tests in Rust's built-in benchmark framework
