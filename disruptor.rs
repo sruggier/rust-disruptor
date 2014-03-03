@@ -1336,7 +1336,7 @@ pub trait SequenceBarrier<T> : Send {
     fn next_n(&mut self, batch_size: uint) {
         // Avoid waiting if the necessary slots were already available as of the last read. Calls
         // next_n_real if the slots are not available.
-        if (self.get_cached_available() < batch_size) {
+        if self.get_cached_available() < batch_size {
             let cached_available = self.next_n_real(batch_size);
             self.set_cached_available(cached_available);
         }
@@ -1577,7 +1577,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier
         self.sb.sequence.advance(batch_size, self.sb.ring_buffer.size());
         // If the next call to next_n will result in more waiting, then make our progress visible to
         // downstream consumers now.
-        if (self.sb.cached_available < batch_size) {
+        if self.sb.cached_available < batch_size {
             self.sb.sequence.flush();
         }
     }
@@ -2060,12 +2060,12 @@ fn calculate_available_publisher_resizing(
     let SequenceNumber(gating_value) = gating_sequence;
     let SequenceNumber(mut waiting_value) = waiting_sequence;
     // Handle wrapping
-    if (waiting_value < gating_value) {
+    if waiting_value < gating_value {
         waiting_value += wrap_boundary(buffer_size);
     }
     let first_unavailable_slot = gating_value + buffer_size;
     // Handle resizing
-    if (first_unavailable_slot < waiting_value) {
+    if first_unavailable_slot < waiting_value {
         return 0;
     }
     let available = first_unavailable_slot - waiting_value;
@@ -2145,7 +2145,7 @@ impl<T: Send, W: ResizingWaitStrategy>
             batch_size, self.get_current(), self.sb.dependencies, current_size,
             calculate_available_publisher_resizing);
 
-        if (available < batch_size) {
+        if available < batch_size {
             // The ResizingWaitStrategy decided that we should allocate a new buffer instead of
             // waiting long enough, so we reallocate here.
 
@@ -2242,7 +2242,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
         // sequence value, in between calls.
         let unwrapped_sequence = self.get_current().value();
         let current_available = self.get_cached_available();
-        let unwrap_difference = (unwrapped_sequence - original_sequence);
+        let unwrap_difference = unwrapped_sequence - original_sequence;
         let mut actual_cached_available = current_available - unwrap_difference;
         // The current cached availability value may be less than the difference if the consumer's
         // sequence has wrapped since it last re-checked availability: the consumer's sequence value
@@ -2516,7 +2516,7 @@ impl ResizingWaitStrategy for TimeoutResizeWaitStrategy {
         );
 
         // Don't expose the extra slot to callers, so it remains unused
-        if (available >= 1) {
+        if available >= 1 {
             available - 1
         }
         else {

@@ -219,7 +219,7 @@ fn parse_args() -> getopts::Matches {
             fail!();
         }
     };
-    if (matches.opt_present("h")) {
+    if matches.opt_present("h") {
         usage(*argv0, opts);
     }
 
