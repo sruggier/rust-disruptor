@@ -233,11 +233,6 @@ struct SequenceNumber(uint);
 static SEQUENCE_INITIAL: uint = 0;
 
 impl SequenceNumber {
-    /// Returns `SEQUENCE_INITIAL` as a `SequenceNumber`.
-    fn initial() -> SequenceNumber {
-        SequenceNumber(SEQUENCE_INITIAL)
-    }
-
     /**
      * Returns self modulo `buffer_size`, exploiting the assumption that the size will always be a
      * power of two by using a masking operation instead of the modulo operator.
@@ -367,18 +362,6 @@ impl<T: Send> RingBuffer<T> {
         assert!(size.count_ones() == 1, "RingBuffer size must be a power of two (received {:?})", size);
         let data = RingBufferData::new(size);
         RingBuffer { data: UncheckedUnsafeArc::new(data) }
-    }
-
-    /// See `RingBufferData::unset`. Unsafe: allows data races.
-    unsafe fn unset(&mut self, sequence: SequenceNumber) {
-        let d = self.data.get();
-        d.unset(sequence);
-    }
-
-    /// See `RingBufferData::is_set`. Unsafe: allows data races.
-    unsafe fn is_set(&self, sequence: SequenceNumber) -> bool {
-        let d = self.data.get_immut();
-        d.is_set(sequence)
     }
 }
 
@@ -1941,8 +1924,6 @@ impl<T: Send> ResizableRingBufferData<T> {
     fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T { self.rb_data.get(sequence) }
     /// See `RingBufferData::take`
     unsafe fn take(&mut self, sequence: SequenceNumber) -> T { self.rb_data.take(sequence) }
-    /// See `RingBufferData::unset`
-    unsafe fn unset(&mut self, sequence: SequenceNumber) { self.rb_data.unset(sequence) }
     /// See `RingBufferData::is_set`
     unsafe fn is_set(&self, sequence: SequenceNumber) -> bool { self.rb_data.is_set(sequence) }
 }

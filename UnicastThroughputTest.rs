@@ -13,7 +13,7 @@ use std::fmt;
 use std::u64;
 use std::task::{spawn};
 
-use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
+use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,/*SpinWaitStrategy,*/YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
 mod disruptor;
 
 /**
@@ -157,9 +157,11 @@ fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
     run_disruptor_benchmark(iterations, publisher, consumer, desc);
 }
 
+/* See TODO below.
 fn run_disruptor_benchmark_spin(iterations: u64) {
     run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy);
 }
+*/
 
 fn run_disruptor_benchmark_yield(iterations: u64) {
     run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new());
