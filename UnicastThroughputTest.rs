@@ -5,12 +5,13 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-extern mod extra;
-use extra::getopts;
-use extra::time::precise_time_ns;
+extern crate extra;
+extern crate getopts;
+extern crate time;
+use time::precise_time_ns;
 use std::fmt;
 use std::u64;
-use std::task::{spawn_sched,SchedMode,SingleThreaded,DefaultScheduler};
+use std::task::{spawn};
 
 use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
 mod disruptor;
@@ -63,29 +64,29 @@ fn run_single_threaded_benchmark(iterations: u64) -> u64 {
 
 fn run_task_pipe_benchmark(iterations: u64) {
 
-    let (result_port, result_chan) = stream::<u64>();
-    let (input_port, input_chan) = stream::<u64>();
+    let (result_port, result_chan) = Chan::<u64>::new();
+    let (input_port, input_chan) = Chan::<u64>::new();
 
     let before = precise_time_ns();
 
     // Listen on input_port, summing all the received numbers, then return the
     // sum through result_chan.
-    do spawn {
+    spawn(proc() {
         let mut sum = 0u64;
         let mut i = input_port.recv();
-        while i != u64::max_value {
+        while i != u64::MAX {
             sum += i;
             i = input_port.recv();
         }
         result_chan.send(sum);
-    }
+    });
 
     // Send every number from 1 to (iterations + 1), and then tell the task
-    // to finish and return by sending uint::max_value.
+    // to finish and return by sending uint::MAX.
     for num in range(1, iterations + 1) {
         input_chan.send(num as u64);
     }
-    input_chan.send(u64::max_value);
+    input_chan.send(u64::MAX);
     // Wait for the task to finish
     let loop_end = precise_time_ns();
     let result = result_port.recv();
@@ -100,18 +101,17 @@ fn run_task_pipe_benchmark(iterations: u64) {
 
 fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     iterations: u64,
-    mode: SchedMode,
     publisher: Publisher<SB>,
     consumer: FinalConsumer<CSB>,
     desc: ~str
 ) {
-    let (result_port, result_chan) = stream::<u64>();
+    let (result_port, result_chan) = Chan::<u64>::new();
 
     let before = precise_time_ns();
 
     // spawn_sched needed for now, because the consumer thread busy-waits
     // rather than voluntarily descheduling.
-    do spawn_sched(mode) {
+    spawn(proc() {
         let mut sum = 0u64;
 
         let mut expected_value = 1u64;
@@ -119,7 +119,7 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
             let i = consumer.take();
             debug!("{:?}", i);
             // In-band magic number value tells us when to break out of the loop
-            if i == u64::max_value {
+            if i == u64::MAX {
                 result_chan.send(sum);
                 break;
             }
@@ -127,14 +127,14 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
             expected_value += 1;
             sum += i;
         }
-    }
+    });
 
     // Send every number from 1 to (iterations + 1), and then tell the task
-    // to finish and return by sending uint::max_value.
+    // to finish and return by sending uint::MAX.
     for num in range(1, iterations + 1) {
         publisher.publish(num as u64)
     }
-    publisher.publish(u64::max_value);
+    publisher.publish(u64::MAX);
 
     let loop_end = precise_time_ns();
     let result = result_port.recv();
@@ -147,27 +147,26 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     println!("Disruptor ({}): {} ops/sec, result wait: {} ns", desc, ops, wait_latency);
 }
 
-fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Default>(
+fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
     iterations: u64,
-    w: W,
-    mode: SchedMode
+    w: W
 ) {
     let desc = format!("{}", w);
     let mut publisher = Publisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_single_consumer_pipeline();
-    run_disruptor_benchmark(iterations, mode, publisher, consumer, desc);
+    run_disruptor_benchmark(iterations, publisher, consumer, desc);
 }
 
 fn run_disruptor_benchmark_spin(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy, SingleThreaded);
+    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy);
 }
 
 fn run_disruptor_benchmark_yield(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new(), DefaultScheduler);
+    run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new());
 }
 
 fn run_disruptor_benchmark_block(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new(), DefaultScheduler);
+    run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new());
 }
 
 fn run_disruptor_benchmark_resizeable(iterations: u64) {
@@ -186,12 +185,12 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
         mstp,
         mstc
     );
-    run_disruptor_benchmark(iterations, DefaultScheduler, publisher, consumer, desc);;
+    run_disruptor_benchmark(iterations, publisher, consumer, desc);;
 }
 
-fn usage(argv0: &str, opts: ~[getopts::groups::OptGroup]) -> ! {
+fn usage(argv0: &str, opts: ~[getopts::OptGroup]) -> ! {
     let brief = format!("Usage: {} [OPTIONS]", argv0);
-    println!("{}", getopts::groups::usage(brief, opts));
+    println!("{}", getopts::usage(brief, opts));
     // Exit immediately
     fail!();
 }
@@ -202,7 +201,7 @@ fn usage(argv0: &str, opts: ~[getopts::groups::OptGroup]) -> ! {
  * argument, this will print out help information and exit.
  */
 fn parse_args() -> getopts::Matches {
-    use extra::getopts::groups::{optflag,optopt};
+    use getopts::{optflag,optopt};
 
     let opts = ~[
         optflag("h", "help", "show this message and exit"),
@@ -213,7 +212,7 @@ fn parse_args() -> getopts::Matches {
     let arg_flags = args.tail();
     let argv0 = &args[0];
 
-    let matches = match getopts::groups::getopts(arg_flags, opts) {
+    let matches = match getopts::getopts(arg_flags, opts) {
         Ok(m) => m,
         Err(fail) => {
             println!("{}\nUse '{} --help' to see a list of valid options.", fail.to_err_msg(), *argv0);
@@ -248,9 +247,12 @@ fn main() {
     run_disruptor_benchmark_yield(iterations);
     run_disruptor_benchmark_yield(iterations);
     run_disruptor_benchmark_yield(iterations);
-    run_disruptor_benchmark_spin(iterations);
-    run_disruptor_benchmark_spin(iterations);
-    run_disruptor_benchmark_spin(iterations);
+    // TODO: 1:1 scheduling of tasks is needed for SpinWaitStrategy to work,
+    // but I ripped out the code to do that while porting to latest rustc as of
+    // 2014-03-02. Reimplement using libgreen.
+    // run_disruptor_benchmark_spin(iterations);
+    // run_disruptor_benchmark_spin(iterations);
+    // run_disruptor_benchmark_spin(iterations);
     // The pipes are slower, so we avoid long execution times by running fewer iterations
     run_task_pipe_benchmark(iterations/100);
     run_task_pipe_benchmark(iterations/100);
