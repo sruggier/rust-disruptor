@@ -7,13 +7,14 @@
 // except according to those terms.
 extern crate extra;
 extern crate getopts;
+extern crate native;
 extern crate time;
 use time::precise_time_ns;
 use std::fmt;
 use std::u64;
 use std::task::{spawn};
 
-use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,/*SpinWaitStrategy,*/YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
+use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
 mod disruptor;
 
 /**
@@ -103,7 +104,8 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     iterations: u64,
     publisher: Publisher<SB>,
     consumer: FinalConsumer<CSB>,
-    desc: ~str
+    desc: ~str,
+    spawn_fn: | proc() |
 ) {
     let (result_port, result_chan) = Chan::<u64>::new();
 
@@ -111,7 +113,7 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
 
     // spawn_sched needed for now, because the consumer thread busy-waits
     // rather than voluntarily descheduling.
-    spawn(proc() {
+    spawn_fn(proc() {
         let mut sum = 0u64;
 
         let mut expected_value = 1u64;
@@ -149,26 +151,30 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
 
 fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
     iterations: u64,
-    w: W
+    w: W,
+    spawn_fn: | proc() |
 ) {
     let desc = format!("{}", w);
     let mut publisher = Publisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_single_consumer_pipeline();
-    run_disruptor_benchmark(iterations, publisher, consumer, desc);
+    run_disruptor_benchmark(iterations, publisher, consumer, desc, spawn_fn);
 }
 
-/* See TODO below.
 fn run_disruptor_benchmark_spin(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy);
+    // SpinWaitStrategy fully blocks the threads it's on, so the second task
+    // needs to be native to avoid deadlock. In real-world usage, both tasks
+    // should be native, but for now, the publisher side is run on the main
+    // thread, which is green as of this writing. We aren't using our green
+    // thread pool for anything else, so it should be fine.
+    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy, native::task::spawn);
 }
-*/
 
 fn run_disruptor_benchmark_yield(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new());
+    run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new(), spawn);
 }
 
 fn run_disruptor_benchmark_block(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new());
+    run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new(), spawn);
 }
 
 fn run_disruptor_benchmark_resizeable(iterations: u64) {
@@ -187,7 +193,7 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
         mstp,
         mstc
     );
-    run_disruptor_benchmark(iterations, publisher, consumer, desc);;
+    run_disruptor_benchmark(iterations, publisher, consumer, desc, spawn);;
 }
 
 fn usage(argv0: &str, opts: ~[getopts::OptGroup]) -> ! {
@@ -249,12 +255,9 @@ fn main() {
     run_disruptor_benchmark_yield(iterations);
     run_disruptor_benchmark_yield(iterations);
     run_disruptor_benchmark_yield(iterations);
-    // TODO: 1:1 scheduling of tasks is needed for SpinWaitStrategy to work,
-    // but I ripped out the code to do that while porting to latest rustc as of
-    // 2014-03-02. Reimplement using libgreen.
-    // run_disruptor_benchmark_spin(iterations);
-    // run_disruptor_benchmark_spin(iterations);
-    // run_disruptor_benchmark_spin(iterations);
+    run_disruptor_benchmark_spin(iterations);
+    run_disruptor_benchmark_spin(iterations);
+    run_disruptor_benchmark_spin(iterations);
     // The pipes are slower, so we avoid long execution times by running fewer iterations
     run_task_pipe_benchmark(iterations/100);
     run_task_pipe_benchmark(iterations/100);
