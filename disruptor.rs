@@ -2454,7 +2454,7 @@ impl TimeoutResizeWaitStrategy {
         let now = precise_time_ns();
         let end_time = now + (self.timeout as u64) * 1000 * 1000;
 
-        spin_for_consumer_retries(
+        available = spin_for_consumer_retries(
             n,
             waiting_sequence,
             dependencies,
