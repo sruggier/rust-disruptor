@@ -2451,8 +2451,10 @@ impl TimeoutResizeWaitStrategy {
 
         // Not enough slots are available. Spin up to max_spin_tries_consumer times, then yield
         // repeatedly until either the items become available, or the timeout is reached.
-        let now = precise_time_ns();
-        let end_time = now + (self.timeout as u64) * 1000 * 1000;
+        let calculate_end_time = | now: u64 | { now + (self.timeout as u64) * 1000 * 1000 };
+        let mut end_time = calculate_end_time(precise_time_ns());
+        // Used to check if the pipeline makes any progress
+        let mut previous_available = available;
 
         available = spin_for_consumer_retries(
             n,
@@ -2467,6 +2469,13 @@ impl TimeoutResizeWaitStrategy {
         }
 
         while available < n && precise_time_ns() < end_time {
+            // Reset the timeout if the pipeline has made progress.There should only be
+            // reallocations if it looks like the pipeline has deadlocked.
+            if previous_available != available {
+                previous_available = available;
+                end_time = calculate_end_time(precise_time_ns());
+            }
+
             available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
                 &calculate_available);
             task::deschedule();
