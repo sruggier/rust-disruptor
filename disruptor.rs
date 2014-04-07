@@ -1558,11 +1558,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier
 
     fn release_n_real(&mut self, batch_size: uint) {
         self.sb.sequence.advance(batch_size, self.sb.ring_buffer.size());
-        // If the next call to next_n will result in more waiting, then make our progress visible to
-        // downstream consumers now.
-        if self.sb.cached_available < batch_size {
-            self.sb.sequence.flush();
-        }
+        self.sb.sequence.flush();
     }
 
     fn size(&self) -> uint { self.sb.size() }
