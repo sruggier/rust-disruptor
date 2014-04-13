@@ -6,7 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 extern crate extra;
-extern crate getopts;
 extern crate native;
 extern crate time;
 use time::precise_time_ns;
@@ -15,7 +14,9 @@ use std::u64;
 use std::task::{spawn};
 
 use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
+use benchmark_utils::{parse_args};
 mod disruptor;
+mod benchmark_utils;
 
 /**
  * Given a start time, finish time, and number of iterations, calculates and
@@ -194,61 +195,6 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
         mstc
     );
     run_disruptor_benchmark(iterations, publisher, consumer, desc, spawn);;
-}
-
-fn usage(argv0: &str, opts: ~[getopts::OptGroup]) -> ! {
-    let brief = format!("Usage: {} [OPTIONS]", argv0);
-    println!("{}", getopts::usage(brief, opts));
-    // Exit immediately
-    fail!();
-}
-
-struct CommonTestOpts {
-    n_iterations: Option<u64>,
-}
-
-/**
- * Retrieve a parsed representation of the command-line arguments, or die
- * trying. If the user has requested a help string or given an invalid
- * argument, this will print out help information and exit.
- */
-fn parse_args() -> CommonTestOpts {
-    use getopts::{optflag,optopt};
-
-    let opts = ~[
-        optflag("h", "help", "show this message and exit"),
-        optopt("n", "iterations", "how many iterations to perform in each benchmark", "N"),
-    ];
-
-    let args = std::os::args();
-    let arg_flags = args.tail();
-    let argv0 = &args[0];
-
-    let matches = match getopts::getopts(arg_flags, opts) {
-        Ok(m) => m,
-        Err(fail) => {
-            println!("{}\nUse '{} --help' to see a list of valid options.", fail.to_err_msg(), *argv0);
-            fail!();
-        }
-    };
-    if matches.opt_present("h") {
-        usage(*argv0, opts);
-    }
-
-    // Validate as integer if -n specified
-    let iterations = match matches.opt_str("n") {
-        Some(n_str) => {
-            match std::u64::parse_bytes(n_str.as_bytes(), 10u) {
-                Some(n) => Some(n),
-                None => fail!("Expected a positive number of iterations, received {}", n_str)
-            }
-        }
-        None => None
-    };
-
-    CommonTestOpts {
-        n_iterations: iterations,
-    }
 }
 
 fn main() {
