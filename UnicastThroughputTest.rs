@@ -203,12 +203,16 @@ fn usage(argv0: &str, opts: ~[getopts::OptGroup]) -> ! {
     fail!();
 }
 
+struct CommonTestOpts {
+    n_iterations: Option<u64>,
+}
+
 /**
  * Retrieve a parsed representation of the command-line arguments, or die
  * trying. If the user has requested a help string or given an invalid
  * argument, this will print out help information and exit.
  */
-fn parse_args() -> getopts::Matches {
+fn parse_args() -> CommonTestOpts {
     use getopts::{optflag,optopt};
 
     let opts = ~[
@@ -231,19 +235,28 @@ fn parse_args() -> getopts::Matches {
         usage(*argv0, opts);
     }
 
-    matches
-}
-
-fn main() {
-    let matches = parse_args();
-
+    // Validate as integer if -n specified
     let iterations = match matches.opt_str("n") {
         Some(n_str) => {
             match std::u64::parse_bytes(n_str.as_bytes(), 10u) {
-                Some(n) => n,
+                Some(n) => Some(n),
                 None => fail!("Expected a positive number of iterations, received {}", n_str)
             }
         }
+        None => None
+    };
+
+    CommonTestOpts {
+        n_iterations: iterations,
+    }
+}
+
+fn main() {
+    let common_opts = parse_args();
+
+    // Default to NUM_ITERATIONS
+    let iterations = match common_opts.n_iterations {
+        Some(n) => n,
         None => NUM_ITERATIONS
     };
 
