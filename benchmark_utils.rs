@@ -2,7 +2,7 @@ extern crate getopts;
 
 /// Contains values obtained from common argument processing.
 pub struct CommonTestOpts {
-    n_iterations: Option<u64>,
+    n_iterations: u64,
 }
 
 fn usage(argv0: &str, opts: ~[getopts::OptGroup]) -> ! {
@@ -20,12 +20,14 @@ fn usage(argv0: &str, opts: ~[getopts::OptGroup]) -> ! {
  * The API of this function will clearly have to change if some callers want to include their own
  * arguments, but for now, this will do.
  */
-pub fn parse_args() -> CommonTestOpts {
+pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
     use self::getopts::{optflag,optopt};
 
     let opts = ~[
         optflag("h", "help", "show this message and exit"),
-        optopt("n", "iterations", "how many iterations to perform in each benchmark", "N"),
+        optopt("n", "iterations",
+            format!("how many iterations to perform in each benchmark (default {})",
+            default_n_iterations), "N"),
     ];
 
     let args = ::std::os::args();
@@ -47,11 +49,11 @@ pub fn parse_args() -> CommonTestOpts {
     let iterations = match matches.opt_str("n") {
         Some(n_str) => {
             match ::std::u64::parse_bytes(n_str.as_bytes(), 10u) {
-                Some(n) => Some(n),
+                Some(n) => n,
                 None => fail!("Expected a positive number of iterations, received {}", n_str)
             }
         }
-        None => None
+        None => default_n_iterations
     };
 
     CommonTestOpts {

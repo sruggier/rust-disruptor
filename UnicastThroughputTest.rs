@@ -198,13 +198,9 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
 }
 
 fn main() {
-    let common_opts = parse_args();
-
     // Default to NUM_ITERATIONS
-    let iterations = match common_opts.n_iterations {
-        Some(n) => n,
-        None => NUM_ITERATIONS
-    };
+    let common_opts = parse_args(NUM_ITERATIONS);
+    let iterations = common_opts.n_iterations;
 
     run_single_threaded_benchmark(iterations);
     run_disruptor_benchmark_resizeable(iterations);
