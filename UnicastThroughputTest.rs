@@ -5,7 +5,9 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-extern crate extra;
+
+#![feature(phase)]
+#[phase(syntax, link)] extern crate log;
 extern crate native;
 extern crate time;
 use time::precise_time_ns;
@@ -66,32 +68,32 @@ fn run_single_threaded_benchmark(iterations: u64) -> u64 {
 
 fn run_task_pipe_benchmark(iterations: u64) {
 
-    let (result_port, result_chan) = Chan::<u64>::new();
-    let (input_port, input_chan) = Chan::<u64>::new();
+    let (result_sender, result_receiver) = channel::<u64>();
+    let (input_sender, input_receiver) = channel::<u64>();
 
     let before = precise_time_ns();
 
-    // Listen on input_port, summing all the received numbers, then return the
-    // sum through result_chan.
+    // Listen on input_receiver, summing all the received numbers, then return the
+    // sum through result_sender.
     spawn(proc() {
         let mut sum = 0u64;
-        let mut i = input_port.recv();
+        let mut i = input_receiver.recv();
         while i != u64::MAX {
             sum += i;
-            i = input_port.recv();
+            i = input_receiver.recv();
         }
-        result_chan.send(sum);
+        result_sender.send(sum);
     });
 
     // Send every number from 1 to (iterations + 1), and then tell the task
     // to finish and return by sending uint::MAX.
     for num in range(1, iterations + 1) {
-        input_chan.send(num as u64);
+        input_sender.send(num as u64);
     }
-    input_chan.send(u64::MAX);
+    input_sender.send(u64::MAX);
     // Wait for the task to finish
     let loop_end = precise_time_ns();
-    let result = result_port.recv();
+    let result = result_receiver.recv();
     let after = precise_time_ns();
 
     let expected_value = triangle_number(iterations);
@@ -106,9 +108,9 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     publisher: Publisher<SB>,
     consumer: FinalConsumer<CSB>,
     desc: ~str,
-    spawn_fn: | proc() |
+    spawn_fn: | proc(): Send |
 ) {
-    let (result_port, result_chan) = Chan::<u64>::new();
+    let (result_sender, result_receiver) = channel::<u64>();
 
     let before = precise_time_ns();
 
@@ -123,7 +125,7 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
             debug!("{:?}", i);
             // In-band magic number value tells us when to break out of the loop
             if i == u64::MAX {
-                result_chan.send(sum);
+                result_sender.send(sum);
                 break;
             }
             assert_eq!(i, expected_value);
@@ -140,7 +142,7 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     publisher.publish(u64::MAX);
 
     let loop_end = precise_time_ns();
-    let result = result_port.recv();
+    let result = result_receiver.recv();
     let after = precise_time_ns();
 
     let expected_value = triangle_number(iterations);
@@ -153,7 +155,7 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
 fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
     iterations: u64,
     w: W,
-    spawn_fn: | proc() |
+    spawn_fn: | proc(): Send |
 ) {
     let desc = format!("{}", w);
     let mut publisher = Publisher::<u64, W>::new(8192, w);

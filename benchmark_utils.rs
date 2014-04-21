@@ -2,7 +2,7 @@ extern crate getopts;
 
 /// Contains values obtained from common argument processing.
 pub struct CommonTestOpts {
-    n_iterations: u64,
+    pub n_iterations: u64,
 }
 
 fn usage(argv0: &str, opts: ~[getopts::OptGroup]) -> ! {

@@ -5,9 +5,10 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+#[phase(syntax, link)] extern crate log;
 extern crate sync;
 extern crate time;
-use self::sync::Mutex;
+use self::sync::raw::Mutex;
 use self::time::precise_time_ns;
 use std::clone::Clone;
 use std::cast;
@@ -17,14 +18,14 @@ use std::num::Bitwise;
 use std::option::{Option};
 use std::ptr;
 use std::task;
-use std::vec;
+use std::vec::Vec;
 use std::uint;
 use std::sync::arc::UnsafeArc;
 use std::sync::atomics::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
 
 /**
  * Raw pointer to a single nullable element of T. We are going to communicate between tasks by
- * passing objects through a ring buffer. The ring buffer is implemented using std::vec, which
+ * passing objects through a ring buffer. The ring buffer is implemented using std::vec::Vec, which
  * requires that its contents are clonable. However, we don't want to impose this limitation on
  * callers, so instead, the buffer will store pointers to Option<T>. The pointers are cloned as
  * needed, but the ring buffer has to handle deallocation of these objects to maintain safety.
@@ -128,16 +129,16 @@ impl<T> Slot<T> {
 }
 
 /**
- * Contains the underlying std::vec, and manages the lifetime of the slots.
+ * Contains the underlying std::vec::Vec, and manages the lifetime of the slots.
  */
 struct RingBufferData<T> {
-    entries: ~[Slot<T>],
+    entries: Vec<Slot<T>>,
 }
 
 impl<T> RingBufferData<T> {
     fn new(size: uint) -> RingBufferData<T> {
         // See Drop below for corresponding slot deallocation
-        let buffer = vec::from_fn(size, |_i| { Slot::new() } );
+        let buffer = Vec::from_fn(size, |_i| { Slot::new() } );
         RingBufferData {
             entries: buffer,
         }
@@ -152,7 +153,7 @@ impl<T> RingBufferData<T> {
         // We're guaranteed not to have called destroy during the lifetime of this type, so it's safe
         // to call set and get.
         unsafe {
-            self.entries[index].set(value);
+            self.entries.get_mut(index).set(value);
         }
     }
 
@@ -165,7 +166,7 @@ impl<T> RingBufferData<T> {
     fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
         let index = sequence.as_index(self.size());
         unsafe {
-            self.entries[index].get()
+            self.entries.get(index).get()
         }
     }
 
@@ -179,8 +180,8 @@ impl<T> RingBufferData<T> {
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.size());
         unsafe {
-            assert!(self.entries[index].is_set(), "Take of None at sequence: {:?}", sequence.value());
-            self.entries[index].take()
+            assert!(self.entries.get(index).is_set(), "Take of None at sequence: {:?}", sequence.value());
+            self.entries.get_mut(index).take()
         }
     }
 
@@ -191,7 +192,7 @@ impl<T> RingBufferData<T> {
     fn unset(&mut self, sequence: SequenceNumber) {
         let index = sequence.as_index(self.size());
         unsafe {
-            self.entries[index].unset();
+            self.entries.get_mut(index).unset();
         }
     }
 
@@ -201,7 +202,7 @@ impl<T> RingBufferData<T> {
     fn is_set(&self, sequence: SequenceNumber) -> bool {
         let index = sequence.as_index(self.size());
         unsafe {
-            self.entries[index].is_set()
+            self.entries.get(index).is_set()
         }
     }
 }
@@ -1204,7 +1205,8 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
 
         // Grab lock on wait condition
         let signal_needed = &mut d.signal_needed;
-        d.wait_condition.lock_cond(|cond| {
+        {
+            let lock = d.wait_condition.lock();
             while n > available {
                 // Communicate intent to wait to publisher
                 let _dummy: bool = signal_needed.swap(true, AcqRel);
@@ -1212,11 +1214,11 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
                 available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 if n > available {
                     // Sleep
-                    cond.wait();
+                    lock.cond.wait();
                     available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 }
             }
-        });
+        }
 
         available
     }
@@ -1253,9 +1255,10 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
 
         // If so, acquire the lock and signal on the wait condition
         if signal_needed {
-            d.wait_condition.lock_cond(|cond| {
-                cond.broadcast();
-            });
+            {
+                let lock = d.wait_condition.lock();
+                lock.cond.broadcast();
+            }
 
             // This is a bit of a hack to work around the fact that the Mutex will occasionally
             // start executing the publisher's task when the consumer unlocks it, starving the
@@ -1653,7 +1656,7 @@ impl<
     pub fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> (~[Consumer<CSB>], FinalConsumer<CSB>) {
+    ) -> (Vec<Consumer<CSB>>, FinalConsumer<CSB>) {
         assert!(self.sequence_barrier.get_dependencies().len() == 0, "The create_consumer_pipeline method can only be called once.");
 
         // Create each stage in the chain, adding the previous stage as a gating dependency
@@ -1662,7 +1665,7 @@ impl<
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
-                vec::with_capacity::<Consumer<CSB>>(count_nonfinal_consumers);
+                Vec::<Consumer<CSB>>::with_capacity(count_nonfinal_consumers);
         let final_consumer;
 
         for _ in range(0, count_nonfinal_consumers) {
