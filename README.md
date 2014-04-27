@@ -7,9 +7,11 @@ from the [LMAX Disruptor](http://lmax-exchange.github.io/disruptor/) project.
 
 # Building
 
-There's no fancy build infrastructure yet, but if you have a working rust
-compiler on your path, you should be able to run build.sh to get an optimized
-build of the unit tests and a simple set of microbenchmarks.
+With a working rust compiler on your path, run build.sh to get an optimized
+build of the unit tests and a simple set of microbenchmarks. The code is
+developed against Rust's master branch, and periodically ported to newer
+versions. It's currently tested to work with rustc at the following commit:
+ade02bb5349b9ea5ad47cf8cdd61ad91057148d1
 
 # License
 
@@ -33,10 +35,12 @@ However, current users can enjoy the following features:
 # Roadmap
 
 This is a list of things that may be implemented in the near future:
+ * Benchmarks that test latency
  * Tests for unicast pipelines with more than one consumer
+ * Porting benchmarks to Rust's built-in benchmark framework
+ * Modularized source tree
  * Batch publishing APIs (it's supported in the core code, but not in the public
    API yet)
- * More convenient APIs on the consumer side
  * Consumers that process events from the same stage of the pipeline in parallel
    (in other words, each event is shared by all consumers)
  * Unsafe API to allow parallel consumers to mutate the data they're processing
@@ -44,6 +48,4 @@ This is a list of things that may be implemented in the near future:
  * If possible, a safe API to allow parallel consumers mutable access to
    separate parts of the data, using reflection to verify safety at runtime
    before running the pipeline
- * Add more unit tests in general
- * Add a more diverse set of performance tests
- * Implement some performance tests in Rust's built-in benchmark framework
+ * More unit tests in general
