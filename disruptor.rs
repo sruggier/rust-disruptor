@@ -763,7 +763,7 @@ pub trait PublishingWaitStrategy : Clone + Send {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: uint,
-        calculate_available: |gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint| -> uint
+        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
     ) -> uint;
 
     /**
@@ -786,7 +786,7 @@ fn calculate_available_list(
     waiting_sequence: SequenceNumber,
     dependencies: &[SequenceReader],
     buffer_size: uint,
-    calculate_available: &|gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint| -> uint
+    calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
 ) -> uint {
     let mut available = uint::MAX;
     for consumer_sequence in dependencies.iter() {
@@ -832,13 +832,13 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: uint,
-        calculate_available: |gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint| -> uint
+        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
     ) -> uint {
         let mut available = 0;
         while available < n {
             // busy wait
             available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
-                &calculate_available);
+                calculate_available);
         }
         available
     }
@@ -867,7 +867,7 @@ fn spin_for_consumer_retries(
     waiting_sequence: SequenceNumber,
     dependencies: &[SequenceReader],
     buffer_size: uint,
-    calculate_available: & |gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint| -> uint,
+    calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint,
     max_tries: uint
 ) -> uint {
     let mut tries = 0;
@@ -973,14 +973,14 @@ impl PublishingWaitStrategy for YieldWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: uint,
-        calculate_available: |
+        calculate_available: &fn(
             gating_sequence: SequenceNumber,
             waiting_sequence: SequenceNumber,
             batch_size: uint
-        | -> uint
+        ) -> uint
     ) -> uint {
         let mut available = spin_for_consumer_retries(n, waiting_sequence, dependencies, buffer_size,
-            &calculate_available, self.max_spin_tries_consumer);
+            calculate_available, self.max_spin_tries_consumer);
 
         if available >= n {
             return available;
@@ -988,7 +988,7 @@ impl PublishingWaitStrategy for YieldWaitStrategy {
 
         while n > available {
             available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
-                &calculate_available);
+                calculate_available);
             task::deschedule();
         }
 
@@ -1231,11 +1231,11 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: uint,
-        calculate_available: |
+        calculate_available: &fn(
             gating_sequence: SequenceNumber,
             waiting_sequence: SequenceNumber,
             batch_size: uint
-        | -> uint
+        ) -> uint
     ) -> uint {
         let w = YieldWaitStrategy::new_with_retry_count(
             self.max_spin_tries_publisher, self.max_spin_tries_consumer
@@ -1465,7 +1465,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier
     fn next_n_real(&mut self, batch_size: uint) -> uint {
         let current_sequence = self.sequence.get_owned();
         let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence,
-                self.dependencies, self.ring_buffer.size(), calculate_available_publisher);
+                self.dependencies, self.ring_buffer.size(), &calculate_available_publisher);
         available
     }
 
@@ -1554,7 +1554,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier
         let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence,
                 &self.cursor, self.sb.ring_buffer.size());
         let a = self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence,
-                self.sb.dependencies, self.sb.ring_buffer.size(), calculate_available_consumer);
+                self.sb.dependencies, self.sb.ring_buffer.size(), &calculate_available_consumer);
         // wait_for_consumers returns uint::MAX if there are no other dependencies
         cmp::min(available, a)
     }
@@ -2123,7 +2123,7 @@ impl<T: Send, W: ResizingWaitStrategy>
         let current_size = self.sb.ring_buffer.size();
         let mut available = self.sb.wait_strategy.try_wait_for_consumers(
             batch_size, self.get_current(), self.sb.dependencies, current_size,
-            calculate_available_publisher_resizing);
+            &calculate_available_publisher_resizing);
 
         if available < batch_size {
             // The ResizingWaitStrategy decided that we should allocate a new buffer instead of
@@ -2372,7 +2372,7 @@ trait ResizingWaitStrategy : ProcessingWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: uint,
-        calculate_available: |gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint| -> uint
+        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
     ) -> uint;
 }
 
@@ -2432,7 +2432,7 @@ impl TimeoutResizeWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: uint,
-        calculate_available: |gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint| -> uint
+        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
     ) -> uint {
         // Try once before querying the current time, in case the slots have become available since
         // the last wait.
@@ -2441,7 +2441,7 @@ impl TimeoutResizeWaitStrategy {
             waiting_sequence,
             dependencies,
             buffer_size,
-            &calculate_available,
+            calculate_available,
             1
         );
         if available >= n {
@@ -2460,7 +2460,7 @@ impl TimeoutResizeWaitStrategy {
             waiting_sequence,
             dependencies,
             buffer_size,
-            &calculate_available,
+            calculate_available,
             self.wait_strategy.max_spin_tries_consumer
         );
         if available >= n {
@@ -2476,7 +2476,7 @@ impl TimeoutResizeWaitStrategy {
             }
 
             available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
-                &calculate_available);
+                calculate_available);
             task::deschedule();
         }
         // If the timeout was reached, this will be less than n
@@ -2491,7 +2491,7 @@ impl ResizingWaitStrategy for TimeoutResizeWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: uint,
-        calculate_available: |gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint| -> uint
+        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
     ) -> uint {
         // Always leave an extra slot available, for use being marked if we decide to allocate a
         // larger buffer.
@@ -2534,7 +2534,7 @@ impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: uint,
-        calculate_available: |gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint| -> uint
+        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: uint) -> uint
     ) -> uint {
         // This code path should be unused
         self.wait_strategy.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size, calculate_available)
