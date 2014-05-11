@@ -5,6 +5,20 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+
+// Copy rust-http's crate-id style for now. Until the API stabilizes, the versioning scheme merely
+// needs to convey that it is unstable.
+#![crate_id = "disruptor#0.1-pre"]
+#![desc = "Fast inter-thread communication for Rust"]
+// I used SPDX abbreviations here
+#![license = "MIT/Apache-2.0"]
+#![crate_type = "rlib"]
+#![crate_type = "dylib"]
+
+#![feature(globs)]
+#![feature(phase)]
+
+#[phase(syntax, link)] extern crate log;
 extern crate sync;
 extern crate time;
 use self::sync::raw::Mutex;

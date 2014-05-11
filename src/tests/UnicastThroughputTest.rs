@@ -8,6 +8,7 @@
 
 #![feature(phase)]
 #[phase(syntax, link)] extern crate log;
+extern crate disruptor;
 extern crate native;
 extern crate time;
 use time::precise_time_ns;
@@ -17,7 +18,6 @@ use std::task::{spawn};
 
 use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
 use benchmark_utils::{parse_args};
-mod disruptor;
 mod benchmark_utils;
 
 /**
