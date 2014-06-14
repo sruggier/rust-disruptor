@@ -35,7 +35,6 @@ However, current users can enjoy the following features:
 # Roadmap
 
 This is a list of things that may be implemented in the near future:
- * Benchmarks that test latency
  * Tests for unicast pipelines with more than one consumer
  * Porting benchmarks to Rust's built-in benchmark framework
  * Modularized source tree
