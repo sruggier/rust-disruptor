@@ -7,11 +7,34 @@ from the [LMAX Disruptor](http://lmax-exchange.github.io/disruptor/) project.
 
 # Building
 
-With a working rust compiler on your path, run build.sh to get an optimized
-build of the unit tests and a simple set of microbenchmarks. The code is
-developed against Rust's master branch, and periodically ported to newer
-versions. It's currently tested to work with rustc at the following commit:
-ade02bb5349b9ea5ad47cf8cdd61ad91057148d1
+The build system requires the following items in the path:
+ * git (to clone the RustCMake submodule)
+ * CMake 2.8
+ * rustc
+
+For those in a hurry, initiate the build with the following command:
+	./build.sh
+
+You can also build manually, with the following sequence of commands:
+	git submodule init
+	git submodule update
+
+	mkdir -p build
+	cd build
+	cmake ..
+	make
+
+Optionally, you can pass `-j <jobs>` to run multiple build tasks in parallel
+and save time.
+
+The build will place built files under `build` in the following directories:
+	lib     # the main library
+	test    # executables that can be run with no arguments
+	example # executables that can be run with --bench
+
+The code is developed against Rust's master branch, and periodically ported to
+newer versions. It's currently tested to work with rustc at the following
+commit: ade02bb5349b9ea5ad47cf8cdd61ad91057148d1
 
 # License
 
