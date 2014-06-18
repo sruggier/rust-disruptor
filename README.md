@@ -5,6 +5,20 @@ tasks, fulfilling use cases similar to the built-in pipes API, but with better
 performance. The core approach and many of the algorithms are based on ideas
 from the [LMAX Disruptor](http://lmax-exchange.github.io/disruptor/) project.
 
+# Features
+
+This is a basic proof-of-concept, currently, so most functionality is missing.
+However, current users can enjoy the following features:
+ * Unicast pipelines consisting of a single publisher and one or more stages of
+   consumer.
+ * A general purpose blocking wait strategy that causes the receiver to
+   eventually block if no items are sent
+ * A spinning wait strategy that roughly triples performance compared to the
+   blocking strategy.
+ * A yielding wait strategy that has comparable performance to the spinning
+   strategy when the CPU is idle, but doesn't waste as many CPU cycles when
+   other software is executing.
+
 # Building
 
 The build system requires the following items in the path:
@@ -40,20 +54,6 @@ commit: ade02bb5349b9ea5ad47cf8cdd61ad91057148d1
 
 To be compatible with Rust, this library is dual-licenced under the terms of the
 MIT and Apache 2 licenses.
-
-# Features
-
-This is a basic proof-of-concept, currently, so most functionality is missing.
-However, current users can enjoy the following features:
- * Unicast pipelines consisting of a single publisher and one or more stages of
-   consumer.
- * A general purpose blocking wait strategy that causes the receiver to
-   eventually block if no items are sent
- * A spinning wait strategy that roughly triples performance compared to the
-   blocking strategy.
- * A yielding wait strategy that has comparable performance to the spinning
-   strategy when the CPU is idle, but doesn't waste as many CPU cycles when
-   other software is executing.
 
 # Roadmap
 
