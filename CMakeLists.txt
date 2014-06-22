@@ -61,6 +61,7 @@ rust_crate(
 rust_crate_auto(
 	src/tests/UnicastThroughputTest.rs
 	TARGET_NAME UNICAST_THROUGHPUT_TEST
+	DEPENDS ${DISRUPTOR_LIB_ARTIFACTS}
 	DESTINATION test
 )
 
@@ -68,6 +69,7 @@ rust_crate_auto(
 	src/tests/benchmarks.rs
 	TARGET_NAME BENCHMARKS
 	DESTINATION bench
+	DEPENDS ${DISRUPTOR_LIB_ARTIFACTS}
 	OTHER_RUSTC_FLAGS --test
 )
 
