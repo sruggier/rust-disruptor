@@ -8,7 +8,7 @@
 
 // Copy rust-http's crate-id style for now. Until the API stabilizes, the versioning scheme merely
 // needs to convey that it is unstable.
-#![crate_id = "disruptor#0.1-pre"]
+#![crate_name = "disruptor"]
 #![desc = "Fast inter-thread communication for Rust"]
 // I used SPDX abbreviations here
 #![license = "MIT/Apache-2.0"]
