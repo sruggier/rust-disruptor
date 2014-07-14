@@ -191,7 +191,7 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
         mstc
     );
     let consumer = publisher.create_single_consumer_pipeline();
-    let desc = format!("disruptor::TimeoutResizeWaitStrategy\\{t: {}, p: {}, c: {}\\}",
+    let desc = format!("disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
         resize_timeout,
         mstp,
         mstc

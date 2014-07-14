@@ -1040,8 +1040,8 @@ impl ProcessingWaitStrategy for YieldWaitStrategy {
 
 impl fmt::Show for YieldWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf,
-            "disruptor::YieldWaitStrategy\\{p: {}, c: {}\\}",
+        write!(f,
+            "disruptor::YieldWaitStrategy{{p: {}, c: {}}}",
             self.max_spin_tries_publisher,
             self.max_spin_tries_consumer
         )
@@ -1288,8 +1288,8 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
 
 impl fmt::Show for BlockingWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf,
-            "disruptor::BlockingWaitStrategy\\{p: {}, c: {}\\}",
+        write!(f,
+            "disruptor::BlockingWaitStrategy{{p: {}, c: {}}}",
             self.max_spin_tries_publisher,
             self.max_spin_tries_consumer
         )
@@ -2558,8 +2558,8 @@ impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
 
 impl fmt::Show for TimeoutResizeWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf,
-            "disruptor::TimeoutResizeWaitStrategy\\{t: {}, p: {}, c: {}\\}",
+        write!(f,
+            "disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
             self.timeout,
             self.wait_strategy.max_spin_tries_publisher,
             self.wait_strategy.max_spin_tries_consumer
