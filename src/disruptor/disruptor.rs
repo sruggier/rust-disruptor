@@ -864,7 +864,7 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
 
 impl fmt::Show for SpinWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "disruptor::SpinWaitStrategy")
+        write!(f, "disruptor::SpinWaitStrategy")
     }
 }
 
