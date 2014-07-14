@@ -240,6 +240,7 @@ impl<T> Drop for RingBufferData<T> {
  * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
  * processing.
  */
+#[deriving(Clone)]
 struct SequenceNumber(uint);
 
 /**
@@ -2021,22 +2022,20 @@ fn test_resizeable_ring_buffer() {
 
     // Hypothetical publisher writes a value, then resizes, then writes 2 more values (3 total,
     // whereas the initial buffer only holds two values)
-    let mut s = SequenceNumber(0);
-    let SequenceNumber(ref mut s_value) = s;
-    unsafe { publisher_rb.set(s, v[0]); }
-    *s_value += 1;
-    unsafe { publisher_rb.reallocate(s, 4); }
-    unsafe { publisher_rb.set(s, v[1]); }
-    *s_value += 1;
-    unsafe { publisher_rb.set(s, v[2]); }
+    let mut s = 0;
+    unsafe { publisher_rb.set(SequenceNumber(s), v[0]); }
+    s += 1;
+    unsafe { publisher_rb.reallocate(SequenceNumber(s), 4); }
+    unsafe { publisher_rb.set(SequenceNumber(s), v[1]); }
+    s += 1;
+    unsafe { publisher_rb.set(SequenceNumber(s), v[2]); }
 
     // Consumer gets all three values, switching to the next buffer as needed
-    let mut s2 = SequenceNumber(0);
-    let SequenceNumber(ref mut s2_value) = s2;
+    let mut s2 = 0;
     for i in v.iter() {
-        let _switch_occurred = unsafe { consumer_rb.try_switch_next(s2) };
-        assert_eq!( unsafe { consumer_rb.take(s2) }, *i);
-        *s2_value += 1;
+        let _switch_occurred = unsafe { consumer_rb.try_switch_next(SequenceNumber(s2)) };
+        assert_eq!( unsafe { consumer_rb.take(SequenceNumber(s2)) }, *i);
+        s2 += 1;
     }
 }
 
