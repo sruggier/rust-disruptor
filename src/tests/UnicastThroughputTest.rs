@@ -7,10 +7,12 @@
 // except according to those terms.
 
 #![feature(phase)]
-#[phase(syntax, link)] extern crate log;
+extern crate debug;
 extern crate disruptor;
+#[phase(plugin,link)] extern crate log;
 extern crate native;
 extern crate time;
+
 use time::precise_time_ns;
 use std::fmt;
 use std::u64;

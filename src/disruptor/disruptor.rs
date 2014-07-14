@@ -19,7 +19,8 @@
 #![feature(phase)]
 #![feature(unsafe_destructor)]
 
-#[phase(syntax, link)] extern crate log;
+#[phase(plugin,link)] extern crate log;
+extern crate debug;
 extern crate sync;
 extern crate time;
 use self::sync::raw::Mutex;
