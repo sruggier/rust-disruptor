@@ -15,6 +15,7 @@ extern crate time;
 
 use time::precise_time_ns;
 use std::fmt;
+use std::string;
 use std::u64;
 use std::task::{spawn};
 
@@ -109,7 +110,7 @@ fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     iterations: u64,
     publisher: Publisher<SB>,
     consumer: FinalConsumer<CSB>,
-    desc: ~str,
+    desc: string::String,
     spawn_fn: | proc(): Send |
 ) {
     let (result_sender, result_receiver) = channel::<u64>();

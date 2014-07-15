@@ -27,11 +27,11 @@ extern crate time;
 use self::sync::raw::Mutex;
 use self::time::precise_time_ns;
 use std::clone::Clone;
-use std::cast;
+use std::mem;
 use std::cmp;
 use std::fmt;
-use std::num::Bitwise;
 use std::option::{Option};
+use std::owned::Box;
 use std::ptr;
 use std::task;
 use std::vec::Vec;
@@ -63,8 +63,8 @@ impl<T> Slot<T> {
      * storing it as a raw pointer.
      */
     fn new() -> Slot<T> {
-        let payload: ~Option<T> = ~None;
-        let payload_raw: *mut Option<T> = unsafe { cast::transmute(payload) };
+        let payload: Box<Option<T>> = box None;
+        let payload_raw: *mut Option<T> = unsafe { mem::transmute(payload) };
         Slot {
             payload: payload_raw
         }
@@ -140,7 +140,7 @@ impl<T> Slot<T> {
      */
     unsafe fn destroy(&mut self) {
         // Deallocate
-        let _payload: ~Option<T> = cast::transmute(self.payload);
+        let _payload: Box<Option<T>> = mem::transmute(self.payload);
         self.payload = ptr::mut_null();
     }
 }
@@ -1604,7 +1604,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
  * of dependent consumers.
  */
 pub struct Publisher<SB> {
-    sequence_barrier: SB,
+    sequence_barrier: Unsafe<SB>,
 }
 
 impl<T: Send, W: ProcessingWaitStrategy>
@@ -1627,21 +1627,20 @@ impl<T: Send, SB: SequenceBarrier<T> > Publisher<SB> {
     /// Generic constructor that works with any RingBufferTrait-conforming type
     fn new_common(sb: SB) -> Publisher<SB> {
         Publisher {
-            sequence_barrier: sb,
+            sequence_barrier: Unsafe::new(sb),
         }
     }
 
     pub fn publish(&self, value: T) {
         unsafe {
-            // FIXME #5372
-            let self_mut = cast::transmute_mut(self);
+            let sb = &mut *self.sequence_barrier.get();
             // Wait for available slot
-            self_mut.sequence_barrier.next();
+            sb.next();
             {
-                self_mut.sequence_barrier.set(value);
+                sb.set(value);
             }
             // Make the item available to downstream consumers
-            self_mut.sequence_barrier.release();
+            sb.release();
         }
     }
 }
@@ -1673,11 +1672,15 @@ impl<
         &mut self,
         count_consumers: uint
     ) -> (Vec<Consumer<CSB>>, FinalConsumer<CSB>) {
-        assert!(self.sequence_barrier.get_dependencies().len() == 0, "The create_consumer_pipeline method can only be called once.");
+        let sequence_barrier;
+        unsafe {
+            sequence_barrier = &mut *self.sequence_barrier.get();
+        }
+        assert!(sequence_barrier.get_dependencies().len() == 0, "The create_consumer_pipeline method can only be called once.");
 
         // Create each stage in the chain, adding the previous stage as a gating dependency
 
-        let mut sb = self.sequence_barrier.new_consumer_barrier();
+        let mut sb = sequence_barrier.new_consumer_barrier();
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
@@ -1697,7 +1700,7 @@ impl<
         let c = Consumer::new(sb);
         final_consumer = FinalConsumer::new(c);
 
-        self.sequence_barrier.set_dependencies(dependencies);
+        sequence_barrier.set_dependencies(dependencies);
 
         (nonfinal_consumers, final_consumer)
     }
@@ -1708,14 +1711,14 @@ impl<
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
 struct Consumer<SB> {
-    sequence_barrier: SB,
+    sequence_barrier: Unsafe<SB>,
 }
 
 impl<T: Send, SB: SequenceBarrier<T>>
         Consumer<SB> {
     fn new(sb: SB) -> Consumer<SB> {
         Consumer {
-            sequence_barrier: sb
+            sequence_barrier: Unsafe::new(sb),
         }
     }
 
@@ -1725,14 +1728,13 @@ impl<T: Send, SB: SequenceBarrier<T>>
       */
     pub fn consume(&self, consume_callback: |value: &T|) {
         unsafe {
-            // FIXME #5372
-            let self_mut = cast::transmute_mut(self);
-            self_mut.sequence_barrier.next();
+            let sequence_barrier = &mut *self.sequence_barrier.get();
+            sequence_barrier.next();
             {
-                let item = self_mut.sequence_barrier.get();
+                let item = sequence_barrier.get();
                 consume_callback(item);
             }
-            self_mut.sequence_barrier.release();
+            sequence_barrier.release();
 
         }
     }
@@ -1797,13 +1799,13 @@ impl <T: Send, SB: SequenceBarrier<T>>
      */
     pub fn take(&self) -> T {
         unsafe {
-            let sc = &mut cast::transmute_mut(self).sc;
-            sc.sequence_barrier.next();
+            let sequence_barrier = &mut *self.sc.sequence_barrier.get();
+            sequence_barrier.next();
             let value;
             {
-                 value = sc.sequence_barrier.take();
+                 value = sequence_barrier.take();
             }
-            sc.sequence_barrier.release();
+            sequence_barrier.release();
             value
         }
     }
