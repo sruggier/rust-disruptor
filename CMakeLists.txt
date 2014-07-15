@@ -83,14 +83,18 @@ add_custom_target(
 		${UNICAST_THROUGHPUT_TEST_ARTIFACTS}
 )
 
+# Include the built library in the search path, so that the tests can run
+set(LIBRARY_SEARCH_PATH "${CMAKE_BINARY_DIR}/lib")
+set(LIBRARY_SEARCH_PATH "${LIBRARY_SEARCH_PATH}:$ENV{LD_LIBRARY_PATH}")
+
 # Add a test target to build and run the remaining items. It's not supported to run these in
 # parallel.
 add_custom_target(
 	run_tests
 	COMMENT "Running tests and benchmarks"
 	COMMAND test/disruptor
-	COMMAND bench/benchmarks --bench
-	COMMAND test/UnicastThroughputTest
+	COMMAND env LD_LIBRARY_PATH=${LIBRARY_SEARCH_PATH} bench/benchmarks --bench
+	COMMAND env LD_LIBRARY_PATH=${LIBRARY_SEARCH_PATH} test/UnicastThroughputTest
 	VERBATIM
 	DEPENDS disruptor_tests
 )
