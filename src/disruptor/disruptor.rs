@@ -19,6 +19,7 @@
 #![feature(phase)]
 #![feature(unsafe_destructor)]
 
+extern crate alloc;
 #[phase(plugin,link)] extern crate log;
 extern crate debug;
 extern crate sync;
@@ -35,7 +36,8 @@ use std::ptr;
 use std::task;
 use std::vec::Vec;
 use std::uint;
-use std::sync::arc::UnsafeArc;
+use alloc::arc::Arc;
+use std::ty::Unsafe;
 use std::sync::atomics::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
 
 /**
@@ -283,14 +285,14 @@ fn wrap_boundary(buffer_size: uint) -> uint {
 ///
 /// FIXME: remove this if/when UnsafeArc exposes similar functions.
 struct UncheckedUnsafeArc<T> {
-    arc: UnsafeArc<T>,
+    arc: Arc<Unsafe<T>>,
     data: *mut T,
 }
 
 impl<T: Send> UncheckedUnsafeArc<T> {
     fn new(data: T) -> UncheckedUnsafeArc<T> {
-        let arc = UnsafeArc::new(data);
-        let data = arc.get();
+        let arc = Arc::new(Unsafe::new(data));
+        let data = unsafe { arc.get() };
         UncheckedUnsafeArc {
             arc: arc,
             data: data,
