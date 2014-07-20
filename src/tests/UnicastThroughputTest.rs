@@ -13,6 +13,8 @@ extern crate disruptor;
 extern crate native;
 extern crate time;
 
+use std::task::TaskBuilder;
+use native::task::NativeTaskBuilder;
 use time::precise_time_ns;
 use std::fmt;
 use std::string;
@@ -166,13 +168,20 @@ fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
     run_disruptor_benchmark(iterations, publisher, consumer, desc, spawn_fn);
 }
 
+/**
+ * Spawn a task on a native thread.
+ */
+fn spawn_native(f: proc(): Send) {
+    TaskBuilder::new().native().spawn(f);
+}
+
 fn run_disruptor_benchmark_spin(iterations: u64) {
     // SpinWaitStrategy fully blocks the threads it's on, so the second task
     // needs to be native to avoid deadlock. In real-world usage, both tasks
     // should be native, but for now, the publisher side is run on the main
     // thread, which is green as of this writing. We aren't using our green
     // thread pool for anything else, so it should be fine.
-    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy, native::task::spawn);
+    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy, spawn_native);
 }
 
 fn run_disruptor_benchmark_yield(iterations: u64) {
