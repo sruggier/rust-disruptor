@@ -793,7 +793,7 @@ pub trait PublishingWaitStrategy : Clone + Send {
      * work, and consumers waiting using a blocking wait strategy may sleep indefinitely (until a
      * second item is published).
      */
-    fn notifyAllWaiters(&mut self);
+    fn notify_all_waiters(&mut self);
 }
 
 /**
@@ -861,7 +861,7 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
         available
     }
 
-    fn notifyAllWaiters(&mut self) {
+    fn notify_all_waiters(&mut self) {
     }
 }
 
@@ -1013,7 +1013,7 @@ impl PublishingWaitStrategy for YieldWaitStrategy {
         available
     }
 
-    fn notifyAllWaiters(&mut self) {
+    fn notify_all_waiters(&mut self) {
     }
 }
 
@@ -1082,7 +1082,7 @@ impl fmt::Show for YieldWaitStrategy {
  * # Algorithm
  *
  * The publisher executes the following steps whenever releasing items:
- *  - Release items via an atomic operation with release semantics (before calling notifyAllWaiters)
+ *  - Release items via an atomic operation with release semantics (before calling notify_all_waiters)
  *  - Check if there are any waiters using a read-modify-write operation on a shared variable (with
  *    rel-acq semantics)
  *  - If so, acquire the lock and signal on the wait condition
@@ -1262,7 +1262,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
         w.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size, calculate_available)
     }
 
-    fn notifyAllWaiters(&mut self) {
+    fn notify_all_waiters(&mut self) {
         let d;
         unsafe {
             d = self.d.get();
@@ -1487,7 +1487,7 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>> SequenceBarrier
 
     fn release_n_real(&mut self, batch_size: uint) {
         self.sequence.advance_and_flush(batch_size, self.ring_buffer.size());
-        self.wait_strategy.notifyAllWaiters();
+        self.wait_strategy.notify_all_waiters();
     }
 
     fn size(&self) -> uint { self.ring_buffer.size() }
@@ -2556,8 +2556,8 @@ impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
         self.wait_strategy.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size, calculate_available)
     }
 
-    fn notifyAllWaiters(&mut self) {
-        self.wait_strategy.notifyAllWaiters();
+    fn notify_all_waiters(&mut self) {
+        self.wait_strategy.notify_all_waiters();
     }
 }
 
