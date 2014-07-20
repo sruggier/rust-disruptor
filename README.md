@@ -48,7 +48,7 @@ The build will place built files under `build` in the following directories:
 
 The code is developed against Rust's master branch, and periodically ported to
 newer versions. It's currently tested to work with rustc at the following
-commit: ade02bb5349b9ea5ad47cf8cdd61ad91057148d1
+commit: 6323e8653cf46da4b4d445db491fc5b0c78e86d4
 
 # License
 
