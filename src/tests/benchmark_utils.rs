@@ -42,12 +42,12 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
 
     let args = ::std::os::args();
     let arg_flags = args.tail();
-    let argv0 = args[0];
+    let argv0 = &args[0];
 
     let matches = match getopts::getopts(arg_flags, opts.as_slice()) {
         Ok(m) => m,
         Err(fail) => {
-            println!("{}\nUse '{} --help' to see a list of valid options.", fail.to_err_msg(), *argv0);
+            println!("{}\nUse '{} --help' to see a list of valid options.", fail, argv0);
             fail!();
         }
     };
