@@ -13,8 +13,6 @@ extern crate disruptor;
 extern crate native;
 extern crate time;
 
-use std::task::TaskBuilder;
-use native::task::NativeTaskBuilder;
 use time::precise_time_ns;
 use std::fmt;
 use std::string;
@@ -23,6 +21,7 @@ use std::task::{spawn};
 
 use disruptor::{Publisher,FinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
 use benchmark_utils::{parse_args};
+use benchmark_utils::spawn_native;
 mod benchmark_utils;
 
 /**
@@ -166,13 +165,6 @@ fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
     let mut publisher = Publisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_single_consumer_pipeline();
     run_disruptor_benchmark(iterations, publisher, consumer, desc, spawn_fn);
-}
-
-/**
- * Spawn a task on a native thread.
- */
-fn spawn_native(f: proc(): Send) {
-    TaskBuilder::new().native().spawn(f);
 }
 
 fn run_disruptor_benchmark_spin(iterations: u64) {

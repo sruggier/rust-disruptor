@@ -183,7 +183,7 @@ impl<T> RingBufferData<T> {
     fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
         let index = sequence.as_index(self.size());
         unsafe {
-            self.entries.get(index).get()
+            self.entries[index].get()
         }
     }
 
@@ -219,7 +219,7 @@ impl<T> RingBufferData<T> {
     fn is_set(&self, sequence: SequenceNumber) -> bool {
         let index = sequence.as_index(self.size());
         unsafe {
-            self.entries.get(index).is_set()
+            self.entries[index].is_set()
         }
     }
 }

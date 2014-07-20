@@ -1,5 +1,15 @@
 extern crate getopts;
 
+use std::task::TaskBuilder;
+use native::task::NativeTaskBuilder;
+
+/**
+ * Spawn a task on a native thread.
+ */
+pub fn spawn_native(f: proc(): Send) {
+    TaskBuilder::new().native().spawn(f);
+}
+
 /// Contains values obtained from common argument processing.
 pub struct CommonTestOpts {
     pub n_iterations: u64,
@@ -32,7 +42,7 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
 
     let args = ::std::os::args();
     let arg_flags = args.tail();
-    let argv0 = args.get(0);
+    let argv0 = args[0];
 
     let matches = match getopts::getopts(arg_flags, opts.as_slice()) {
         Ok(m) => m,

@@ -8,6 +8,9 @@ use test::Bencher;
 use std::u64;
 use std::task::{spawn};
 
+use benchmark_utils::spawn_native;
+mod benchmark_utils;
+
 /**
  * Run a two-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
  *
@@ -56,7 +59,7 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy>(
 #[bench]
 fn measure_ping_pong_latency_two_ringbuffers_spin(b: &mut Bencher) {
     let w = SpinWaitStrategy;
-    measure_ping_pong_latency_two_ringbuffers_generic(b, w, native::task::spawn);
+    measure_ping_pong_latency_two_ringbuffers_generic(b, w, spawn_native);
 }
 
 #[bench]
@@ -128,17 +131,17 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
 #[bench]
 fn measure_ping_pong_latency_one_ringbuffer_spin(b: &mut Bencher) {
     let w = SpinWaitStrategy;
-    measure_ping_pong_latency_one_ringbuffer_generic(b, w, native::task::spawn);
+    measure_ping_pong_latency_one_ringbuffer_generic(b, w, spawn_native);
 }
 
 #[bench]
 fn measure_ping_pong_latency_one_ringbuffer_yield(b: &mut Bencher) {
     let w = YieldWaitStrategy::new();
-    measure_ping_pong_latency_one_ringbuffer_generic(b, w, native::task::spawn);
+    measure_ping_pong_latency_one_ringbuffer_generic(b, w, spawn_native);
 }
 
 #[bench]
 fn measure_ping_pong_latency_one_ringbuffer_block(b: &mut Bencher) {
     let w = BlockingWaitStrategy::new();
-    measure_ping_pong_latency_one_ringbuffer_generic(b, w, native::task::spawn);
+    measure_ping_pong_latency_one_ringbuffer_generic(b, w, spawn_native);
 }
