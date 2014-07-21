@@ -3,7 +3,7 @@ extern crate native;
 extern crate time;
 extern crate test;
 
-use disruptor::{Publisher, ProcessingWaitStrategy, SpinWaitStrategy, YieldWaitStrategy, BlockingWaitStrategy};
+use disruptor::{SinglePublisher, ProcessingWaitStrategy, SpinWaitStrategy, YieldWaitStrategy, BlockingWaitStrategy};
 use test::Bencher;
 use std::u64;
 use std::task::{spawn};
@@ -26,9 +26,9 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy>(
     spawn_fn: | proc(): Send |,
 )
 {
-    let mut ping_publisher = Publisher::<u64, W>::new(8192, w.clone());
+    let mut ping_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
     let ping_consumer = ping_publisher.create_single_consumer_pipeline();
-    let mut pong_publisher = Publisher::<u64, W>::new(8192, w.clone());
+    let mut pong_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
     let pong_consumer = pong_publisher.create_single_consumer_pipeline();
 
     spawn_fn(proc() {
@@ -91,7 +91,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
     spawn_fn: | proc(): Send |,
 )
 {
-    let mut ping_publisher = Publisher::<u64, W>::new(8192, w.clone());
+    let mut ping_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
 
     // The second task listens for items from ping_consumer, and the publisher waits for the ping to
     // be processed by listening on pong_consumer before publishing the next item.

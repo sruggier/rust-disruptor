@@ -1423,7 +1423,7 @@ pub trait SequenceBarrier<T> : Send {
 
 /**
  * Split off from SequenceBarrier to reduce unnecessary type parameter requirements for general
- * users of the SequenceBarrier type, and users of the Publisher type.
+ * users of the SequenceBarrier type, and users of the SinglePublisher type.
  */
 trait NewConsumerBarrier<CSB> {
     /**
@@ -1603,30 +1603,30 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
  * Allows callers to wire up dependencies, then send values down the pipeline
  * of dependent consumers.
  */
-pub struct Publisher<SB> {
+pub struct SinglePublisher<SB> {
     sequence_barrier: Unsafe<SB>,
 }
 
 impl<T: Send, W: ProcessingWaitStrategy>
-        Publisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
+        SinglePublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
 
     /**
      * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
-     * Publisher object.
+     * SinglePublisher object.
      */
     pub fn new(size: uint, wait_strategy: W)
-            -> Publisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
+            -> SinglePublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
 
         let ring_buffer =  RingBuffer::<T>::new(size);
         let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
-        Publisher::<T, SinglePublisherSequenceBarrier<W, RingBuffer<T>> >::new_common(sb)
+        SinglePublisher::<T, SinglePublisherSequenceBarrier<W, RingBuffer<T>> >::new_common(sb)
     }
 }
 
-impl<T: Send, SB: SequenceBarrier<T> > Publisher<SB> {
+impl<T: Send, SB: SequenceBarrier<T> > SinglePublisher<SB> {
     /// Generic constructor that works with any RingBufferTrait-conforming type
-    fn new_common(sb: SB) -> Publisher<SB> {
-        Publisher {
+    fn new_common(sb: SB) -> SinglePublisher<SB> {
+        SinglePublisher {
             sequence_barrier: Unsafe::new(sb),
         }
     }
@@ -1649,7 +1649,7 @@ impl<
     T: Send,
     SB: SequenceBarrier<T> + NewConsumerBarrier<CSB>,
     CSB: SequenceBarrier<T> + NewConsumerBarrier<CSB>
-> Publisher<SB> {
+> SinglePublisher<SB> {
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      */
@@ -1742,11 +1742,11 @@ impl<T: Send, SB: SequenceBarrier<T>>
 
 #[cfg(test)]
 mod single_publisher_tests {
-    use super::{Publisher, SpinWaitStrategy};
+    use super::{SinglePublisher, SpinWaitStrategy};
 
     #[test]
     fn send_single_value() {
-        let mut publisher = Publisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let mut publisher = SinglePublisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
         publisher.publish(1);
         consumer.consume(|value: &int| {
@@ -1755,7 +1755,7 @@ mod single_publisher_tests {
     }
     #[test]
     fn send_single_value_via_take() {
-        let mut publisher = Publisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let mut publisher = SinglePublisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
         let value = 1;
         publisher.publish(value);
@@ -2078,11 +2078,11 @@ fn test_calculate_available_publisher_resizing() {
     assert_eq!(test(0, 0, buffer_size), 4);
     assert_eq!(test(0, 1, buffer_size), 3);
     assert_eq!(test(0, 2, buffer_size), 2);
-    // Publisher stops before using up last slot, last slot is reserved for signal
+    // The publisher stops before using up last slot, last slot is reserved for signal
     assert_eq!(test(0, 3, buffer_size), 1);
     // Consumer catches up
     assert_eq!(test(3, 3, buffer_size), 4);
-    // Publisher resizes here, new sequence value is 19 ( (6 % buffer_size) +
+    // The publisher resizes here, new sequence value is 19 ( (6 % buffer_size) +
     // wrap_boundary(buffer_size) + 1).
     assert_eq!(test(3, 6, buffer_size), 1);
     let new_buffer_size = 8;
@@ -2327,9 +2327,9 @@ pub static default_resize_timeout: uint = 500;
 /**
  * Specialization for resizable ring buffer.
  */
-impl<T: Send> Publisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
+impl<T: Send> SinglePublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
     /**
-     * Create a new Publisher using a resizable ring buffer, specifying the timeout after
+     * Create a new SinglePublisher using a resizable ring buffer, specifying the timeout after
      * which the publisher will allocate a larger buffer to publish items into.
      *
      * # Arguments
@@ -2343,7 +2343,7 @@ impl<T: Send> Publisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeW
         resize_timeout: uint,
         max_spin_tries_publisher: uint,
         max_spin_tries_consumer: uint
-    ) -> Publisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
+    ) -> SinglePublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
         let ring_buffer =  ResizableRingBuffer::<T>::new(size);
 
         let blocking_wait_strategy = BlockingWaitStrategy::new_with_retry_count(
@@ -2351,16 +2351,16 @@ impl<T: Send> Publisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeW
         let wait_strategy = TimeoutResizeWaitStrategy::new_with_timeout(
             resize_timeout, blocking_wait_strategy);
         let sb = SingleResizingPublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
-        Publisher::new_common(
+        SinglePublisher::new_common(
             sb
         )
     }
 
     /// Construct a TimeoutResizeWaitStrategy using the default parameters.
     pub fn new_resize_after_timeout(size: uint)
-    -> Publisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
+    -> SinglePublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
 
-        Publisher::new_resize_after_timeout_with_params(
+        SinglePublisher::new_resize_after_timeout_with_params(
             size,
             default_resize_timeout,
             default_max_spin_tries_publisher,
