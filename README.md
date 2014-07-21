@@ -25,6 +25,7 @@ The build system requires the following items in the path:
  * git (to clone the RustCMake submodule)
  * CMake 2.8
  * rustc
+ * Optional: inotifywait (for auto-rebuild.sh)
 
 For those in a hurry, initiate the build with the following command:
 	./build.sh
@@ -49,6 +50,12 @@ The build will place built files under `build` in the following directories:
 The code is developed against Rust's master branch, and periodically ported to
 newer versions. It's currently tested to work with rustc at the following
 commit: 3a37ed4412f571a079e9d365c226af23dfe9d224
+
+# Hacking
+
+The auto-rebuild.sh script rebuilds whenever any source files change. Leave it
+open in a terminal as you hack on the code for convenient feedback about compile
+errors, test results, and performance.
 
 # License
 
