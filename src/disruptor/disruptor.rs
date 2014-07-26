@@ -449,7 +449,7 @@ fn calculate_available_consumer(
 
 #[test]
 fn test_calculate_available_consumer() {
-    // Consumer waiting for publisher or earlier consumer
+    // A consumer waiting for publisher or earlier consumer
     assert!(1 == calculate_available_consumer(SequenceNumber(13), SequenceNumber(12), 8));
     assert!(1 == calculate_available_consumer(SequenceNumber(1), SequenceNumber(0), 2));
     assert!(2 == calculate_available_consumer(SequenceNumber(2), SequenceNumber(0), 2));
@@ -1671,7 +1671,7 @@ impl<
     pub fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> (Vec<Consumer<CSB>>, FinalConsumer<CSB>) {
+    ) -> (Vec<SingleConsumer<CSB>>, FinalConsumer<CSB>) {
         let sequence_barrier;
         unsafe {
             sequence_barrier = &mut *self.sequence_barrier.get();
@@ -1684,12 +1684,12 @@ impl<
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
-                Vec::<Consumer<CSB>>::with_capacity(count_nonfinal_consumers);
+                Vec::<SingleConsumer<CSB>>::with_capacity(count_nonfinal_consumers);
         let final_consumer;
 
         for _ in range(0, count_nonfinal_consumers) {
             let sb_next = sb.new_consumer_barrier();
-            let c = Consumer::new(sb);
+            let c = SingleConsumer::new(sb);
             sb = sb_next;
 
             nonfinal_consumers.push(c);
@@ -1697,7 +1697,7 @@ impl<
 
         // Last consumer gets the ability to take ownership
         let dependencies = vec!(sb.get_sequence());
-        let c = Consumer::new(sb);
+        let c = SingleConsumer::new(sb);
         final_consumer = FinalConsumer::new(c);
 
         sequence_barrier.set_dependencies(dependencies);
@@ -1710,14 +1710,14 @@ impl<
 /**
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
-struct Consumer<SB> {
+struct SingleConsumer<SB> {
     sequence_barrier: Unsafe<SB>,
 }
 
 impl<T: Send, SB: SequenceBarrier<T>>
-        Consumer<SB> {
-    fn new(sb: SB) -> Consumer<SB> {
-        Consumer {
+        SingleConsumer<SB> {
+    fn new(sb: SB) -> SingleConsumer<SB> {
+        SingleConsumer {
             sequence_barrier: Unsafe::new(sb),
         }
     }
@@ -1771,27 +1771,27 @@ mod single_publisher_tests {
 /**
  * The last consumer in a disruptor pipeline. Being the last consumer in the pipeline makes it
  * possible to move values out of the ring buffer, in addition to the functionality available from a
- * normal Consumer.
+ * normal SingleConsumer.
  */
 pub struct FinalConsumer<SB> {
-    sc: Consumer<SB>
+    sc: SingleConsumer<SB>
 }
 
 impl <T: Send, SB: SequenceBarrier<T>>
         FinalConsumer<SB> {
 
     /**
-     * Return a new FinalConsumer instance wrapped around a given Consumer instance. In
-     * addition to existing Consumer features, this object also allows the caller to take ownership
-     * of the items that it accesses.
+     * Return a new FinalConsumer instance wrapped around a given SingleConsumer instance. In
+     * addition to existing SingleConsumer features, this object also allows the caller to take
+     * ownership of the items that it accesses.
      */
-    fn new(sc: Consumer<SB>) -> FinalConsumer<SB> {
+    fn new(sc: SingleConsumer<SB>) -> FinalConsumer<SB> {
         FinalConsumer {
             sc: sc
         }
     }
 
-    /// See the Consumer.consume method.
+    /// See the SingleConsumer.consume method.
     pub fn consume(&self, consume_callback: |value: &T|) { self.sc.consume(consume_callback) }
 
     /**
@@ -2035,7 +2035,7 @@ fn test_resizeable_ring_buffer() {
     s += 1;
     unsafe { publisher_rb.set(SequenceNumber(s), v[2]); }
 
-    // Consumer gets all three values, switching to the next buffer as needed
+    // The consumer gets all three values, switching to the next buffer as needed
     let mut s2 = 0;
     for i in v.iter() {
         let _switch_occurred = unsafe { consumer_rb.try_switch_next(SequenceNumber(s2)) };
@@ -2080,7 +2080,7 @@ fn test_calculate_available_publisher_resizing() {
     assert_eq!(test(0, 2, buffer_size), 2);
     // The publisher stops before using up last slot, last slot is reserved for signal
     assert_eq!(test(0, 3, buffer_size), 1);
-    // Consumer catches up
+    // The consumer catches up
     assert_eq!(test(3, 3, buffer_size), 4);
     // The publisher resizes here, new sequence value is 19 ( (6 % buffer_size) +
     // wrap_boundary(buffer_size) + 1).
