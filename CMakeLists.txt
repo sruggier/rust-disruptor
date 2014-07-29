@@ -41,13 +41,6 @@ rust_crate(
 	DEPENDS ${DISRUPTOR_LIB_DEPENDS}
 )
 
-# Add library to default build target
-add_custom_target(
-	disruptor_library
-	ALL
-	DEPENDS ${DISRUPTOR_LIB_ARTIFACTS}
-)
-
 # build inline tests
 rust_crate(
 	src/disruptor/disruptor.rs
@@ -73,7 +66,8 @@ rust_crate_auto(
 	OTHER_RUSTC_FLAGS --test
 )
 
-# build tests, benchmarks, and examples by default
+# Build tests, benchmarks, and examples by default. This also results in the main library being
+# built by default.
 add_custom_target(
 	disruptor_tests
 	ALL
