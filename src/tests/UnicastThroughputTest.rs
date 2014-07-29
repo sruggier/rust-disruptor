@@ -19,7 +19,7 @@ use std::string;
 use std::u64;
 use std::task::{spawn};
 
-use disruptor::{SinglePublisher,FinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
+use disruptor::{SinglePublisher,SingleFinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
 use benchmark_utils::{parse_args};
 use benchmark_utils::spawn_native;
 mod benchmark_utils;
@@ -110,7 +110,7 @@ fn run_task_pipe_benchmark(iterations: u64) {
 fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
     iterations: u64,
     publisher: SinglePublisher<SB>,
-    consumer: FinalConsumer<CSB>,
+    consumer: SingleFinalConsumer<CSB>,
     desc: string::String,
     spawn_fn: | proc(): Send |
 ) {

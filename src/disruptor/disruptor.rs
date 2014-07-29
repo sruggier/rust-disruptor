@@ -1653,7 +1653,7 @@ impl<
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      */
-    pub fn create_single_consumer_pipeline(&mut self) -> FinalConsumer<CSB> {
+    pub fn create_single_consumer_pipeline(&mut self) -> SingleFinalConsumer<CSB> {
         let (_, c) = self.create_consumer_pipeline(1);
         c
     }
@@ -1671,7 +1671,7 @@ impl<
     pub fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> (Vec<SingleConsumer<CSB>>, FinalConsumer<CSB>) {
+    ) -> (Vec<SingleConsumer<CSB>>, SingleFinalConsumer<CSB>) {
         let sequence_barrier;
         unsafe {
             sequence_barrier = &mut *self.sequence_barrier.get();
@@ -1698,7 +1698,7 @@ impl<
         // Last consumer gets the ability to take ownership
         let dependencies = vec!(sb.get_sequence());
         let c = SingleConsumer::new(sb);
-        final_consumer = FinalConsumer::new(c);
+        final_consumer = SingleFinalConsumer::new(c);
 
         sequence_barrier.set_dependencies(dependencies);
 
@@ -1773,20 +1773,20 @@ mod single_publisher_tests {
  * possible to move values out of the ring buffer, in addition to the functionality available from a
  * normal SingleConsumer.
  */
-pub struct FinalConsumer<SB> {
+pub struct SingleFinalConsumer<SB> {
     sc: SingleConsumer<SB>
 }
 
 impl <T: Send, SB: SequenceBarrier<T>>
-        FinalConsumer<SB> {
+        SingleFinalConsumer<SB> {
 
     /**
-     * Return a new FinalConsumer instance wrapped around a given SingleConsumer instance. In
+     * Return a new SingleFinalConsumer instance wrapped around a given SingleConsumer instance. In
      * addition to existing SingleConsumer features, this object also allows the caller to take
      * ownership of the items that it accesses.
      */
-    fn new(sc: SingleConsumer<SB>) -> FinalConsumer<SB> {
-        FinalConsumer {
+    fn new(sc: SingleConsumer<SB>) -> SingleFinalConsumer<SB> {
+        SingleFinalConsumer {
             sc: sc
         }
     }
