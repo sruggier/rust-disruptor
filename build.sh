@@ -11,4 +11,4 @@ mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 [ ! -f Makefile ] && cmake ..
-make
+make "$@"
