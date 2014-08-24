@@ -1600,6 +1600,57 @@ impl<T: Send, W: ProcessingWaitStrategy, RB: RingBufferTrait<T>>
 }
 
 /**
+ * Allows callers to send items through a disruptor pipeline.
+ */
+pub trait Publisher<T: Send> : Send {
+    /**
+     * Sends a single item into the pipeline. The value will be exposed to each consumer downstream
+     * in the pipeline.
+     */
+    fn publish(&self, value: T);
+}
+
+/**
+ * Functions used during the initial setup of the pipeline.
+ */
+pub trait PipelineInit<T, C: Consumer<T>, FC: FinalConsumer<T>> {
+    /**
+     * Creates and returns a single consumer, which will receive items sent through the publisher.
+     * This should only be called once, during setup of the pipeline.
+     */
+    fn create_single_consumer_pipeline(&mut self) -> FC;
+
+    /**
+     * Creates a chain of dependent consumers, and then adds the final
+     * consumer(s) in the chain as a dependency of the publisher.
+     */
+    fn create_consumer_pipeline(&mut self, count_consumers: uint)
+        -> (Vec<C>, FC);
+}
+
+/**
+ * Provides access Exposes values that are passing through the the pipeline
+ */
+pub trait Consumer<T: Send> : Send {
+    /**
+     * Waits for a single item to become available, then calls the given function to process the
+     * value.
+      */
+    fn consume(&self, consume_callback: |value: &T|);
+}
+
+/**
+ * The last consumer in the pipeline is able to take ownership of items, if they aren't operating
+ * concurrently with another consumer.
+ */
+pub trait FinalConsumer<T: Send> : Consumer<T> {
+    /**
+     * Waits for the next value to be available, moves it out of the ring buffer, and returns it.
+     */
+    fn take(&self) -> T;
+}
+
+/**
  * Allows callers to wire up dependencies, then send values down the pipeline
  * of dependent consumers.
  */
@@ -1630,8 +1681,10 @@ impl<T: Send, SB: SequenceBarrier<T> > SinglePublisher<SB> {
             sequence_barrier: Unsafe::new(sb),
         }
     }
+}
 
-    pub fn publish(&self, value: T) {
+impl<T: Send, SB: SequenceBarrier<T> > Publisher<T> for SinglePublisher<SB> {
+    fn publish(&self, value: T) {
         unsafe {
             let sb = &mut *self.sequence_barrier.get();
             // Wait for available slot
@@ -1649,26 +1702,20 @@ impl<
     T: Send,
     SB: SequenceBarrier<T> + NewConsumerBarrier<CSB>,
     CSB: SequenceBarrier<T> + NewConsumerBarrier<CSB>
-> SinglePublisher<SB> {
-    /**
-     * Creates and returns a single consumer, which will receive items sent through the publisher.
-     */
-    pub fn create_single_consumer_pipeline(&mut self) -> SingleFinalConsumer<CSB> {
+> PipelineInit<T, SingleConsumer<CSB>, SingleFinalConsumer<CSB>> for SinglePublisher<SB> {
+    fn create_single_consumer_pipeline(&mut self) -> SingleFinalConsumer<CSB> {
         let (_, c) = self.create_consumer_pipeline(1);
         c
     }
 
-    /**
-     * Create a chain of dependent consumers, and then add the final
-     * consumer(s) in the chain as a dependency of the publisher.
-     *
+    /*
      * TODO: take a list of uint to support parallel consumers. Need to pick a convenient return
      * type. Possible candidates:
      *  - List of lists
      *  - List of enum (single or parallel)
      *  - ?
      */
-    pub fn create_consumer_pipeline(
+    fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
     ) -> (Vec<SingleConsumer<CSB>>, SingleFinalConsumer<CSB>) {
@@ -1704,7 +1751,6 @@ impl<
 
         (nonfinal_consumers, final_consumer)
     }
-
 }
 
 /**
@@ -1721,12 +1767,10 @@ impl<T: Send, SB: SequenceBarrier<T>>
             sequence_barrier: Unsafe::new(sb),
         }
     }
+}
 
-    /**
-     * Waits for a single item to become available, then calls the given function to process the
-     * value.
-      */
-    pub fn consume(&self, consume_callback: |value: &T|) {
+impl <T: Send, SB: SequenceBarrier<T>> Consumer<T> for SingleConsumer<SB> {
+    fn consume(&self, consume_callback: |value: &T|) {
         unsafe {
             let sequence_barrier = &mut *self.sequence_barrier.get();
             sequence_barrier.next();
@@ -1742,7 +1786,7 @@ impl<T: Send, SB: SequenceBarrier<T>>
 
 #[cfg(test)]
 mod single_publisher_tests {
-    use super::{SinglePublisher, SpinWaitStrategy};
+    use super::{SinglePublisher, SpinWaitStrategy, PipelineInit, Publisher, Consumer, FinalConsumer};
 
     #[test]
     fn send_single_value() {
@@ -1790,14 +1834,15 @@ impl <T: Send, SB: SequenceBarrier<T>>
             sc: sc
         }
     }
+}
 
+impl <T: Send, SB: SequenceBarrier<T>> Consumer<T> for SingleFinalConsumer<SB> {
     /// See the SingleConsumer.consume method.
-    pub fn consume(&self, consume_callback: |value: &T|) { self.sc.consume(consume_callback) }
+    fn consume(&self, consume_callback: |value: &T|) { self.sc.consume(consume_callback) }
+}
 
-    /**
-     * Waits for the next value to be available, moves it out of the ring buffer, and returns it.
-     */
-    pub fn take(&self) -> T {
+impl <T: Send, SB: SequenceBarrier<T>> FinalConsumer<T> for SingleFinalConsumer<SB> {
+    fn take(&self) -> T {
         unsafe {
             let sequence_barrier = &mut *self.sc.sequence_barrier.get();
             sequence_barrier.next();

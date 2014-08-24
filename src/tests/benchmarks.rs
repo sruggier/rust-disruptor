@@ -3,7 +3,8 @@ extern crate native;
 extern crate time;
 extern crate test;
 
-use disruptor::{SinglePublisher, ProcessingWaitStrategy, SpinWaitStrategy, YieldWaitStrategy, BlockingWaitStrategy};
+use disruptor::{SinglePublisher, ProcessingWaitStrategy, SpinWaitStrategy, YieldWaitStrategy,
+    BlockingWaitStrategy, PipelineInit, Publisher, Consumer, FinalConsumer};
 use test::Bencher;
 use std::u64;
 use std::task::{spawn};

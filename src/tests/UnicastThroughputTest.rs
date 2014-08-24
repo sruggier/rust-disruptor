@@ -19,7 +19,9 @@ use std::string;
 use std::u64;
 use std::task::{spawn};
 
-use disruptor::{SinglePublisher,SingleFinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier};
+use disruptor::{SinglePublisher,SingleFinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,
+    YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier, PipelineInit, Publisher,
+    FinalConsumer};
 use benchmark_utils::{parse_args};
 use benchmark_utils::spawn_native;
 mod benchmark_utils;
