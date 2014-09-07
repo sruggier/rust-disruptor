@@ -92,7 +92,7 @@ impl<T> Slot<T> {
      */
     unsafe fn get<'s>(&'s self) -> &'s T {
         let p = self.payload;
-        (*p).get_ref()
+        (*p).as_ref().unwrap()
     }
 
     /**
@@ -107,7 +107,7 @@ impl<T> Slot<T> {
      * It's the caller's responsibility not to call this after destroy.
      */
     unsafe fn take(&mut self) -> T {
-        (*self.payload).take_unwrap()
+        (*self.payload).take().unwrap()
     }
 
     /**
@@ -1972,7 +1972,7 @@ impl<T: Send> ResizableRingBufferData<T> {
         let new_rrbd = ResizableRingBufferData::new(new_size);
         self.next = Some(UncheckedUnsafeArc::new(new_rrbd));
         self.rb_data.unset(sequence);
-        self.next.get_mut_ref().clone()
+        self.next.as_mut().unwrap().clone()
     }
 
     // Functions "inherited" from RingBufferData
@@ -2018,7 +2018,7 @@ impl<T: Send> ResizableRingBuffer<T> {
             // Switch to newly allocated buffer
             debug!("Following switch, sequence: {:?}, unwrapped_sequence: {:?}", sequence,
                     Sequence::unwrap_number(sequence, self.size()));
-            self.d = self.d.get().next.get_mut_ref().clone();
+            self.d = self.d.get().next.as_mut().unwrap().clone();
             return true;
         }
         false

@@ -97,7 +97,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
     // The second task listens for items from ping_consumer, and the publisher waits for the ping to
     // be processed by listening on pong_consumer before publishing the next item.
     let (mut ping_consumer_vec, pong_consumer) = ping_publisher.create_consumer_pipeline(2);
-    let ping_consumer = ping_consumer_vec.pop().take_unwrap();
+    let ping_consumer = ping_consumer_vec.pop().take().unwrap();
 
     spawn_fn(proc() {
         loop {
