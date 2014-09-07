@@ -244,7 +244,7 @@ impl<T> Drop for RingBufferData<T> {
  * processing.
  */
 #[deriving(Clone)]
-struct SequenceNumber(uint);
+pub struct SequenceNumber(uint);
 
 /**
  * Represents an initial state where no slots have been published or consumed.
@@ -708,7 +708,7 @@ fn test_sequence_overflow() {
  * Immutable reference to a sequence. Can be safely given to other tasks. Reads with acquire
  * semantics.
  */
-struct SequenceReader {
+pub struct SequenceReader {
     sequence: Sequence,
 }
 
