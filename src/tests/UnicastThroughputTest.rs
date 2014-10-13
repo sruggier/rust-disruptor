@@ -19,9 +19,8 @@ use std::string;
 use std::u64;
 use std::task::{spawn};
 
-use disruptor::{SinglePublisher,SingleFinalConsumer,ProcessingWaitStrategy,SpinWaitStrategy,
-    YieldWaitStrategy,BlockingWaitStrategy, SequenceBarrier, PipelineInit, Publisher,
-    FinalConsumer};
+use disruptor::{SinglePublisher, SingleResizingPublisher, ProcessingWaitStrategy,SpinWaitStrategy,
+    YieldWaitStrategy,BlockingWaitStrategy, PipelineInit, Publisher, FinalConsumer};
 use benchmark_utils::{parse_args};
 use benchmark_utils::spawn_native;
 mod benchmark_utils;
@@ -109,10 +108,10 @@ fn run_task_pipe_benchmark(iterations: u64) {
     println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
 }
 
-fn run_disruptor_benchmark<SB: SequenceBarrier<u64>, CSB: SequenceBarrier<u64>>(
+fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     iterations: u64,
-    publisher: SinglePublisher<SB>,
-    consumer: SingleFinalConsumer<CSB>,
+    publisher: P,
+    consumer: FC,
     desc: string::String,
     spawn_fn: | proc(): Send |
 ) {
@@ -190,7 +189,7 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
     let resize_timeout = 6;
     let mstp = disruptor::default_max_spin_tries_publisher;
     let mstc = disruptor::default_max_spin_tries_consumer;
-    let mut publisher = SinglePublisher::<u64>::new_resize_after_timeout_with_params(
+    let mut publisher = SingleResizingPublisher::<u64>::new_resize_after_timeout_with_params(
         8192,
         resize_timeout,
         mstp,

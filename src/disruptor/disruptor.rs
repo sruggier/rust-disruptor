@@ -1303,7 +1303,7 @@ impl fmt::Show for BlockingWaitStrategy {
  * Responsible for ensuring that the caller does not proceed until one or more dependent sequences
  * have finished working with the subsequent slots.
  */
-pub trait SequenceBarrier<T> : Send {
+trait SequenceBarrier<T> : Send {
     /**
      * Get the current value of the sequence associated with this SequenceBarrier.
      */
@@ -1423,7 +1423,7 @@ pub trait SequenceBarrier<T> : Send {
 
 /**
  * Split off from SequenceBarrier to reduce unnecessary type parameter requirements for general
- * users of the SequenceBarrier type, and users of the SinglePublisher type.
+ * users of the SequenceBarrier type, and users of the GenericPublisher type.
  */
 trait NewConsumerBarrier<CSB> {
     /**
@@ -1618,7 +1618,10 @@ pub trait PipelineInit<T, C: Consumer<T>, FC: FinalConsumer<T>> {
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      * This should only be called once, during setup of the pipeline.
      */
-    fn create_single_consumer_pipeline(&mut self) -> FC;
+    fn create_single_consumer_pipeline(&mut self) -> FC {
+        let (_, c) = self.create_consumer_pipeline(1);
+        c
+    }
 
     /**
      * Creates a chain of dependent consumers, and then adds the final
@@ -1654,36 +1657,18 @@ pub trait FinalConsumer<T: Send> : Consumer<T> {
  * Allows callers to wire up dependencies, then send values down the pipeline
  * of dependent consumers.
  */
-pub struct SinglePublisher<SB> {
+struct GenericPublisher<SB> {
     sequence_barrier: Unsafe<SB>,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy>
-        SinglePublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
-
-    /**
-     * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
-     * SinglePublisher object.
-     */
-    pub fn new(size: uint, wait_strategy: W)
-            -> SinglePublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>> {
-
-        let ring_buffer =  RingBuffer::<T>::new(size);
-        let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
-        SinglePublisher::<T, SinglePublisherSequenceBarrier<W, RingBuffer<T>> >::new_common(sb)
-    }
-}
-
-impl<T: Send, SB: SequenceBarrier<T> > SinglePublisher<SB> {
+impl<T: Send, SB: SequenceBarrier<T>> GenericPublisher<SB> {
     /// Generic constructor that works with any RingBufferTrait-conforming type
-    fn new_common(sb: SB) -> SinglePublisher<SB> {
-        SinglePublisher {
+    fn new_common(sb: SB) -> GenericPublisher<SB> {
+        GenericPublisher {
             sequence_barrier: Unsafe::new(sb),
         }
     }
-}
 
-impl<T: Send, SB: SequenceBarrier<T> > Publisher<T> for SinglePublisher<SB> {
     fn publish(&self, value: T) {
         unsafe {
             let sb = &mut *self.sequence_barrier.get();
@@ -1702,12 +1687,7 @@ impl<
     T: Send,
     SB: SequenceBarrier<T> + NewConsumerBarrier<CSB>,
     CSB: SequenceBarrier<T> + NewConsumerBarrier<CSB>
-> PipelineInit<T, SingleConsumer<CSB>, SingleFinalConsumer<CSB>> for SinglePublisher<SB> {
-    fn create_single_consumer_pipeline(&mut self) -> SingleFinalConsumer<CSB> {
-        let (_, c) = self.create_consumer_pipeline(1);
-        c
-    }
-
+> GenericPublisher<SB> {
     /*
      * TODO: take a list of uint to support parallel consumers. Need to pick a convenient return
      * type. Possible candidates:
@@ -1718,7 +1698,7 @@ impl<
     fn create_consumer_pipeline(
         &mut self,
         count_consumers: uint
-    ) -> (Vec<SingleConsumer<CSB>>, SingleFinalConsumer<CSB>) {
+    ) -> (Vec<GenericConsumer<CSB>>, GenericFinalConsumer<CSB>) {
         let sequence_barrier;
         unsafe {
             sequence_barrier = &mut *self.sequence_barrier.get();
@@ -1731,12 +1711,12 @@ impl<
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
-                Vec::<SingleConsumer<CSB>>::with_capacity(count_nonfinal_consumers);
+                Vec::<GenericConsumer<CSB>>::with_capacity(count_nonfinal_consumers);
         let final_consumer;
 
         for _ in range(0, count_nonfinal_consumers) {
             let sb_next = sb.new_consumer_barrier();
-            let c = SingleConsumer::new(sb);
+            let c = GenericConsumer::new(sb);
             sb = sb_next;
 
             nonfinal_consumers.push(c);
@@ -1744,8 +1724,8 @@ impl<
 
         // Last consumer gets the ability to take ownership
         let dependencies = vec!(sb.get_sequence());
-        let c = SingleConsumer::new(sb);
-        final_consumer = SingleFinalConsumer::new(c);
+        let c = GenericConsumer::new(sb);
+        final_consumer = GenericFinalConsumer::new(c);
 
         sequence_barrier.set_dependencies(dependencies);
 
@@ -1756,20 +1736,18 @@ impl<
 /**
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
-struct SingleConsumer<SB> {
+struct GenericConsumer<SB> {
     sequence_barrier: Unsafe<SB>,
 }
 
 impl<T: Send, SB: SequenceBarrier<T>>
-        SingleConsumer<SB> {
-    fn new(sb: SB) -> SingleConsumer<SB> {
-        SingleConsumer {
+        GenericConsumer<SB> {
+    fn new(sb: SB) -> GenericConsumer<SB> {
+        GenericConsumer {
             sequence_barrier: Unsafe::new(sb),
         }
     }
-}
 
-impl <T: Send, SB: SequenceBarrier<T>> Consumer<T> for SingleConsumer<SB> {
     fn consume(&self, consume_callback: |value: &T|) {
         unsafe {
             let sequence_barrier = &mut *self.sequence_barrier.get();
@@ -1785,7 +1763,7 @@ impl <T: Send, SB: SequenceBarrier<T>> Consumer<T> for SingleConsumer<SB> {
 }
 
 #[cfg(test)]
-mod single_publisher_tests {
+mod generic_publisher_tests {
     use super::{SinglePublisher, SpinWaitStrategy, PipelineInit, Publisher, Consumer, FinalConsumer};
 
     #[test]
@@ -1815,33 +1793,29 @@ mod single_publisher_tests {
 /**
  * The last consumer in a disruptor pipeline. Being the last consumer in the pipeline makes it
  * possible to move values out of the ring buffer, in addition to the functionality available from a
- * normal SingleConsumer.
+ * normal GenericConsumer.
  */
-pub struct SingleFinalConsumer<SB> {
-    sc: SingleConsumer<SB>
+struct GenericFinalConsumer<SB> {
+    sc: GenericConsumer<SB>
 }
 
 impl <T: Send, SB: SequenceBarrier<T>>
-        SingleFinalConsumer<SB> {
+        GenericFinalConsumer<SB> {
 
     /**
-     * Return a new SingleFinalConsumer instance wrapped around a given SingleConsumer instance. In
-     * addition to existing SingleConsumer features, this object also allows the caller to take
+     * Return a new GenericFinalConsumer instance wrapped around a given GenericConsumer instance. In
+     * addition to existing GenericConsumer features, this object also allows the caller to take
      * ownership of the items that it accesses.
      */
-    fn new(sc: SingleConsumer<SB>) -> SingleFinalConsumer<SB> {
-        SingleFinalConsumer {
+    fn new(sc: GenericConsumer<SB>) -> GenericFinalConsumer<SB> {
+        GenericFinalConsumer {
             sc: sc
         }
     }
-}
 
-impl <T: Send, SB: SequenceBarrier<T>> Consumer<T> for SingleFinalConsumer<SB> {
-    /// See the SingleConsumer.consume method.
+    /// See the GenericConsumer.consume method.
     fn consume(&self, consume_callback: |value: &T|) { self.sc.consume(consume_callback) }
-}
 
-impl <T: Send, SB: SequenceBarrier<T>> FinalConsumer<T> for SingleFinalConsumer<SB> {
     fn take(&self) -> T {
         unsafe {
             let sequence_barrier = &mut *self.sc.sequence_barrier.get();
@@ -2371,51 +2345,6 @@ impl<T: Send, W: ProcessingWaitStrategy>
 pub static default_resize_timeout: uint = 500;
 
 /**
- * Specialization for resizable ring buffer.
- */
-impl<T: Send> SinglePublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
-    /**
-     * Create a new SinglePublisher using a resizable ring buffer, specifying the timeout after
-     * which the publisher will allocate a larger buffer to publish items into.
-     *
-     * # Arguments
-     *
-     * * resize_timeout - How long to wait, in milliseconds, before reallocating a larger buffer
-     * * max_spin_tries_publisher - See YieldWaitStrategy::new_with_retry_count
-     * * max_spin_tries_consumer - See YieldWaitStrategy::new_with_retry_count
-     */
-    pub fn new_resize_after_timeout_with_params(
-        size: uint,
-        resize_timeout: uint,
-        max_spin_tries_publisher: uint,
-        max_spin_tries_consumer: uint
-    ) -> SinglePublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
-        let ring_buffer =  ResizableRingBuffer::<T>::new(size);
-
-        let blocking_wait_strategy = BlockingWaitStrategy::new_with_retry_count(
-            max_spin_tries_publisher, max_spin_tries_consumer);
-        let wait_strategy = TimeoutResizeWaitStrategy::new_with_timeout(
-            resize_timeout, blocking_wait_strategy);
-        let sb = SingleResizingPublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
-        SinglePublisher::new_common(
-            sb
-        )
-    }
-
-    /// Construct a TimeoutResizeWaitStrategy using the default parameters.
-    pub fn new_resize_after_timeout(size: uint)
-    -> SinglePublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>> {
-
-        SinglePublisher::new_resize_after_timeout_with_params(
-            size,
-            default_resize_timeout,
-            default_max_spin_tries_publisher,
-            default_max_spin_tries_consumer
-        )
-    }
-}
-
-/**
  * This trait provides policy decisions regarding how long to wait before reallocating a larger
  * buffer.
  */
@@ -2615,5 +2544,153 @@ impl fmt::Show for TimeoutResizeWaitStrategy {
             self.wait_strategy.max_spin_tries_publisher,
             self.wait_strategy.max_spin_tries_consumer
         )
+    }
+}
+
+pub struct SinglePublisher<T, W> {
+    p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>>
+}
+
+pub struct SingleConsumer<T, W> {
+    c: GenericConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T>>>,
+}
+
+pub struct SingleFinalConsumer<T, W> {
+    c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T>>>
+}
+
+impl<T: Send, W: ProcessingWaitStrategy>
+        SinglePublisher<T, W> {
+
+    /**
+     * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
+     * SinglePublisher object.
+     */
+    pub fn new(size: uint, wait_strategy: W) -> SinglePublisher<T, W> {
+        let ring_buffer =  RingBuffer::<T>::new(size);
+        let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
+        let gp =
+            GenericPublisher::<T, SinglePublisherSequenceBarrier<W, RingBuffer<T>> >::new_common(sb);
+        SinglePublisher { p: gp }
+    }
+
+}
+
+impl<T: Send, W: ProcessingWaitStrategy>
+    PipelineInit<T, SingleConsumer<T, W>, SingleFinalConsumer<T, W>>
+    for SinglePublisher<T, W> {
+
+    fn create_consumer_pipeline(&mut self, count_consumers: uint)
+        -> (Vec<SingleConsumer<T,W>>, SingleFinalConsumer<T, W>)
+    {
+        let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
+        let c = gc.move_iter().map( |x| SingleConsumer { c: x } ).collect();
+        let fc = SingleFinalConsumer { c: gfc };
+        (c, fc)
+    }
+}
+
+impl<T: Send, W: ProcessingWaitStrategy> Publisher<T> for SinglePublisher<T, W> {
+    fn publish(&self, value: T) { self.p.publish(value) }
+}
+
+impl <T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleConsumer<T, W> {
+    fn consume(&self, consume_callback: |value: &T|) { self.c.consume(consume_callback) }
+}
+
+impl <T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleFinalConsumer<T, W> {
+    fn consume(&self, consume_callback: |value: &T|) { self.c.consume(consume_callback) }
+}
+
+impl <T: Send, W: ProcessingWaitStrategy> FinalConsumer<T> for SingleFinalConsumer<T, W> {
+    fn take(&self) -> T {
+        self.c.take()
+    }
+}
+
+pub struct SingleResizingPublisher<T> {
+    p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>>
+}
+
+pub struct SingleResizingConsumer<T> {
+    c: GenericConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>
+}
+
+pub struct SingleResizingFinalConsumer<T> {
+    c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>
+}
+
+/**
+ * Specialization for resizable ring buffer.
+ */
+impl<T: Send> SingleResizingPublisher<T> {
+    /**
+     * Create a new GenericPublisher using a resizable ring buffer, specifying the timeout after
+     * which the publisher will allocate a larger buffer to publish items into.
+     *
+     * # Arguments
+     *
+     * * resize_timeout - How long to wait, in milliseconds, before reallocating a larger buffer
+     * * max_spin_tries_publisher - See YieldWaitStrategy::new_with_retry_count
+     * * max_spin_tries_consumer - See YieldWaitStrategy::new_with_retry_count
+     */
+    pub fn new_resize_after_timeout_with_params(
+        size: uint,
+        resize_timeout: uint,
+        max_spin_tries_publisher: uint,
+        max_spin_tries_consumer: uint
+    ) -> SingleResizingPublisher<T> {
+        let ring_buffer =  ResizableRingBuffer::<T>::new(size);
+
+        let blocking_wait_strategy = BlockingWaitStrategy::new_with_retry_count(
+            max_spin_tries_publisher, max_spin_tries_consumer);
+        let wait_strategy = TimeoutResizeWaitStrategy::new_with_timeout(
+            resize_timeout, blocking_wait_strategy);
+        let sb = SingleResizingPublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
+        let gp = GenericPublisher::new_common(
+            sb
+        );
+        SingleResizingPublisher { p: gp }
+    }
+
+    /// Construct a TimeoutResizeWaitStrategy using the default parameters.
+    pub fn new_resize_after_timeout(size: uint) -> SingleResizingPublisher<T> {
+
+        SingleResizingPublisher::new_resize_after_timeout_with_params(
+            size,
+            default_resize_timeout,
+            default_max_spin_tries_publisher,
+            default_max_spin_tries_consumer
+        )
+    }
+}
+
+impl<T: Send> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalConsumer<T>>
+    for SingleResizingPublisher<T> {
+
+    fn create_consumer_pipeline(&mut self, count_consumers: uint) ->
+        (Vec<SingleResizingConsumer<T>>, SingleResizingFinalConsumer<T>) {
+        let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
+        let c = gc.move_iter().map( |x| SingleResizingConsumer { c: x } ).collect();
+        let fc = SingleResizingFinalConsumer { c: gfc };
+        (c, fc)
+    }
+}
+
+impl<T: Send> Publisher<T> for SingleResizingPublisher<T> {
+    fn publish(&self, value: T) { self.p.publish(value) }
+}
+
+impl<T: Send> Consumer<T> for SingleResizingConsumer<T> {
+    fn consume(&self, consume_callback: |value: &T|) { self.c.consume(consume_callback) }
+}
+
+impl<T: Send> Consumer<T> for SingleResizingFinalConsumer<T> {
+    fn consume(&self, consume_callback: |value: &T|) { self.c.consume(consume_callback) }
+}
+
+impl <T: Send> FinalConsumer<T> for SingleResizingFinalConsumer<T> {
+    fn take(&self) -> T {
+        self.c.take()
     }
 }
