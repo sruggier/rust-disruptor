@@ -2366,7 +2366,8 @@ impl<T: Send, W: ProcessingWaitStrategy>
 
 /// Default timeout, in milliseconds, after which publishers will allocate a new ring buffer instead
 /// of continuing to wait. This value was chosen with a strong preference for avoiding false
-/// positives.
+/// positives, even if it means waiting a bit longer in cases where the caller has created a
+/// deadlock.
 pub static default_resize_timeout: uint = 500;
 
 /**
