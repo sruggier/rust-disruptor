@@ -28,7 +28,6 @@ use std::mem;
 use std::cmp;
 use std::fmt;
 use std::option::{Option};
-use std::owned::Box;
 use std::ptr;
 use std::task;
 use std::vec::Vec;
