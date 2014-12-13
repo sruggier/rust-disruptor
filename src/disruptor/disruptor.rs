@@ -168,7 +168,7 @@ impl<T> RingBufferData<T> {
         // We're guaranteed not to have called destroy during the lifetime of this type, so it's safe
         // to call set and get.
         unsafe {
-            self.entries.get_mut(index).set(value);
+            self.entries[index].set(value);
         }
     }
 
@@ -195,8 +195,8 @@ impl<T> RingBufferData<T> {
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.size());
         unsafe {
-            assert!(self.entries.get(index).is_set(), "Take of None at sequence: {}", sequence.value());
-            self.entries.get_mut(index).take()
+            assert!(self.entries[index].is_set(), "Take of None at sequence: {}", sequence.value());
+            self.entries[index].take()
         }
     }
 
@@ -207,7 +207,7 @@ impl<T> RingBufferData<T> {
     fn unset(&mut self, sequence: SequenceNumber) {
         let index = sequence.as_index(self.size());
         unsafe {
-            self.entries.get_mut(index).unset();
+            self.entries[index].unset();
         }
     }
 
@@ -226,7 +226,7 @@ impl<T> RingBufferData<T> {
 impl<T> Drop for RingBufferData<T> {
     fn drop(&mut self) {
         unsafe {
-            for entry in self.entries.mut_iter() {
+            for entry in self.entries.iter_mut() {
                 entry.destroy();
             }
         }
@@ -2590,7 +2590,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
         -> (Vec<SingleConsumer<T,W>>, SingleFinalConsumer<T, W>)
     {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc.move_iter().map( |x| SingleConsumer { c: x } ).collect();
+        let c = gc.into_iter().map( |x| SingleConsumer { c: x } ).collect();
         let fc = SingleFinalConsumer { c: gfc };
         (c, fc)
     }
@@ -2677,7 +2677,7 @@ impl<T: Send> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalCons
     fn create_consumer_pipeline(&mut self, count_consumers: uint) ->
         (Vec<SingleResizingConsumer<T>>, SingleResizingFinalConsumer<T>) {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc.move_iter().map( |x| SingleResizingConsumer { c: x } ).collect();
+        let c = gc.into_iter().map( |x| SingleResizingConsumer { c: x } ).collect();
         let fc = SingleResizingFinalConsumer { c: gfc };
         (c, fc)
     }
