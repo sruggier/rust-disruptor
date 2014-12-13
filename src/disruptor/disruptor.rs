@@ -36,7 +36,7 @@ use std::task;
 use std::vec::Vec;
 use std::uint;
 use alloc::arc::Arc;
-use std::ty::Unsafe;
+use std::cell::UnsafeCell;
 use std::sync::atomics::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
 
 /**
@@ -290,13 +290,13 @@ fn wrap_boundary(buffer_size: uint) -> uint {
 ///
 /// FIXME: remove this if/when UnsafeArc exposes similar functions.
 struct UncheckedUnsafeArc<T> {
-    arc: Arc<Unsafe<T>>,
+    arc: Arc<UnsafeCell<T>>,
     data: *mut T,
 }
 
 impl<T: Send> UncheckedUnsafeArc<T> {
     fn new(data: T) -> UncheckedUnsafeArc<T> {
-        let arc = Arc::new(Unsafe::new(data));
+        let arc = Arc::new(UnsafeCell::new(data));
         let data = unsafe { arc.get() };
         UncheckedUnsafeArc {
             arc: arc,
@@ -1663,14 +1663,14 @@ pub trait FinalConsumer<T: Send> : Consumer<T> {
  * of dependent consumers.
  */
 struct GenericPublisher<SB> {
-    sequence_barrier: Unsafe<SB>,
+    sequence_barrier: UnsafeCell<SB>,
 }
 
 impl<T: Send, SB: SequenceBarrier<T>> GenericPublisher<SB> {
     /// Generic constructor that works with any RingBufferTrait-conforming type
     fn new_common(sb: SB) -> GenericPublisher<SB> {
         GenericPublisher {
-            sequence_barrier: Unsafe::new(sb),
+            sequence_barrier: UnsafeCell::new(sb),
         }
     }
 
@@ -1742,14 +1742,14 @@ impl<
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
 struct GenericConsumer<SB> {
-    sequence_barrier: Unsafe<SB>,
+    sequence_barrier: UnsafeCell<SB>,
 }
 
 impl<T: Send, SB: SequenceBarrier<T>>
         GenericConsumer<SB> {
     fn new(sb: SB) -> GenericConsumer<SB> {
         GenericConsumer {
-            sequence_barrier: Unsafe::new(sb),
+            sequence_barrier: UnsafeCell::new(sb),
         }
     }
 
