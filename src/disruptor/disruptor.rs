@@ -21,9 +21,7 @@
 
 extern crate alloc;
 #[phase(plugin,link)] extern crate log;
-extern crate sync;
 extern crate time;
-use self::sync::raw::Mutex;
 use self::time::precise_time_ns;
 use std::clone::Clone;
 use std::mem;
@@ -37,7 +35,8 @@ use std::vec::Vec;
 use std::uint;
 use alloc::arc::Arc;
 use std::cell::UnsafeCell;
-use std::sync::atomics::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
+use std::sync::atomic::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
+use std::sync::{Mutex,Condvar};
 
 /**
  * Raw pointer to a single nullable element of T. We are going to communicate between tasks by
@@ -1155,7 +1154,7 @@ struct BlockingWaitStrategyData {
     /// True if any tasks are waiting for new slots to be released by the publisher.
     signal_needed: AtomicBool,
     /// Waiting consumers block on, and are signalled by, this.
-    wait_condition: Mutex,
+    wait_condition: Mutex<Condvar>,
 }
 
 impl BlockingWaitStrategy {
@@ -1182,7 +1181,7 @@ impl BlockingWaitStrategy {
     ) -> BlockingWaitStrategy {
         let d = BlockingWaitStrategyData {
             signal_needed: AtomicBool::new(false),
-            wait_condition: Mutex::new_with_condvars(1),
+            wait_condition: Mutex::new(Condvar::new()),
         };
         BlockingWaitStrategy {
             d: UncheckedUnsafeArc::new(d),
@@ -1229,7 +1228,8 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
         // Grab lock on wait condition
         let signal_needed = &mut d.signal_needed;
         {
-            let lock = d.wait_condition.lock();
+            let condvar_guard = d.wait_condition.lock();
+            let condvar = &*condvar_guard;
             while n > available {
                 // Communicate intent to wait to publisher
                 let _dummy: bool = signal_needed.swap(true, AcqRel);
@@ -1237,7 +1237,7 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
                 available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 if n > available {
                     // Sleep
-                    lock.cond.wait();
+                    condvar.wait(&condvar_guard);
                     available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 }
             }
@@ -1279,8 +1279,9 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
         // If so, acquire the lock and signal on the wait condition
         if signal_needed {
             {
-                let lock = d.wait_condition.lock();
-                lock.cond.broadcast();
+                let condvar_guard = d.wait_condition.lock();
+                let condvar = &*condvar_guard;
+                condvar.notify_all();
             }
 
             // This is a bit of a hack to work around the fact that the Mutex will occasionally
