@@ -27,6 +27,7 @@ use std::clone::Clone;
 use std::mem;
 use std::cmp;
 use std::fmt;
+use std::num::Int;
 use std::option::{Option};
 use std::ptr;
 use std::task;
