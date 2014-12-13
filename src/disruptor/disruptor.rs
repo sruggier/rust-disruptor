@@ -138,7 +138,7 @@ impl<T> Slot<T> {
     unsafe fn destroy(&mut self) {
         // Deallocate
         let _payload: Box<Option<T>> = mem::transmute(self.payload);
-        self.payload = ptr::mut_null();
+        self.payload = ptr::null_mut();
     }
 }
 
