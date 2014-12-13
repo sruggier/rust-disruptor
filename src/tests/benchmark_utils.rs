@@ -19,7 +19,7 @@ fn usage(argv0: &str, opts: &[getopts::OptGroup]) -> ! {
     let brief = format!("Usage: {} [OPTIONS]", argv0);
     println!("{}", getopts::usage(brief.as_slice(), opts));
     // Exit immediately
-    fail!();
+    panic!();
 }
 
 /**
@@ -48,7 +48,7 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
         Ok(m) => m,
         Err(fail) => {
             println!("{}\nUse '{} --help' to see a list of valid options.", fail, argv0);
-            fail!();
+            panic!();
         }
     };
     if matches.opt_present("h") {
@@ -60,7 +60,7 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
         Some(n_str) => {
             match ::std::u64::parse_bytes(n_str.as_bytes(), 10u) {
                 Some(n) => n,
-                None => fail!("Expected a positive number of iterations, received {}", n_str)
+                None => panic!("Expected a positive number of iterations, received {}", n_str)
             }
         }
         None => default_n_iterations
