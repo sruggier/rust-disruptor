@@ -7,7 +7,6 @@
 // except according to those terms.
 
 #![feature(phase)]
-extern crate debug;
 extern crate disruptor;
 #[phase(plugin,link)] extern crate log;
 extern crate native;
@@ -66,7 +65,7 @@ fn run_single_threaded_benchmark(iterations: u64) -> u64 {
     let before = precise_time_ns();
     let result = triangle_number(iterations);
     let ops = get_ops_per_second(before, iterations);
-    println!("Single threaded: {:?} ops/sec (result was {})", ops, result);
+    println!("Single threaded: {} ops/sec (result was {})", ops, result);
 
     result
 }
@@ -105,7 +104,7 @@ fn run_task_pipe_benchmark(iterations: u64) {
     assert_eq!(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
-    println!("Pipes: {:?} ops/sec, result wait: {:?} ns", ops, wait_latency);
+    println!("Pipes: {} ops/sec, result wait: {} ns", ops, wait_latency);
 }
 
 fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
@@ -127,7 +126,7 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
         let mut expected_value = 1u64;
         loop {
             let i = consumer.take();
-            debug!("{:?}", i);
+            debug!("{}", i);
             // In-band magic number value tells us when to break out of the loop
             if i == u64::MAX {
                 result_sender.send(sum);

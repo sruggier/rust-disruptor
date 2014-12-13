@@ -21,7 +21,6 @@
 
 extern crate alloc;
 #[phase(plugin,link)] extern crate log;
-extern crate debug;
 extern crate sync;
 extern crate time;
 use self::sync::raw::Mutex;
@@ -197,7 +196,7 @@ impl<T> RingBufferData<T> {
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.size());
         unsafe {
-            assert!(self.entries.get(index).is_set(), "Take of None at sequence: {:?}", sequence.value());
+            assert!(self.entries.get(index).is_set(), "Take of None at sequence: {}", sequence.value());
             self.entries.get_mut(index).take()
         }
     }
@@ -257,7 +256,7 @@ impl SequenceNumber {
      * power of two by using a masking operation instead of the modulo operator.
      */
     fn as_index(self, buffer_size: uint) -> uint {
-        // assert!(buffer_size.count_ones() == 1, "buffer_size must be a power of two (received {:?})", buffer_size);
+        // assert!(buffer_size.count_ones() == 1, "buffer_size must be a power of two (received {})", buffer_size);
         let index_mask = buffer_size - 1;
         let SequenceNumber(value) = self;
         value & index_mask
@@ -269,6 +268,12 @@ impl SequenceNumber {
     fn value(self) -> uint {
         let SequenceNumber(value) = self;
         value
+    }
+}
+
+impl fmt::Show for SequenceNumber {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "disruptor::SequenceNumber{{{}}}", self.value())
     }
 }
 
@@ -378,7 +383,7 @@ impl<T: Send> RingBuffer<T> {
      * two, a property that will be exploited for performance reasons.
      */
     fn new(size: uint) -> RingBuffer<T> {
-        assert!(size.count_ones() == 1, "RingBuffer size must be a power of two (received {:?})", size);
+        assert!(size.count_ones() == 1, "RingBuffer size must be a power of two (received {})", size);
         let data = RingBufferData::new(size);
         RingBuffer { data: UncheckedUnsafeArc::new(data) }
     }
@@ -443,7 +448,7 @@ fn calculate_available_consumer(
     }
     let available = gating - waiting;
     // No longer a valid assumption, given the possibility of resizable buffers
-    // assert!(available <= buffer_size, "available: {:?}, gating: {:?}, waiting: {:?}", available, gating, waiting);
+    // assert!(available <= buffer_size, "available: {}, gating: {}, waiting: {}", available, gating, waiting);
     available
 }
 
@@ -668,7 +673,7 @@ impl Sequence {
 }
 
 fn log2(mut power_of_2: uint) -> uint {
-    assert!(power_of_2.count_ones() == 1, "Argument must be a power of two (received {:?})", power_of_2);
+    assert!(power_of_2.count_ones() == 1, "Argument must be a power of two (received {})", power_of_2);
     let mut exp = 0;
     while power_of_2 > 1 {
         exp += 1;
@@ -1990,7 +1995,7 @@ impl<T: Send> ResizableRingBuffer<T> {
     unsafe fn try_switch_next(&mut self, sequence: SequenceNumber) -> bool {
         if !self.d.get().is_set(sequence) {
             // Switch to newly allocated buffer
-            debug!("Following switch, sequence: {:?}, unwrapped_sequence: {:?}", sequence,
+            debug!("Following switch, sequence: {}, unwrapped_sequence: {}", sequence,
                     Sequence::unwrap_number(sequence, self.size()));
             self.d = self.d.get().next.as_mut().unwrap().clone();
             return true;
@@ -2180,10 +2185,10 @@ impl<T: Send, W: ResizingWaitStrategy>
             // Resizing shouldn't be a normal part of a program's operation. Alert the user, so that
             // they can consider fixing the issue.
             error!(
-                "Possible deadlock detected, allocating a larger buffer for disruptor events. Current buffer size: {:?}, new size: {:?}, batch size: {:?}",
+                "Possible deadlock detected, allocating a larger buffer for disruptor events. Current buffer size: {}, new size: {}, batch size: {}",
                 current_size, new_size, batch_size
             );
-            debug!("sequence: {:?}, unwrapped sequence: {:?}",
+            debug!("sequence: {}, unwrapped sequence: {}",
                     old_sequence.value(), unwrapped_sequence.value());
 
             unsafe {
@@ -2267,7 +2272,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
         if current_available <= unwrap_difference {
             actual_cached_available = 1;
         }
-        debug!("Adjusting available by {:?}, from {:?} to {:?}. Original sequence: {:?}, unwrapped: {:?}",
+        debug!("Adjusting available by {}, from {} to {}. Original sequence: {}, unwrapped: {}",
                 unwrap_difference, self.get_cached_available(), actual_cached_available,
                 original_sequence, unwrapped_sequence);
         self.set_cached_available(actual_cached_available);
