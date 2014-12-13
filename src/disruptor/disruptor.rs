@@ -248,7 +248,7 @@ pub struct SequenceNumber(uint);
 /**
  * Represents an initial state where no slots have been published or consumed.
  */
-static SEQUENCE_INITIAL: uint = 0;
+const SEQUENCE_INITIAL: uint = 0;
 
 impl SequenceNumber {
     /**
@@ -521,8 +521,8 @@ struct UintPadding {
 }
 
 // This is calculated to be (cache line size - uint size), in bytes
-#[cfg(target_word_size = "32")] static uint_padding_size: uint = 60;
-#[cfg(target_word_size = "64")] static uint_padding_size: uint = 56;
+#[cfg(target_word_size = "32")] const uint_padding_size: uint = 60;
+#[cfg(target_word_size = "64")] const uint_padding_size: uint = 56;
 
 impl UintPadding {
     fn new() -> UintPadding {
@@ -930,8 +930,8 @@ fn spin_for_publisher_retries(
     available
 }
 
-pub static default_max_spin_tries_publisher: uint = 2500;
-pub static default_max_spin_tries_consumer: uint = 2500;
+pub const default_max_spin_tries_publisher: uint = 2500;
+pub const default_max_spin_tries_consumer: uint = 2500;
 
 /**
  * A wait strategy for use cases where high throughput and low latency are a priority, but it is
@@ -2347,7 +2347,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
 /// of continuing to wait. This value was chosen with a strong preference for avoiding false
 /// positives, even if it means waiting a bit longer in cases where the caller has created a
 /// deadlock.
-pub static default_resize_timeout: uint = 500;
+pub const default_resize_timeout: uint = 500;
 
 /**
  * This trait provides policy decisions regarding how long to wait before reallocating a larger
