@@ -9,7 +9,6 @@
 #![feature(phase)]
 extern crate disruptor;
 #[phase(plugin,link)] extern crate log;
-extern crate native;
 extern crate time;
 
 use time::precise_time_ns;
@@ -21,7 +20,6 @@ use std::task::{spawn};
 use disruptor::{SinglePublisher, SingleResizingPublisher, ProcessingWaitStrategy,SpinWaitStrategy,
     YieldWaitStrategy,BlockingWaitStrategy, PipelineInit, Publisher, FinalConsumer};
 use benchmark_utils::{parse_args};
-use benchmark_utils::spawn_native;
 mod benchmark_utils;
 
 /**
@@ -111,16 +109,13 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     iterations: u64,
     publisher: P,
     consumer: FC,
-    desc: string::String,
-    spawn_fn: | proc(): Send |
+    desc: string::String
 ) {
     let (result_sender, result_receiver) = channel::<u64>();
 
     let before = precise_time_ns();
 
-    // spawn_sched needed for now, because the consumer thread busy-waits
-    // rather than voluntarily descheduling.
-    spawn_fn(proc() {
+    spawn(proc() {
         let mut sum = 0u64;
 
         let mut expected_value = 1u64;
@@ -158,30 +153,27 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
 
 fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
     iterations: u64,
-    w: W,
-    spawn_fn: | proc(): Send |
+    w: W
 ) {
     let desc = format!("{}", w);
     let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_single_consumer_pipeline();
-    run_disruptor_benchmark(iterations, publisher, consumer, desc, spawn_fn);
+    run_disruptor_benchmark(iterations, publisher, consumer, desc);
 }
 
 fn run_disruptor_benchmark_spin(iterations: u64) {
-    // SpinWaitStrategy fully blocks the threads it's on, so the second task
-    // needs to be native to avoid deadlock. In real-world usage, both tasks
-    // should be native, but for now, the publisher side is run on the main
-    // thread, which is green as of this writing. We aren't using our green
-    // thread pool for anything else, so it should be fine.
-    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy, spawn_native);
+    // SpinWaitStrategy fully blocks the threads it's on, so the second task needs to be native to
+    // avoid deadlock. Previously, deliberate action was needed to ensure this. Currently, though,
+    // std::task::spawn spawns a native task by default, so no further action is necessary.
+    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy);
 }
 
 fn run_disruptor_benchmark_yield(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new(), spawn);
+    run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new());
 }
 
 fn run_disruptor_benchmark_block(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new(), spawn);
+    run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new());
 }
 
 fn run_disruptor_benchmark_resizeable(iterations: u64) {
@@ -200,7 +192,7 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
         mstp,
         mstc
     );
-    run_disruptor_benchmark(iterations, publisher, consumer, desc, spawn);;
+    run_disruptor_benchmark(iterations, publisher, consumer, desc);;
 }
 
 fn main() {
