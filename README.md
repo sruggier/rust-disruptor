@@ -29,7 +29,7 @@ The build system requires the following items in the path:
 
 The code is developed against Rust's master branch, and periodically ported to
 newer versions. It's currently tested to work with rustc at commit
-`3a37ed4412f571a079e9d365c226af23dfe9d224`
+`567b90ff095076054c98fa2f08d6c552ae60968d`
 
 For those in a hurry, initiate the build with the following command:
 

@@ -1,5 +1,4 @@
 extern crate disruptor;
-extern crate native;
 extern crate time;
 extern crate test;
 
@@ -9,9 +8,6 @@ use test::Bencher;
 use std::u64;
 use std::task::{spawn};
 
-use benchmark_utils::spawn_native;
-mod benchmark_utils;
-
 /**
  * Run a two-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
  *
@@ -19,12 +15,10 @@ mod benchmark_utils;
  *
  * * b - the Bencher
  * * w - The wait strategy to use
- * * spawn_fn - allows the caller to choose whether to spawn a native or green task
  */
 fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy>(
     b: &mut Bencher,
-    w: W,
-    spawn_fn: | proc(): Send |,
+    w: W
 )
 {
     let mut ping_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
@@ -32,7 +26,7 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy>(
     let mut pong_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
     let pong_consumer = pong_publisher.create_single_consumer_pipeline();
 
-    spawn_fn(proc() {
+    spawn(proc() {
         loop {
             // Echo every received value
             let i = ping_consumer.take();
@@ -60,19 +54,19 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy>(
 #[bench]
 fn measure_ping_pong_latency_two_ringbuffers_spin(b: &mut Bencher) {
     let w = SpinWaitStrategy;
-    measure_ping_pong_latency_two_ringbuffers_generic(b, w, spawn_native);
+    measure_ping_pong_latency_two_ringbuffers_generic(b, w);
 }
 
 #[bench]
 fn measure_ping_pong_latency_two_ringbuffers_yield(b: &mut Bencher) {
     let w = YieldWaitStrategy::new();
-    measure_ping_pong_latency_two_ringbuffers_generic(b, w, spawn);
+    measure_ping_pong_latency_two_ringbuffers_generic(b, w);
 }
 
 #[bench]
 fn measure_ping_pong_latency_two_ringbuffers_block(b: &mut Bencher) {
     let w = BlockingWaitStrategy::new();
-    measure_ping_pong_latency_two_ringbuffers_generic(b, w, spawn);
+    measure_ping_pong_latency_two_ringbuffers_generic(b, w);
 }
 
 /**
@@ -84,12 +78,10 @@ fn measure_ping_pong_latency_two_ringbuffers_block(b: &mut Bencher) {
  *
  * * b - the Bencher
  * * w - The wait strategy to use
- * * spawn_fn - allows the caller to choose whether to spawn a native or green task
  */
 fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
     b: &mut Bencher,
-    w: W,
-    spawn_fn: | proc(): Send |,
+    w: W
 )
 {
     let mut ping_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
@@ -99,7 +91,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
     let (mut ping_consumer_vec, pong_consumer) = ping_publisher.create_consumer_pipeline(2);
     let ping_consumer = ping_consumer_vec.pop().take().unwrap();
 
-    spawn_fn(proc() {
+    spawn(proc() {
         loop {
             // It's possible to allow consumers to mutate each item during processing to communicate
             // with downstream consumers, but that's not implemented yet. For now, the received
@@ -132,17 +124,17 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
 #[bench]
 fn measure_ping_pong_latency_one_ringbuffer_spin(b: &mut Bencher) {
     let w = SpinWaitStrategy;
-    measure_ping_pong_latency_one_ringbuffer_generic(b, w, spawn_native);
+    measure_ping_pong_latency_one_ringbuffer_generic(b, w);
 }
 
 #[bench]
 fn measure_ping_pong_latency_one_ringbuffer_yield(b: &mut Bencher) {
     let w = YieldWaitStrategy::new();
-    measure_ping_pong_latency_one_ringbuffer_generic(b, w, spawn_native);
+    measure_ping_pong_latency_one_ringbuffer_generic(b, w);
 }
 
 #[bench]
 fn measure_ping_pong_latency_one_ringbuffer_block(b: &mut Bencher) {
     let w = BlockingWaitStrategy::new();
-    measure_ping_pong_latency_one_ringbuffer_generic(b, w, spawn_native);
+    measure_ping_pong_latency_one_ringbuffer_generic(b, w);
 }

@@ -16,6 +16,7 @@ git submodule update
 while inotifywait -q -e attrib,close_write,create,delete,delete_self,move_self,moved_from,moved_to \
 		$(find -regex './\(CMakeLists.txt\|\(src\|submodules\)/\(.*\.rs\|.*CMakeLists.txt\|.*\.cmake\)\)'); do
 
+	reset
 	echo -e "\n\nRebuilding...\n";
 	(
 		cd build &&

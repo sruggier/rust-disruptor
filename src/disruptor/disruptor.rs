@@ -21,24 +21,22 @@
 
 extern crate alloc;
 #[phase(plugin,link)] extern crate log;
-extern crate debug;
-extern crate sync;
 extern crate time;
-use self::sync::raw::Mutex;
 use self::time::precise_time_ns;
 use std::clone::Clone;
 use std::mem;
 use std::cmp;
 use std::fmt;
+use std::num::Int;
 use std::option::{Option};
-use std::owned::Box;
 use std::ptr;
 use std::task;
 use std::vec::Vec;
 use std::uint;
 use alloc::arc::Arc;
-use std::ty::Unsafe;
-use std::sync::atomics::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
+use std::sync::{Mutex,Condvar};
 
 /**
  * Raw pointer to a single nullable element of T. We are going to communicate between tasks by
@@ -141,7 +139,7 @@ impl<T> Slot<T> {
     unsafe fn destroy(&mut self) {
         // Deallocate
         let _payload: Box<Option<T>> = mem::transmute(self.payload);
-        self.payload = ptr::mut_null();
+        self.payload = ptr::null_mut();
     }
 }
 
@@ -170,7 +168,7 @@ impl<T> RingBufferData<T> {
         // We're guaranteed not to have called destroy during the lifetime of this type, so it's safe
         // to call set and get.
         unsafe {
-            self.entries.get_mut(index).set(value);
+            self.entries[index].set(value);
         }
     }
 
@@ -197,8 +195,8 @@ impl<T> RingBufferData<T> {
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.size());
         unsafe {
-            assert!(self.entries.get(index).is_set(), "Take of None at sequence: {:?}", sequence.value());
-            self.entries.get_mut(index).take()
+            assert!(self.entries[index].is_set(), "Take of None at sequence: {}", sequence.value());
+            self.entries[index].take()
         }
     }
 
@@ -209,7 +207,7 @@ impl<T> RingBufferData<T> {
     fn unset(&mut self, sequence: SequenceNumber) {
         let index = sequence.as_index(self.size());
         unsafe {
-            self.entries.get_mut(index).unset();
+            self.entries[index].unset();
         }
     }
 
@@ -228,7 +226,7 @@ impl<T> RingBufferData<T> {
 impl<T> Drop for RingBufferData<T> {
     fn drop(&mut self) {
         unsafe {
-            for entry in self.entries.mut_iter() {
+            for entry in self.entries.iter_mut() {
                 entry.destroy();
             }
         }
@@ -243,13 +241,13 @@ impl<T> Drop for RingBufferData<T> {
  * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
  * processing.
  */
-#[deriving(Clone)]
+#[deriving(Clone,Copy)]
 pub struct SequenceNumber(uint);
 
 /**
  * Represents an initial state where no slots have been published or consumed.
  */
-static SEQUENCE_INITIAL: uint = 0;
+const SEQUENCE_INITIAL: uint = 0;
 
 impl SequenceNumber {
     /**
@@ -257,7 +255,7 @@ impl SequenceNumber {
      * power of two by using a masking operation instead of the modulo operator.
      */
     fn as_index(self, buffer_size: uint) -> uint {
-        // assert!(buffer_size.count_ones() == 1, "buffer_size must be a power of two (received {:?})", buffer_size);
+        // assert!(buffer_size.count_ones() == 1, "buffer_size must be a power of two (received {})", buffer_size);
         let index_mask = buffer_size - 1;
         let SequenceNumber(value) = self;
         value & index_mask
@@ -269,6 +267,12 @@ impl SequenceNumber {
     fn value(self) -> uint {
         let SequenceNumber(value) = self;
         value
+    }
+}
+
+impl fmt::Show for SequenceNumber {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "disruptor::SequenceNumber{{{}}}", self.value())
     }
 }
 
@@ -285,13 +289,13 @@ fn wrap_boundary(buffer_size: uint) -> uint {
 ///
 /// FIXME: remove this if/when UnsafeArc exposes similar functions.
 struct UncheckedUnsafeArc<T> {
-    arc: Arc<Unsafe<T>>,
+    arc: Arc<UnsafeCell<T>>,
     data: *mut T,
 }
 
 impl<T: Send> UncheckedUnsafeArc<T> {
     fn new(data: T) -> UncheckedUnsafeArc<T> {
-        let arc = Arc::new(Unsafe::new(data));
+        let arc = Arc::new(UnsafeCell::new(data));
         let data = unsafe { arc.get() };
         UncheckedUnsafeArc {
             arc: arc,
@@ -378,7 +382,7 @@ impl<T: Send> RingBuffer<T> {
      * two, a property that will be exploited for performance reasons.
      */
     fn new(size: uint) -> RingBuffer<T> {
-        assert!(size.count_ones() == 1, "RingBuffer size must be a power of two (received {:?})", size);
+        assert!(size.count_ones() == 1, "RingBuffer size must be a power of two (received {})", size);
         let data = RingBufferData::new(size);
         RingBuffer { data: UncheckedUnsafeArc::new(data) }
     }
@@ -443,7 +447,7 @@ fn calculate_available_consumer(
     }
     let available = gating - waiting;
     // No longer a valid assumption, given the possibility of resizable buffers
-    // assert!(available <= buffer_size, "available: {:?}, gating: {:?}, waiting: {:?}", available, gating, waiting);
+    // assert!(available <= buffer_size, "available: {}, gating: {}, waiting: {}", available, gating, waiting);
     available
 }
 
@@ -512,16 +516,16 @@ fn test_calculate_available_publisher() {
  * with other threads.
  */
 struct UintPadding {
-    padding: [u8, ..uint_padding_size]
+    padding: [u8, ..UINT_PADDING_SIZE]
 }
 
 // This is calculated to be (cache line size - uint size), in bytes
-#[cfg(target_word_size = "32")] static uint_padding_size: uint = 60;
-#[cfg(target_word_size = "64")] static uint_padding_size: uint = 56;
+#[cfg(target_word_size = "32")] const UINT_PADDING_SIZE: uint = 60;
+#[cfg(target_word_size = "64")] const UINT_PADDING_SIZE: uint = 56;
 
 impl UintPadding {
     fn new() -> UintPadding {
-        UintPadding { padding: [0, ..uint_padding_size] }
+        UintPadding { padding: [0, ..UINT_PADDING_SIZE] }
     }
 }
 
@@ -668,7 +672,7 @@ impl Sequence {
 }
 
 fn log2(mut power_of_2: uint) -> uint {
-    assert!(power_of_2.count_ones() == 1, "Argument must be a power of two (received {:?})", power_of_2);
+    assert!(power_of_2.count_ones() == 1, "Argument must be a power of two (received {})", power_of_2);
     let mut exp = 0;
     while power_of_2 > 1 {
         exp += 1;
@@ -823,7 +827,7 @@ fn calculate_available_list(
  * Using this strategy can result in livelock when used with tasks spawned using default scheduler
  * options. Ensure all publishers and consumers are on separate OS threads when using this.
  */
-#[deriving(Clone)]
+#[deriving(Clone,Copy)]
 pub struct SpinWaitStrategy;
 
 impl ProcessingWaitStrategy for SpinWaitStrategy {
@@ -925,8 +929,8 @@ fn spin_for_publisher_retries(
     available
 }
 
-pub static default_max_spin_tries_publisher: uint = 2500;
-pub static default_max_spin_tries_consumer: uint = 2500;
+pub const DEFAULT_MAX_SPIN_TRIES_PUBLISHER: uint = 2500;
+pub const DEFAULT_MAX_SPIN_TRIES_CONSUMER: uint = 2500;
 
 /**
  * A wait strategy for use cases where high throughput and low latency are a priority, but it is
@@ -936,6 +940,7 @@ pub static default_max_spin_tries_consumer: uint = 2500;
  * latency is paramount, and the caller has taken steps to pin the publisher and consumers to their
  * own threads, or even cores.
  */
+#[deriving(Copy)]
 pub struct YieldWaitStrategy {
     max_spin_tries_publisher: uint,
     max_spin_tries_consumer: uint,
@@ -947,8 +952,8 @@ impl YieldWaitStrategy {
      */
     pub fn new() -> YieldWaitStrategy {
         YieldWaitStrategy::new_with_retry_count(
-            default_max_spin_tries_publisher,
-            default_max_spin_tries_consumer
+            DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER
         )
     }
 
@@ -1150,14 +1155,14 @@ struct BlockingWaitStrategyData {
     /// True if any tasks are waiting for new slots to be released by the publisher.
     signal_needed: AtomicBool,
     /// Waiting consumers block on, and are signalled by, this.
-    wait_condition: Mutex,
+    wait_condition: Mutex<Condvar>,
 }
 
 impl BlockingWaitStrategy {
     pub fn new() -> BlockingWaitStrategy {
         BlockingWaitStrategy::new_with_retry_count(
-            default_max_spin_tries_publisher,
-            default_max_spin_tries_consumer
+            DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER
         )
     }
 
@@ -1177,7 +1182,7 @@ impl BlockingWaitStrategy {
     ) -> BlockingWaitStrategy {
         let d = BlockingWaitStrategyData {
             signal_needed: AtomicBool::new(false),
-            wait_condition: Mutex::new_with_condvars(1),
+            wait_condition: Mutex::new(Condvar::new()),
         };
         BlockingWaitStrategy {
             d: UncheckedUnsafeArc::new(d),
@@ -1224,7 +1229,8 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
         // Grab lock on wait condition
         let signal_needed = &mut d.signal_needed;
         {
-            let lock = d.wait_condition.lock();
+            let condvar_guard = d.wait_condition.lock();
+            let condvar = &*condvar_guard;
             while n > available {
                 // Communicate intent to wait to publisher
                 let _dummy: bool = signal_needed.swap(true, AcqRel);
@@ -1232,7 +1238,7 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
                 available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 if n > available {
                     // Sleep
-                    lock.cond.wait();
+                    condvar.wait(&condvar_guard);
                     available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 }
             }
@@ -1274,8 +1280,9 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
         // If so, acquire the lock and signal on the wait condition
         if signal_needed {
             {
-                let lock = d.wait_condition.lock();
-                lock.cond.broadcast();
+                let condvar_guard = d.wait_condition.lock();
+                let condvar = &*condvar_guard;
+                condvar.notify_all();
             }
 
             // This is a bit of a hack to work around the fact that the Mutex will occasionally
@@ -1658,14 +1665,14 @@ pub trait FinalConsumer<T: Send> : Consumer<T> {
  * of dependent consumers.
  */
 struct GenericPublisher<SB> {
-    sequence_barrier: Unsafe<SB>,
+    sequence_barrier: UnsafeCell<SB>,
 }
 
 impl<T: Send, SB: SequenceBarrier<T>> GenericPublisher<SB> {
     /// Generic constructor that works with any RingBufferTrait-conforming type
     fn new_common(sb: SB) -> GenericPublisher<SB> {
         GenericPublisher {
-            sequence_barrier: Unsafe::new(sb),
+            sequence_barrier: UnsafeCell::new(sb),
         }
     }
 
@@ -1737,14 +1744,14 @@ impl<
  * Allows callers to retrieve values from upstream tasks in the pipeline.
  */
 struct GenericConsumer<SB> {
-    sequence_barrier: Unsafe<SB>,
+    sequence_barrier: UnsafeCell<SB>,
 }
 
 impl<T: Send, SB: SequenceBarrier<T>>
         GenericConsumer<SB> {
     fn new(sb: SB) -> GenericConsumer<SB> {
         GenericConsumer {
-            sequence_barrier: Unsafe::new(sb),
+            sequence_barrier: UnsafeCell::new(sb),
         }
     }
 
@@ -1990,7 +1997,7 @@ impl<T: Send> ResizableRingBuffer<T> {
     unsafe fn try_switch_next(&mut self, sequence: SequenceNumber) -> bool {
         if !self.d.get().is_set(sequence) {
             // Switch to newly allocated buffer
-            debug!("Following switch, sequence: {:?}, unwrapped_sequence: {:?}", sequence,
+            debug!("Following switch, sequence: {}, unwrapped_sequence: {}", sequence,
                     Sequence::unwrap_number(sequence, self.size()));
             self.d = self.d.get().next.as_mut().unwrap().clone();
             return true;
@@ -2180,10 +2187,10 @@ impl<T: Send, W: ResizingWaitStrategy>
             // Resizing shouldn't be a normal part of a program's operation. Alert the user, so that
             // they can consider fixing the issue.
             error!(
-                "Possible deadlock detected, allocating a larger buffer for disruptor events. Current buffer size: {:?}, new size: {:?}, batch size: {:?}",
+                "Possible deadlock detected, allocating a larger buffer for disruptor events. Current buffer size: {}, new size: {}, batch size: {}",
                 current_size, new_size, batch_size
             );
-            debug!("sequence: {:?}, unwrapped sequence: {:?}",
+            debug!("sequence: {}, unwrapped sequence: {}",
                     old_sequence.value(), unwrapped_sequence.value());
 
             unsafe {
@@ -2267,7 +2274,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
         if current_available <= unwrap_difference {
             actual_cached_available = 1;
         }
-        debug!("Adjusting available by {:?}, from {:?} to {:?}. Original sequence: {:?}, unwrapped: {:?}",
+        debug!("Adjusting available by {}, from {} to {}. Original sequence: {}, unwrapped: {}",
                 unwrap_difference, self.get_cached_available(), actual_cached_available,
                 original_sequence, unwrapped_sequence);
         self.set_cached_available(actual_cached_available);
@@ -2342,7 +2349,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
 /// of continuing to wait. This value was chosen with a strong preference for avoiding false
 /// positives, even if it means waiting a bit longer in cases where the caller has created a
 /// deadlock.
-pub static default_resize_timeout: uint = 500;
+pub const DEFAULT_RESIZE_TIMEOUT: uint = 500;
 
 /**
  * This trait provides policy decisions regarding how long to wait before reallocating a larger
@@ -2584,7 +2591,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
         -> (Vec<SingleConsumer<T,W>>, SingleFinalConsumer<T, W>)
     {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc.move_iter().map( |x| SingleConsumer { c: x } ).collect();
+        let c = gc.into_iter().map( |x| SingleConsumer { c: x } ).collect();
         let fc = SingleFinalConsumer { c: gfc };
         (c, fc)
     }
@@ -2658,9 +2665,9 @@ impl<T: Send> SingleResizingPublisher<T> {
 
         SingleResizingPublisher::new_resize_after_timeout_with_params(
             size,
-            default_resize_timeout,
-            default_max_spin_tries_publisher,
-            default_max_spin_tries_consumer
+            DEFAULT_RESIZE_TIMEOUT,
+            DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER
         )
     }
 }
@@ -2671,7 +2678,7 @@ impl<T: Send> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalCons
     fn create_consumer_pipeline(&mut self, count_consumers: uint) ->
         (Vec<SingleResizingConsumer<T>>, SingleResizingFinalConsumer<T>) {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc.move_iter().map( |x| SingleResizingConsumer { c: x } ).collect();
+        let c = gc.into_iter().map( |x| SingleResizingConsumer { c: x } ).collect();
         let fc = SingleResizingFinalConsumer { c: gfc };
         (c, fc)
     }
