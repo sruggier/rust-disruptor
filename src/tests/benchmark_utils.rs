@@ -58,7 +58,7 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
     // Validate as integer if -n specified
     let iterations = match matches.opt_str("n") {
         Some(n_str) => {
-            match ::std::u64::parse_bytes(n_str.as_bytes(), 10u) {
+            match ::std::str::from_str::<u64>(n_str.as_slice()) {
                 Some(n) => n,
                 None => panic!("Expected a positive number of iterations, received {}", n_str)
             }
