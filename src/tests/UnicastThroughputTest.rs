@@ -178,8 +178,8 @@ fn run_disruptor_benchmark_block(iterations: u64) {
 
 fn run_disruptor_benchmark_resizeable(iterations: u64) {
     let resize_timeout = 6;
-    let mstp = disruptor::default_max_spin_tries_publisher;
-    let mstc = disruptor::default_max_spin_tries_consumer;
+    let mstp = disruptor::DEFAULT_MAX_SPIN_TRIES_PUBLISHER;
+    let mstc = disruptor::DEFAULT_MAX_SPIN_TRIES_CONSUMER;
     let mut publisher = SingleResizingPublisher::<u64>::new_resize_after_timeout_with_params(
         8192,
         resize_timeout,

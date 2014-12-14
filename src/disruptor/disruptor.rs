@@ -516,16 +516,16 @@ fn test_calculate_available_publisher() {
  * with other threads.
  */
 struct UintPadding {
-    padding: [u8, ..uint_padding_size]
+    padding: [u8, ..UINT_PADDING_SIZE]
 }
 
 // This is calculated to be (cache line size - uint size), in bytes
-#[cfg(target_word_size = "32")] const uint_padding_size: uint = 60;
-#[cfg(target_word_size = "64")] const uint_padding_size: uint = 56;
+#[cfg(target_word_size = "32")] const UINT_PADDING_SIZE: uint = 60;
+#[cfg(target_word_size = "64")] const UINT_PADDING_SIZE: uint = 56;
 
 impl UintPadding {
     fn new() -> UintPadding {
-        UintPadding { padding: [0, ..uint_padding_size] }
+        UintPadding { padding: [0, ..UINT_PADDING_SIZE] }
     }
 }
 
@@ -929,8 +929,8 @@ fn spin_for_publisher_retries(
     available
 }
 
-pub const default_max_spin_tries_publisher: uint = 2500;
-pub const default_max_spin_tries_consumer: uint = 2500;
+pub const DEFAULT_MAX_SPIN_TRIES_PUBLISHER: uint = 2500;
+pub const DEFAULT_MAX_SPIN_TRIES_CONSUMER: uint = 2500;
 
 /**
  * A wait strategy for use cases where high throughput and low latency are a priority, but it is
@@ -952,8 +952,8 @@ impl YieldWaitStrategy {
      */
     pub fn new() -> YieldWaitStrategy {
         YieldWaitStrategy::new_with_retry_count(
-            default_max_spin_tries_publisher,
-            default_max_spin_tries_consumer
+            DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER
         )
     }
 
@@ -1161,8 +1161,8 @@ struct BlockingWaitStrategyData {
 impl BlockingWaitStrategy {
     pub fn new() -> BlockingWaitStrategy {
         BlockingWaitStrategy::new_with_retry_count(
-            default_max_spin_tries_publisher,
-            default_max_spin_tries_consumer
+            DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER
         )
     }
 
@@ -2349,7 +2349,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
 /// of continuing to wait. This value was chosen with a strong preference for avoiding false
 /// positives, even if it means waiting a bit longer in cases where the caller has created a
 /// deadlock.
-pub const default_resize_timeout: uint = 500;
+pub const DEFAULT_RESIZE_TIMEOUT: uint = 500;
 
 /**
  * This trait provides policy decisions regarding how long to wait before reallocating a larger
@@ -2665,9 +2665,9 @@ impl<T: Send> SingleResizingPublisher<T> {
 
         SingleResizingPublisher::new_resize_after_timeout_with_params(
             size,
-            default_resize_timeout,
-            default_max_spin_tries_publisher,
-            default_max_spin_tries_consumer
+            DEFAULT_RESIZE_TIMEOUT,
+            DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER
         )
     }
 }
