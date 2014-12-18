@@ -514,7 +514,7 @@ fn test_calculate_available_publisher() {
  * with other threads.
  */
 struct UintPadding {
-    padding: [u8, ..UINT_PADDING_SIZE]
+    _padding: [u8, ..UINT_PADDING_SIZE]
 }
 
 // This is calculated to be (cache line size - uint size), in bytes
@@ -523,7 +523,7 @@ struct UintPadding {
 
 impl UintPadding {
     fn new() -> UintPadding {
-        UintPadding { padding: [0, ..UINT_PADDING_SIZE] }
+        UintPadding { _padding: [0, ..UINT_PADDING_SIZE] }
     }
 }
 
@@ -532,23 +532,23 @@ impl UintPadding {
  */
 struct SequenceData {
     // Prevent false sharing by padding either side of the value
-    padding1: UintPadding,
+    _padding1: UintPadding,
     /// The published value of the sequence, visible to waiting consumers.
     value: AtomicUint,
-    padding2: UintPadding,
+    _padding2: UintPadding,
     /// We can avoid atomic operations by using this cached value whenever possible.
     private_value: uint,
-    padding3: UintPadding,
+    _padding3: UintPadding,
 }
 
 impl SequenceData {
     fn new(initial_value: uint) -> SequenceData {
         SequenceData {
-            padding1: UintPadding::new(),
+            _padding1: UintPadding::new(),
             value: AtomicUint::new(initial_value),
-            padding2: UintPadding::new(),
+            _padding2: UintPadding::new(),
             private_value: initial_value,
-            padding3: UintPadding::new(),
+            _padding3: UintPadding::new(),
         }
     }
 }
@@ -669,6 +669,8 @@ impl Sequence {
     }
 }
 
+// For now, this is only used by the test code below, so conditionally compile it
+#[cfg(test)]
 fn log2(mut power_of_2: uint) -> uint {
     assert!(power_of_2.count_ones() == 1, "Argument must be a power of two (received {})", power_of_2);
     let mut exp = 0;
