@@ -21,9 +21,8 @@ However, current users can enjoy the following features:
 
 # Building
 
-The build system requires the following items in the path:
- * git (to clone the RustCMake submodule)
- * CMake 2.8
+The The build system requires the following items in the path:
+ * cargo
  * rustc
  * Optional: inotifywait (for auto-rebuild.sh)
 
@@ -31,28 +30,11 @@ The code is developed against Rust's master branch, and periodically ported to
 newer versions. It's currently tested to work with rustc at commit
 `567b90ff095076054c98fa2f08d6c552ae60968d`
 
-For those in a hurry, initiate the build with the following command:
-
-	./build.sh
-
-You can also build manually, with the following sequence of commands:
-
-	git submodule init
-	git submodule update
-
-	mkdir -p build
-	cd build
-	cmake ..
-	make
-
-Optionally, you can pass `-j <jobs>` to run multiple build tasks in parallel
-and save time.
-
-The build will place built files under `build` in the following directories:
-
-	lib     # the main library
-	test    # executables that can be run with no arguments
-	example # executables that can be run with --bench
+You can build, run tests, and run benchmarks using `cargo build`, `cargo test`,
+and `cargo bench`, respectively. Additionally, `cargo test` builds
+examples/UnicastThroughputTest, which is a simple throughput benchmark that
+compares rust's channel API to the disruptor implementation using various wait
+strategies.
 
 # Hacking
 

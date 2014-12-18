@@ -20,6 +20,7 @@ use std::task::{spawn};
 use disruptor::{SinglePublisher, SingleResizingPublisher, ProcessingWaitStrategy,SpinWaitStrategy,
     YieldWaitStrategy,BlockingWaitStrategy, PipelineInit, Publisher, FinalConsumer};
 use benchmark_utils::{parse_args};
+#[path = "../src/benchmark_utils.rs"]
 mod benchmark_utils;
 
 /**

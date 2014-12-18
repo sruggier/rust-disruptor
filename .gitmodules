@@ -1,3 +1,0 @@
-[submodule "submodules/RustCMake"]
-	path = submodules/RustCMake
-	url = https://github.com/SiegeLord/RustCMake.git
