@@ -17,3 +17,8 @@ lto = true
 
 [profile.bench]
 lto = true
+
+[dependencies]
+# Until Rust stabilizes, this version requirement will ensure that the code builds with the exact
+# version of rustc it has been tested against.
+time = "=0.1.2"
