@@ -28,7 +28,7 @@ use std::fmt;
 use std::num::Int;
 use std::option::{Option};
 use std::ptr;
-use std::task;
+use std::thread::Thread;
 use std::vec::Vec;
 use std::uint;
 use alloc::arc::Arc;
@@ -1012,7 +1012,7 @@ impl PublishingWaitStrategy for YieldWaitStrategy {
         while n > available {
             available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
                 calculate_available);
-            task::deschedule();
+            Thread::yield_now();
         }
 
         available
@@ -1039,7 +1039,7 @@ impl ProcessingWaitStrategy for YieldWaitStrategy {
 
         while available < n {
             available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
-            task::deschedule();
+            Thread::yield_now();
         }
 
         available
@@ -1291,7 +1291,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
             // At the same time, it's mostly off the fast path (this code path is only hit if a long
             // gap in publishing caused one or more consumers to sleep), so performance shouldn't be
             // hurt much.
-            task::deschedule();
+            Thread::yield_now();
         }
     }
 }
@@ -2312,7 +2312,7 @@ impl<T: Send, W: ProcessingWaitStrategy>
     // one that was published in the current buffer. This is fixable, but for now, just disable
     // support for larger batch sizes.
     fn next_n_real(&mut self, batch_size: uint) -> uint {
-        assert!(batch_size == 1, "Batch sizes larger than 1 are currently not supported with resizable buffers.")
+        assert!(batch_size == 1, "Batch sizes larger than 1 are currently not supported with resizable buffers.");
         self.cb.next_n_real(1)
     }
     fn release_n_real(&mut self, batch_size: uint) {
@@ -2475,7 +2475,7 @@ impl TimeoutResizeWaitStrategy {
 
             available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
                 calculate_available);
-            task::deschedule();
+            Thread::yield_now();
         }
         // If the timeout was reached, this will be less than n
         available

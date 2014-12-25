@@ -28,7 +28,7 @@ The The build system requires the following items in the path:
 
 The code is developed against Rust's master branch, and periodically ported to
 newer versions. It's currently tested to work with rustc at commit
-`567b90ff095076054c98fa2f08d6c552ae60968d`
+`8a33de89c4a7acf04a2f3fa5d6ba4aa3fe3f8dc0`
 
 You can build, run tests, and run benchmarks using `cargo build`, `cargo test`,
 and `cargo bench`, respectively. Additionally, `cargo test` builds
