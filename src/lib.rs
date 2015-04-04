@@ -9,7 +9,6 @@
 // Copy rust-http's crate-id style for now. Until the API stabilizes, the versioning scheme merely
 // needs to convey that it is unstable.
 #![crate_name = "disruptor"]
-// I used SPDX abbreviations here
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 
