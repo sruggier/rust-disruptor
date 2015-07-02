@@ -13,11 +13,11 @@
 #![crate_type = "dylib"]
 
 #![feature(globs)]
-#![feature(phase)]
 #![feature(unsafe_destructor)]
 
 extern crate alloc;
-#[phase(plugin,link)] extern crate log;
+#[macro_use]
+extern crate log;
 extern crate time;
 use self::time::precise_time_ns;
 use std::clone::Clone;
