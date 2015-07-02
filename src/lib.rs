@@ -13,7 +13,6 @@
 #![crate_type = "dylib"]
 
 #![feature(globs)]
-#![feature(unsafe_destructor)]
 
 extern crate alloc;
 #[macro_use]
@@ -219,7 +218,6 @@ impl<T> RingBufferData<T> {
     }
 }
 
-#[unsafe_destructor]
 impl<T> Drop for RingBufferData<T> {
     fn drop(&mut self) {
         unsafe {
