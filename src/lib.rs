@@ -57,7 +57,7 @@ impl<T> Slot<T> {
      * storing it as a raw pointer.
      */
     fn new() -> Slot<T> {
-        let payload: Box<Option<T>> = box None;
+        let payload: Box<Option<T>> = Box::new(None);
         let payload_raw: *mut Option<T> = unsafe { mem::transmute(payload) };
         Slot {
             payload: payload_raw
