@@ -406,7 +406,7 @@ impl<T: Send> RingBufferOps<T> for RingBuffer<T> {
     }
 }
 
-#[should_fail]
+#[should_panic]
 #[test]
 fn ring_buffer_size_must_be_power_of_two_7() {
     RingBuffer::<()>::new(7);
