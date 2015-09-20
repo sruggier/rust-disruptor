@@ -236,7 +236,7 @@ impl<T> Drop for RingBufferData<T> {
  * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
  * processing.
  */
-#[deriving(Clone,Copy)]
+#[derive(Clone,Copy)]
 pub struct SequenceNumber(uint);
 
 /**
@@ -824,7 +824,7 @@ fn calculate_available_list(
  * Using this strategy can result in livelock when used with tasks spawned using default scheduler
  * options. Ensure all publishers and consumers are on separate OS threads when using this.
  */
-#[deriving(Clone,Copy)]
+#[derive(Clone,Copy)]
 pub struct SpinWaitStrategy;
 
 impl ProcessingWaitStrategy for SpinWaitStrategy {
@@ -937,7 +937,7 @@ pub const DEFAULT_MAX_SPIN_TRIES_CONSUMER: uint = 2500;
  * latency is paramount, and the caller has taken steps to pin the publisher and consumers to their
  * own threads, or even cores.
  */
-#[deriving(Copy)]
+#[derive(Copy)]
 pub struct YieldWaitStrategy {
     max_spin_tries_publisher: uint,
     max_spin_tries_consumer: uint,
