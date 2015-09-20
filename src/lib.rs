@@ -511,7 +511,7 @@ fn test_calculate_available_publisher() {
  * with other threads.
  */
 struct UintPadding {
-    _padding: [u8, ..UINT_PADDING_SIZE]
+    _padding: [u8; ..UINT_PADDING_SIZE]
 }
 
 // This is calculated to be (cache line size - uint size), in bytes
