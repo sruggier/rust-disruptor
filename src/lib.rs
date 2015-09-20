@@ -31,7 +31,8 @@ use std::vec::Vec;
 use std::uint;
 use alloc::arc::Arc;
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicUint,Acquire,Release,AtomicBool,AcqRel};
+use std::sync::atomic::{AtomicUsize,AtomicBool};
+use std::sync::atomic::Ordering::{Acquire,Release,AcqRel};
 use std::sync::{Mutex,Condvar};
 
 /**
