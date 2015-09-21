@@ -515,8 +515,8 @@ struct UintPadding {
 }
 
 // This is calculated to be (cache line size - usize size), in bytes
-#[cfg(target_word_size = "32")] const UINT_PADDING_SIZE: usize = 60;
-#[cfg(target_word_size = "64")] const UINT_PADDING_SIZE: usize = 56;
+#[cfg(target_pointer_width = "32")] const UINT_PADDING_SIZE: usize = 60;
+#[cfg(target_pointer_width = "64")] const UINT_PADDING_SIZE: usize = 56;
 
 impl UintPadding {
     fn new() -> UintPadding {
