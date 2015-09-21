@@ -89,7 +89,7 @@ fn run_task_pipe_benchmark(iterations: u64) {
     });
 
     // Send every number from 1 to (iterations + 1), and then tell the task
-    // to finish and return by sending uint::MAX.
+    // to finish and return by sending usize::MAX.
     for num in range(1, iterations + 1) {
         input_sender.send(num as u64);
     }
@@ -135,7 +135,7 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     });
 
     // Send every number from 1 to (iterations + 1), and then tell the task
-    // to finish and return by sending uint::MAX.
+    // to finish and return by sending usize::MAX.
     for num in range(1, iterations + 1) {
         publisher.publish(num as u64)
     }
