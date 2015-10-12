@@ -265,7 +265,7 @@ impl SequenceNumber {
     }
 }
 
-impl fmt::Show for SequenceNumber {
+impl fmt::Debug for SequenceNumber {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "disruptor::SequenceNumber{{{}}}", self.value())
     }
@@ -866,7 +866,7 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
     }
 }
 
-impl fmt::Show for SpinWaitStrategy {
+impl fmt::Debug for SpinWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "disruptor::SpinWaitStrategy")
     }
@@ -1043,7 +1043,7 @@ impl ProcessingWaitStrategy for YieldWaitStrategy {
     }
 }
 
-impl fmt::Show for YieldWaitStrategy {
+impl fmt::Debug for YieldWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,
             "disruptor::YieldWaitStrategy{{p: {}, c: {}}}",
@@ -1293,7 +1293,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
     }
 }
 
-impl fmt::Show for BlockingWaitStrategy {
+impl fmt::Debug for BlockingWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,
             "disruptor::BlockingWaitStrategy{{p: {}, c: {}}}",
@@ -2540,7 +2540,7 @@ impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
     }
 }
 
-impl fmt::Show for TimeoutResizeWaitStrategy {
+impl fmt::Debug for TimeoutResizeWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,
             "disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
