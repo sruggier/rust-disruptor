@@ -1718,7 +1718,7 @@ impl<
                 Vec::<GenericConsumer<CSB>>::with_capacity(count_nonfinal_consumers);
         let final_consumer;
 
-        for _ in range(0, count_nonfinal_consumers) {
+        for _ in 0..count_nonfinal_consumers {
             let sb_next = sb.new_consumer_barrier();
             let c = GenericConsumer::new(sb);
             sb = sb_next;
