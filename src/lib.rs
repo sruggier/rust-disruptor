@@ -41,17 +41,19 @@ use std::sync::{Mutex,Condvar};
  * callers, so instead, the buffer will store pointers to Option<T>. The pointers are cloned as
  * needed, but the ring buffer has to handle deallocation of these objects to maintain safety.
  */
-struct Slot<T> {
+struct Slot<T: Send> {
     payload: *mut Option<T>
 }
 
-impl<T> Clone for Slot<T> {
+unsafe impl<T: Send> Send for Slot<T> { }
+
+impl<T: Send> Clone for Slot<T> {
     fn clone(&self) -> Slot<T> {
         Slot { payload: self.payload }
     }
 }
 
-impl<T> Slot<T> {
+impl<T: Send> Slot<T> {
     /**
      * Allocates an owned box containing Option<T>, then overrides Rust's memory management by
      * storing it as a raw pointer.
@@ -142,11 +144,11 @@ impl<T> Slot<T> {
 /**
  * Contains the underlying std::vec::Vec, and manages the lifetime of the slots.
  */
-struct RingBufferData<T> {
+struct RingBufferData<T: Send> {
     entries: Vec<Slot<T>>,
 }
 
-impl<T> RingBufferData<T> {
+impl<T: Send> RingBufferData<T> {
     fn new(size: usize) -> RingBufferData<T> {
         // See Drop below for corresponding slot deallocation
         let buffer = Vec::from_fn(size, |_i| { Slot::new() } );
@@ -218,7 +220,7 @@ impl<T> RingBufferData<T> {
     }
 }
 
-impl<T> Drop for RingBufferData<T> {
+impl<T: Send> Drop for RingBufferData<T> {
     fn drop(&mut self) {
         unsafe {
             for entry in self.entries.iter_mut() {
@@ -283,7 +285,7 @@ fn wrap_boundary(buffer_size: usize) -> usize {
 /// operations in those functions is a significant slowdown.
 ///
 /// FIXME: remove this if/when UnsafeArc exposes similar functions.
-struct UncheckedUnsafeArc<T> {
+struct UncheckedUnsafeArc<T: Send> {
     arc: Arc<UnsafeCell<T>>,
     data: *mut T,
 }
@@ -324,9 +326,11 @@ impl<T: Send> Clone for UncheckedUnsafeArc<T> {
  *
  * It is the caller's responsibility to avoid data races when reading and writing elements.
  */
-struct RingBuffer<T> {
+struct RingBuffer<T: Send> {
     data: UncheckedUnsafeArc<RingBufferData<T>>,
 }
+
+unsafe impl<T: Send> Send for RingBuffer<T> {}
 
 impl<T: Send> Clone for RingBuffer<T> {
     /// Copy a reference to the original buffer.
@@ -561,6 +565,8 @@ impl SequenceData {
 struct Sequence {
     value_arc: UncheckedUnsafeArc<SequenceData>
 }
+
+unsafe impl Send for Sequence {}
 
 impl Sequence {
     /// Allocates a new sequence.
@@ -1159,6 +1165,8 @@ struct BlockingWaitStrategyData {
     wait_condition: Mutex<Condvar>,
 }
 
+unsafe impl Send for BlockingWaitStrategy {}
+
 impl BlockingWaitStrategy {
     pub fn new() -> BlockingWaitStrategy {
         BlockingWaitStrategy::new_with_retry_count(
@@ -1631,7 +1639,7 @@ pub trait Publisher<T: Send> : Send {
 /**
  * Functions used during the initial setup of the pipeline.
  */
-pub trait PipelineInit<T, C: Consumer<T>, FC: FinalConsumer<T>> {
+pub trait PipelineInit<T: Send, C: Consumer<T>, FC: FinalConsumer<T>> {
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      * This should only be called once, during setup of the pipeline.
@@ -1988,6 +1996,9 @@ struct ResizableRingBuffer<T: Send> {
     d: UncheckedUnsafeArc<ResizableRingBufferData<T>>
 }
 
+unsafe impl<T: Send> Send for ResizableRingBufferData<T> {}
+unsafe impl<T: Send> Send for ResizableRingBuffer<T> {}
+
 impl<T: Send> ResizableRingBuffer<T> {
     /// Construct a new ResizableRingBuffer with a capacity for `size` elements. As with
     /// RingBuffer, `size` must be a power of two.
@@ -2128,7 +2139,7 @@ fn test_calculate_available_publisher_resizing() {
 /**
  * Resizing variant of SinglePublisherSequenceBarrier.
  */
-struct SingleResizingPublisherSequenceBarrier<T, W> {
+struct SingleResizingPublisherSequenceBarrier<T: Send, W> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
     sb: SinglePublisherSequenceBarrier<W, ResizableRingBuffer<T>>,
 }
@@ -2236,7 +2247,7 @@ impl<T: Send, W: ProcessingWaitStrategy> NewConsumerBarrier
 /**
  * Resizing-aware consumer barrier.
  */
-struct SingleResizingConsumerSequenceBarrier<T, W> {
+struct SingleResizingConsumerSequenceBarrier<T: Send, W> {
     /// Reuse data and constructor from SingleConsumerSequenceBarrier
     cb: SingleConsumerSequenceBarrier<W, ResizableRingBuffer<T>>
 }
@@ -2570,15 +2581,15 @@ impl fmt::Debug for TimeoutResizeWaitStrategy {
     }
 }
 
-pub struct SinglePublisher<T, W> {
+pub struct SinglePublisher<T: Send, W: ProcessingWaitStrategy> {
     p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>>
 }
 
-pub struct SingleConsumer<T, W> {
+pub struct SingleConsumer<T: Send, W: ProcessingWaitStrategy> {
     c: GenericConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T>>>,
 }
 
-pub struct SingleFinalConsumer<T, W> {
+pub struct SingleFinalConsumer<T: Send, W: ProcessingWaitStrategy> {
     c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T>>>
 }
 
@@ -2631,15 +2642,15 @@ impl <T: Send, W: ProcessingWaitStrategy> FinalConsumer<T> for SingleFinalConsum
     }
 }
 
-pub struct SingleResizingPublisher<T> {
+pub struct SingleResizingPublisher<T: Send> {
     p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>>
 }
 
-pub struct SingleResizingConsumer<T> {
+pub struct SingleResizingConsumer<T: Send> {
     c: GenericConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>
 }
 
-pub struct SingleResizingFinalConsumer<T> {
+pub struct SingleResizingFinalConsumer<T: Send> {
     c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>
 }
 
