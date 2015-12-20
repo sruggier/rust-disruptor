@@ -151,7 +151,7 @@ struct RingBufferData<T: Send> {
 impl<T: Send> RingBufferData<T> {
     fn new(size: usize) -> RingBufferData<T> {
         // See Drop below for corresponding slot deallocation
-        let buffer = Vec::from_fn(size, |_i| { Slot::new() } );
+        let buffer = (0..size).map(|_i| { Slot::new() } ).collect();
         RingBufferData {
             entries: buffer,
         }
