@@ -25,7 +25,7 @@ use std::cmp;
 use std::fmt;
 use std::option::{Option};
 use std::ptr;
-use std::thread::Thread;
+use std::thread;
 use std::vec::Vec;
 use std::usize;
 use alloc::arc::Arc;
@@ -1019,7 +1019,7 @@ impl PublishingWaitStrategy for YieldWaitStrategy {
         while n > available {
             available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
                 calculate_available);
-            Thread::yield_now();
+            thread::yield_now();
         }
 
         available
@@ -1046,7 +1046,7 @@ impl ProcessingWaitStrategy for YieldWaitStrategy {
 
         while available < n {
             available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
-            Thread::yield_now();
+            thread::yield_now();
         }
 
         available
@@ -1300,7 +1300,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
             // At the same time, it's mostly off the fast path (this code path is only hit if a long
             // gap in publishing caused one or more consumers to sleep), so performance shouldn't be
             // hurt much.
-            Thread::yield_now();
+            thread::yield_now();
         }
     }
 }
@@ -2502,7 +2502,7 @@ impl TimeoutResizeWaitStrategy {
 
             available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
                 calculate_available);
-            Thread::yield_now();
+            thread::yield_now();
         }
         // If the timeout was reached, this will be less than n
         available
