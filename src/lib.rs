@@ -777,6 +777,12 @@ pub trait ProcessingWaitStrategy : PublishingWaitStrategy {
     ) -> usize;
 }
 
+// Create a shorthand for availability calculation functions, since this gets repeated several
+// times below.
+pub trait AvailabilityFn: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
+impl<F: Fn(SequenceNumber, SequenceNumber, usize) -> usize>
+    AvailabilityFn for F {}
+
 /**
  * Helps the publisher wait to avoid overwriting values that are still being consumed.
  */
@@ -786,13 +792,13 @@ pub trait PublishingWaitStrategy : Clone + Send {
      * returns the actual number of available items, which may be greater than n. Returns
      * usize::MAX if there are no dependencies.
      */
-    fn wait_for_consumers(
+    fn wait_for_consumers<F: AvailabilityFn>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: usize) -> usize
+        calculate_available: &F
     ) -> usize;
 
     /**
@@ -811,15 +817,15 @@ pub trait PublishingWaitStrategy : Clone + Send {
  * Given a list of dependencies, retrieves the current value of each and returns the minimum number
  * of available items out of all the dependencies.
  */
-fn calculate_available_list(
+fn calculate_available_list<F: AvailabilityFn>(
     waiting_sequence: SequenceNumber,
     dependencies: &[SequenceReader],
     buffer_size: usize,
-    calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: usize) -> usize
+    calculate_available: &F
 ) -> usize {
     let mut available = usize::MAX;
     for consumer_sequence in dependencies.iter() {
-        let a = (*calculate_available)(consumer_sequence.get(), waiting_sequence, buffer_size);
+        let a = calculate_available(consumer_sequence.get(), waiting_sequence, buffer_size);
         available = cmp::min(available, a);
     }
     available
@@ -855,13 +861,13 @@ impl ProcessingWaitStrategy for SpinWaitStrategy {
     }
 }
 impl PublishingWaitStrategy for SpinWaitStrategy {
-    fn wait_for_consumers(
+    fn wait_for_consumers<F: AvailabilityFn>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: usize) -> usize
+        calculate_available: &F
     ) -> usize {
         let mut available = 0;
         while available < n {
@@ -891,12 +897,12 @@ impl fmt::Debug for SpinWaitStrategy {
  * The number of available items, which may be less than `n` if the maximum amount of tries was
  * reached.
  */
-fn spin_for_consumer_retries(
+fn spin_for_consumer_retries<F: AvailabilityFn>(
     n: usize,
     waiting_sequence: SequenceNumber,
     dependencies: &[SequenceReader],
     buffer_size: usize,
-    calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: usize) -> usize,
+    calculate_available: &F,
     max_tries: usize
 ) -> usize {
     let mut tries = 0;
@@ -997,17 +1003,13 @@ impl Clone for YieldWaitStrategy {
 }
 
 impl PublishingWaitStrategy for YieldWaitStrategy {
-    fn wait_for_consumers(
+    fn wait_for_consumers<F: AvailabilityFn>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &fn(
-            gating_sequence: SequenceNumber,
-            waiting_sequence: SequenceNumber,
-            batch_size: usize
-        ) -> usize
+        calculate_available: &F
     ) -> usize {
         let mut available = spin_for_consumer_retries(n, waiting_sequence, dependencies, buffer_size,
             calculate_available, self.max_spin_tries_consumer);
@@ -1258,17 +1260,13 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
 }
 
 impl PublishingWaitStrategy for BlockingWaitStrategy {
-    fn wait_for_consumers(
+    fn wait_for_consumers<F: AvailabilityFn>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &fn(
-            gating_sequence: SequenceNumber,
-            waiting_sequence: SequenceNumber,
-            batch_size: usize
-        ) -> usize
+        calculate_available: &F
     ) -> usize {
         let w = YieldWaitStrategy::new_with_retry_count(
             self.max_spin_tries_publisher, self.max_spin_tries_consumer
@@ -1503,7 +1501,8 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.sequence.get_owned();
         let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence,
-                self.dependencies.as_slice(), self.ring_buffer.size(), &calculate_available_publisher);
+                self.dependencies.as_slice(), self.ring_buffer.size(),
+                &calculate_available_publisher);
         available
     }
 
@@ -2391,13 +2390,13 @@ trait ResizingWaitStrategy : ProcessingWaitStrategy {
      * slot free in the background, for use in communicating to consumers that a reallocation has
      * occurred.
      */
-    fn try_wait_for_consumers(
+    fn try_wait_for_consumers<F: AvailabilityFn>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: usize) -> usize
+        calculate_available: &F
     ) -> usize;
 }
 
@@ -2451,13 +2450,13 @@ impl TimeoutResizeWaitStrategy {
      * `ResizingWaitStrategy::try_wait_for_consumers`, but leave the issue of reserving an extra
      * slot for the caller.
      */
-    fn try_wait_for_consumers_real(
+    fn try_wait_for_consumers_real<F: AvailabilityFn>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: usize) -> usize
+        calculate_available: &F
     ) -> usize {
         // Try once before querying the current time, in case the slots have become available since
         // the last wait.
@@ -2510,13 +2509,13 @@ impl TimeoutResizeWaitStrategy {
 }
 
 impl ResizingWaitStrategy for TimeoutResizeWaitStrategy {
-    fn try_wait_for_consumers(
+    fn try_wait_for_consumers<F: AvailabilityFn>(
         &self,
         mut n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: usize) -> usize
+        calculate_available: &F
     ) -> usize {
         // Always leave an extra slot available, for use being marked if we decide to allocate a
         // larger buffer.
@@ -2553,13 +2552,13 @@ impl ProcessingWaitStrategy for TimeoutResizeWaitStrategy {
 }
 
 impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
-    fn wait_for_consumers(
+    fn wait_for_consumers<F: AvailabilityFn>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &fn(gating_sequence: SequenceNumber, waiting_sequence: SequenceNumber, batch_size: usize) -> usize
+        calculate_available: &F
     ) -> usize {
         // This code path should be unused
         self.wait_strategy.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size, calculate_available)
