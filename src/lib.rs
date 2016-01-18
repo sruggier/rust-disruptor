@@ -1238,7 +1238,7 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
         // Grab lock on wait condition
         let signal_needed = &mut d.signal_needed;
         {
-            let condvar_guard = d.wait_condition.lock();
+            let condvar_guard = d.wait_condition.lock().unwrap();
             let condvar = &*condvar_guard;
             while n > available {
                 // Communicate intent to wait to publisher
@@ -1247,7 +1247,7 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
                 available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 if n > available {
                     // Sleep
-                    condvar.wait(&condvar_guard);
+                    condvar.wait(condvar_guard);
                     available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 }
             }
@@ -1289,7 +1289,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
         // If so, acquire the lock and signal on the wait condition
         if signal_needed {
             {
-                let condvar_guard = d.wait_condition.lock();
+                let condvar_guard = d.wait_condition.lock().unwrap();
                 let condvar = &*condvar_guard;
                 condvar.notify_all();
             }
