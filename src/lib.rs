@@ -1441,14 +1441,18 @@ trait SequenceBarrier: Send {
  * Split off from SequenceBarrier to reduce unnecessary type parameter requirements for general
  * users of the SequenceBarrier type, and users of the GenericPublisher type.
  */
-trait NewConsumerBarrier {
-    type CSB;
+trait PublisherSequenceBarrier {
+    type CSB : SequenceBarrier + ConsumerSequenceBarrier;
 
     /**
      * Constructs a consumer barrier that is set up to wait on this SequenceBarrier's sequence
      * before it attempts to process items.
      */
     fn new_consumer_barrier(&self) -> Self::CSB;
+}
+
+trait ConsumerSequenceBarrier {
+    fn new_consumer_barrier(&self) -> Self;
 }
 
 /**
@@ -1529,7 +1533,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> NewConsumerBarrier
+impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> PublisherSequenceBarrier
         for SinglePublisherSequenceBarrier<W, RB> {
     type CSB = SingleConsumerSequenceBarrier<W, RB>;
 
@@ -1610,10 +1614,8 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     unsafe fn take(&mut self) -> Self::T { self.sb.take() }
 }
 
-impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> NewConsumerBarrier
+impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> ConsumerSequenceBarrier
         for SingleConsumerSequenceBarrier<W, RB> {
-    type CSB = SingleConsumerSequenceBarrier<W, RB>;
-
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
             self.sb.ring_buffer.clone(),
@@ -1708,7 +1710,7 @@ impl<SB: SequenceBarrier> GenericPublisher<SB> {
     }
 }
 
-impl<SB: SequenceBarrier + NewConsumerBarrier> GenericPublisher<SB> {
+impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
     /*
      * TODO: take a list of usize to support parallel consumers. Need to pick a convenient return
      * type. Possible candidates:
@@ -2234,7 +2236,7 @@ impl<T: Send, W: ResizingWaitStrategy>
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> NewConsumerBarrier
+impl<T: Send, W: ProcessingWaitStrategy> PublisherSequenceBarrier
         for SingleResizingPublisherSequenceBarrier<T, W> {
     type CSB = SingleResizingConsumerSequenceBarrier<T, W>;
 
@@ -2360,10 +2362,8 @@ impl<T: Send, W: ProcessingWaitStrategy>
 }
 
 impl<T: Send, W: ProcessingWaitStrategy>
-        NewConsumerBarrier
+        ConsumerSequenceBarrier
         for SingleResizingConsumerSequenceBarrier<T, W> {
-    type CSB = SingleResizingConsumerSequenceBarrier<T, W>;
-
     fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T, W> {
         SingleResizingConsumerSequenceBarrier {
             cb: self.cb.new_consumer_barrier()
