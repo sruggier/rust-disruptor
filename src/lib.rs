@@ -2016,7 +2016,7 @@ impl<T: Send> ResizableRingBuffer<T> {
     unsafe fn try_switch_next(&mut self, sequence: SequenceNumber) -> bool {
         if !self.d.get().is_set(sequence) {
             // Switch to newly allocated buffer
-            debug!("Following switch, sequence: {}, unwrapped_sequence: {}", sequence,
+            debug!("Following switch, sequence: {:?}, unwrapped_sequence: {:?}", sequence,
                     Sequence::unwrap_number(sequence, self.size()));
             self.d = self.d.get().next.as_mut().unwrap().clone();
             return true;
