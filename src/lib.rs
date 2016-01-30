@@ -1163,8 +1163,10 @@ pub struct BlockingWaitStrategy {
 struct BlockingWaitStrategyData {
     /// True if any tasks are waiting for new slots to be released by the publisher.
     signal_needed: AtomicBool,
-    /// Waiting consumers block on, and are signalled by, this.
-    wait_condition: Mutex<Condvar>,
+    /// Waiting consumers block on, and are signalled by, this. The data guarded by the mutex is
+    /// completely superfluous and unused.
+    wait_mutex: Mutex<bool>,
+    wait_condvar: Condvar,
 }
 
 unsafe impl Send for BlockingWaitStrategy {}
@@ -1193,7 +1195,8 @@ impl BlockingWaitStrategy {
     ) -> BlockingWaitStrategy {
         let d = BlockingWaitStrategyData {
             signal_needed: AtomicBool::new(false),
-            wait_condition: Mutex::new(Condvar::new()),
+            wait_mutex: Mutex::new(false),
+            wait_condvar: Condvar::new()
         };
         BlockingWaitStrategy {
             d: UncheckedUnsafeArc::new(d),
@@ -1240,16 +1243,15 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
         // Grab lock on wait condition
         let signal_needed = &mut d.signal_needed;
         {
-            let condvar_guard = d.wait_condition.lock().unwrap();
-            let condvar = &*condvar_guard;
             while n > available {
+                let mutex_guard = d.wait_mutex.lock().unwrap();
                 // Communicate intent to wait to publisher
                 let _dummy: bool = signal_needed.swap(true, AcqRel);
                 // Verify that no slot was published
                 available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 if n > available {
                     // Sleep
-                    condvar.wait(condvar_guard);
+                    d.wait_condvar.wait(mutex_guard);
                     available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 }
             }
@@ -1287,9 +1289,8 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
         // If so, acquire the lock and signal on the wait condition
         if signal_needed {
             {
-                let condvar_guard = d.wait_condition.lock().unwrap();
-                let condvar = &*condvar_guard;
-                condvar.notify_all();
+                let mutex_guard = d.wait_mutex.lock().unwrap();
+                d.wait_condvar.notify_all();
             }
 
             // This is a bit of a hack to work around the fact that the Mutex will occasionally
