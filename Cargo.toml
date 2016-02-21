@@ -20,3 +20,4 @@ lto = true
 
 [dependencies]
 time = "0.1"
+log = "0.3.5"
