@@ -12,8 +12,6 @@
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 
-#![feature(globs)]
-
 extern crate alloc;
 #[macro_use]
 extern crate log;
