@@ -1287,7 +1287,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
         // If so, acquire the lock and signal on the wait condition
         if signal_needed {
             {
-                let mutex_guard = d.wait_mutex.lock().unwrap();
+                let _mutex_guard = d.wait_mutex.lock().unwrap();
                 d.wait_condvar.notify_all();
             }
 
