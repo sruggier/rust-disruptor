@@ -12,7 +12,6 @@
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 
-extern crate alloc;
 #[macro_use]
 extern crate log;
 extern crate time;
@@ -26,8 +25,8 @@ use std::ptr;
 use std::thread;
 use std::vec::Vec;
 use std::usize;
-use alloc::arc::Arc;
 use std::cell::UnsafeCell;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize,AtomicBool};
 use std::sync::atomic::Ordering::{Acquire,Release,AcqRel};
 use std::sync::{Mutex,Condvar};
