@@ -15,7 +15,7 @@ use time::precise_time_ns;
 use std::fmt;
 use std::string;
 use std::u64;
-use std::task::{spawn};
+use std::thread::{spawn};
 
 use disruptor::{SinglePublisher, SingleResizingPublisher, ProcessingWaitStrategy,SpinWaitStrategy,
     YieldWaitStrategy,BlockingWaitStrategy, PipelineInit, Publisher, FinalConsumer};
