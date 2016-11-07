@@ -1,5 +1,8 @@
 extern crate getopts;
 
+use std::str::FromStr;
+use std::u64;
+
 /// Contains values obtained from common argument processing.
 pub struct CommonTestOpts {
     pub n_iterations: u64,
@@ -48,9 +51,9 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
     // Validate as integer if -n specified
     let iterations = match matches.opt_str("n") {
         Some(n_str) => {
-            match ::std::str::from_str::<u64>(n_str.as_slice()) {
-                Some(n) => n,
-                None => panic!("Expected a positive number of iterations, received {}", n_str)
+            match u64::from_str(n_str.as_slice()) {
+                Ok(n) => n,
+                Err(fail) => panic!("Failed to parse number of iterations '{}': {}", n_str, fail)
             }
         }
         None => default_n_iterations
