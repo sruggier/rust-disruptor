@@ -6,9 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(phase)]
+
 extern crate disruptor;
-#[phase(plugin,link)] extern crate log;
+#[macro_use]
+extern crate log;
 extern crate time;
 
 use time::precise_time_ns;
