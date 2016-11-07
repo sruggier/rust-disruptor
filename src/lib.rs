@@ -685,15 +685,15 @@ fn log2(mut power_of_2: usize) -> usize {
     exp
 }
 
-/// Ensure sequences correctly handle buffer sizes of 2^(usize::BITS-1).
+/// Ensure sequences correctly support the maximum buffer size.
 #[test]
 fn test_sequence_overflow() {
-    // The maximum buffer size is 2^(usize::BITS) / wrap_boundary(1) (for example, 2^30 with the
+    // The maximum buffer size is (usize::MAX+1) / wrap_boundary(1) (for example, 2^30 with the
     // current boundary of 4*buffer_size). For that size, wrap_boundary(buffer_size) - 1 would
     // evaluate to usize::MAX, and unsigned integer arithmetic will naturally take care of the
     // wrapping. The sequence will wrap to 0 at wrap_boundary(buffer_size), i.e. usize::MAX + 1.
     let exp = log2(wrap_boundary(1));
-    let max_buffer_size = 1 << (usize::BITS - exp);
+    let max_buffer_size = 1 << (mem::size_of::<usize>()*8 - exp);
 
     let mut s = Sequence::new();
     assert_eq!(s.get().value(), SEQUENCE_INITIAL);
