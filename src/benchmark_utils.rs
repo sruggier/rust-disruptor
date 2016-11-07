@@ -30,7 +30,7 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
             default_n_iterations).as_slice(), "N"),
     );
 
-    let args = ::std::os::args();
+    let args = ::std::env::args();
     let arg_flags = args.tail();
     let argv0 = &args[0];
 
