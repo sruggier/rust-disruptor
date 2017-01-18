@@ -1789,16 +1789,16 @@ mod generic_publisher_tests {
 
     #[test]
     fn send_single_value() {
-        let mut publisher = SinglePublisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let mut publisher = SinglePublisher::<isize, SpinWaitStrategy>::new(1, SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
         publisher.publish(1);
-        consumer.consume(|value: &int| {
+        consumer.consume(|value: &isize| {
             assert!(*value == 1);
         });
     }
     #[test]
     fn send_single_value_via_take() {
-        let mut publisher = SinglePublisher::<int, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let mut publisher = SinglePublisher::<isize, SpinWaitStrategy>::new(1, SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
         let value = 1;
         publisher.publish(value);
