@@ -15,6 +15,7 @@ extern crate time;
 use time::precise_time_ns;
 use std::fmt;
 use std::string;
+use std::sync::mpsc::channel;
 use std::u64;
 use std::thread::{spawn};
 
@@ -81,23 +82,26 @@ fn run_task_pipe_benchmark(iterations: u64) {
     // sum through result_sender.
     spawn(|| {
         let mut sum = 0u64;
-        let mut i = input_receiver.recv();
+        let mut i = input_receiver.recv().unwrap();
         while i != u64::MAX {
             sum += i;
-            i = input_receiver.recv();
+            i = input_receiver.recv().unwrap();
         }
-        result_sender.send(sum);
+        let result = result_sender.send(sum);
+        assert!(result.is_ok());
     });
 
     // Send every number from 1 to (iterations + 1), and then tell the task
     // to finish and return by sending usize::MAX.
     for num in 1..iterations + 1 {
-        input_sender.send(num as u64);
+        let result = input_sender.send(num as u64);
+        assert!(result.is_ok())
     }
-    input_sender.send(u64::MAX);
+    let result = input_sender.send(u64::MAX);
+    assert!(result.is_ok());
     // Wait for the task to finish
     let loop_end = precise_time_ns();
-    let result = result_receiver.recv();
+    let result = result_receiver.recv().unwrap();
     let after = precise_time_ns();
 
     let expected_value = triangle_number(iterations);
@@ -126,7 +130,8 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
             debug!("{}", i);
             // In-band magic number value tells us when to break out of the loop
             if i == u64::MAX {
-                result_sender.send(sum);
+                let result = result_sender.send(sum);
+                assert!(result.is_ok());
                 break;
             }
             assert_eq!(i, expected_value);
@@ -143,7 +148,7 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     publisher.publish(u64::MAX);
 
     let loop_end = precise_time_ns();
-    let result = result_receiver.recv();
+    let result = result_receiver.recv().unwrap();
     let after = precise_time_ns();
 
     let expected_value = triangle_number(iterations);
