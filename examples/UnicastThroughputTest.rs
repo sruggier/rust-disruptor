@@ -51,7 +51,7 @@ static NUM_ITERATIONS: u64 = 1000 * 1000 * 100 - 1;
  */
 fn triangle_number(n: u64) -> u64 {
     let mut sum : u64 = 0;
-    for num in range(1, n+1) {
+    for num in 1..n+1 {
         sum += num as u64;
     }
     sum
@@ -91,7 +91,7 @@ fn run_task_pipe_benchmark(iterations: u64) {
 
     // Send every number from 1 to (iterations + 1), and then tell the task
     // to finish and return by sending usize::MAX.
-    for num in range(1, iterations + 1) {
+    for num in 1..iterations + 1 {
         input_sender.send(num as u64);
     }
     input_sender.send(u64::MAX);
@@ -137,7 +137,7 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
 
     // Send every number from 1 to (iterations + 1), and then tell the task
     // to finish and return by sending usize::MAX.
-    for num in range(1, iterations + 1) {
+    for num in 1..iterations + 1 {
         publisher.publish(num as u64)
     }
     publisher.publish(u64::MAX);
