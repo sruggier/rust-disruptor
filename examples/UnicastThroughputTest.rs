@@ -158,11 +158,11 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     println!("Disruptor ({}): {} ops/sec, result wait: {} ns", desc, ops, wait_latency);
 }
 
-fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
+fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Debug>(
     iterations: u64,
     w: W
 ) {
-    let desc = format!("{}", w);
+    let desc = format!("{:?}", w);
     let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
     let consumer = publisher.create_single_consumer_pipeline();
     run_disruptor_benchmark(iterations, publisher, consumer, desc);
