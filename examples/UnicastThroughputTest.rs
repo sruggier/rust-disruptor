@@ -80,7 +80,7 @@ fn run_task_pipe_benchmark(iterations: u64) {
 
     // Listen on input_receiver, summing all the received numbers, then return the
     // sum through result_sender.
-    spawn(|| {
+    spawn(move || {
         let mut sum = 0u64;
         let mut i = input_receiver.recv().unwrap();
         while i != u64::MAX {
@@ -121,7 +121,7 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
 
     let before = precise_time_ns();
 
-    spawn(|| {
+    spawn(move || {
         let mut sum = 0u64;
 
         let mut expected_value = 1u64;
