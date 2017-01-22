@@ -33,8 +33,8 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
             default_n_iterations).as_slice(), "N"),
     );
 
-    let args = ::std::env::args();
-    let arg_flags = args.tail();
+    let args: Vec<String> = ::std::env::args().collect();
+    let arg_flags = &args[1..];
     let argv0 = &args[0];
 
     let matches = match getopts::getopts(arg_flags, opts.as_slice()) {
