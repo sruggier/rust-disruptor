@@ -1248,7 +1248,8 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
                 available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 if n > available {
                     // Sleep
-                    d.wait_condvar.wait(mutex_guard);
+                    let lock_result = d.wait_condvar.wait(mutex_guard);
+                    assert!(lock_result.is_ok());
                     available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 }
             }
