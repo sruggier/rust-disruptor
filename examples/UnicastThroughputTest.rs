@@ -158,7 +158,7 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     println!("Disruptor ({}): {} ops/sec, result wait: {} ns", desc, ops, wait_latency);
 }
 
-fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Debug>(
+fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Debug + 'static>(
     iterations: u64,
     w: W
 ) {
