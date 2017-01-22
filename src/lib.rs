@@ -290,7 +290,7 @@ struct UncheckedUnsafeArc<T: Send> {
 impl<T: Send> UncheckedUnsafeArc<T> {
     fn new(data: T) -> UncheckedUnsafeArc<T> {
         let arc = Arc::new(UnsafeCell::new(data));
-        let data = unsafe { arc.get() };
+        let data = arc.get();
         UncheckedUnsafeArc {
             arc: arc,
             data: data,
