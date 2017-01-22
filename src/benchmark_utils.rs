@@ -10,7 +10,7 @@ pub struct CommonTestOpts {
 
 fn usage(argv0: &str, opts: &[getopts::OptGroup]) -> ! {
     let brief = format!("Usage: {} [OPTIONS]", argv0);
-    println!("{}", getopts::usage(brief.as_slice(), opts));
+    println!("{}", getopts::usage(brief.as_str(), opts));
     // Exit immediately
     panic!();
 }
@@ -30,7 +30,7 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
         optflag("h", "help", "show this message and exit"),
         optopt("n", "iterations",
             format!("how many iterations to perform in each benchmark (default {})",
-            default_n_iterations).as_slice(), "N"),
+            default_n_iterations).as_str(), "N"),
     );
 
     let args: Vec<String> = ::std::env::args().collect();
@@ -45,13 +45,13 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
         }
     };
     if matches.opt_present("h") {
-        usage(argv0.as_slice(), opts.as_slice());
+        usage(argv0.as_str(), opts.as_slice());
     }
 
     // Validate as integer if -n specified
     let iterations = match matches.opt_str("n") {
         Some(n_str) => {
-            match u64::from_str(n_str.as_slice()) {
+            match u64::from_str(n_str.as_str()) {
                 Ok(n) => n,
                 Err(fail) => panic!("Failed to parse number of iterations '{}': {}", n_str, fail)
             }
