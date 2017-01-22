@@ -1,4 +1,4 @@
-extern crate getopts;
+use getopts::Options;
 
 use std::str::FromStr;
 use std::u64;
@@ -8,9 +8,9 @@ pub struct CommonTestOpts {
     pub n_iterations: u64,
 }
 
-fn usage(argv0: &str, opts: &[getopts::OptGroup]) -> ! {
+fn usage(argv0: &str, opts: &Options) -> ! {
     let brief = format!("Usage: {} [OPTIONS]", argv0);
-    println!("{}", getopts::usage(brief.as_str(), opts));
+    println!("{}", opts.usage(&brief));
     // Exit immediately
     panic!();
 }
@@ -24,20 +24,19 @@ fn usage(argv0: &str, opts: &[getopts::OptGroup]) -> ! {
  * arguments, but for now, this will do.
  */
 pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
-    use self::getopts::{optflag,optopt};
 
-    let opts = vec!(
-        optflag("h", "help", "show this message and exit"),
-        optopt("n", "iterations",
-            format!("how many iterations to perform in each benchmark (default {})",
-            default_n_iterations).as_str(), "N"),
-    );
+    let mut opts = Options::new();
+    opts.optflag("h", "help", "show this message and exit");
+    opts.optopt(
+        "n", "iterations",
+        &format!("how many iterations to perform in each benchmark (default {})",
+        default_n_iterations), "N");
 
     let args: Vec<String> = ::std::env::args().collect();
     let arg_flags = &args[1..];
     let argv0 = &args[0];
 
-    let matches = match getopts::getopts(arg_flags, opts.as_slice()) {
+    let matches = match opts.parse(arg_flags) {
         Ok(m) => m,
         Err(fail) => {
             println!("{}\nUse '{} --help' to see a list of valid options.", fail, argv0);
@@ -45,7 +44,7 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
         }
     };
     if matches.opt_present("h") {
-        usage(argv0.as_str(), opts.as_slice());
+        usage(&argv0, &opts);
     }
 
     // Validate as integer if -n specified

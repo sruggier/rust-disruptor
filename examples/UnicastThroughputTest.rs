@@ -8,6 +8,8 @@
 
 
 extern crate disruptor;
+
+extern crate getopts;
 #[macro_use]
 extern crate log;
 extern crate time;
