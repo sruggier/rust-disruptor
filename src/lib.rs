@@ -275,7 +275,7 @@ impl fmt::Debug for SequenceNumber {
  * The returned number will be a power of two, and a multiple of buffer_size.
  */
 fn wrap_boundary(buffer_size: usize) -> usize {
-    4*buffer_size
+    buffer_size.wrapping_mul(4)
 }
 
 /// UnsafeArc, but with unchecked versions of the get and get_immut functions. The use of atomic
@@ -619,11 +619,11 @@ impl Sequence {
         // type's API doesn't allow it to be cloned and accessed from multiple places concurrently.
         unsafe {
             let d = self.value_arc.get();
-            d.private_value += n;
+            d.private_value = d.private_value.wrapping_add(n);
             // Given that buffer_size is a power of two, wrap by masking out the high bits. This
             // operation is a noop if the value is less than wrap_boundary(buffer_size), so it's
             // unnecessary to check before wrapping.
-            let wrap_mask = wrap_boundary(buffer_size) - 1;
+            let wrap_mask = wrap_boundary(buffer_size).wrapping_sub(1);
             d.private_value &= wrap_mask;
         }
     }
@@ -2288,7 +2288,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
         let unwrapped_sequence = self.get_current().value();
         let current_available = self.get_cached_available();
         let unwrap_difference = unwrapped_sequence - original_sequence;
-        let mut actual_cached_available = current_available - unwrap_difference;
+        let mut actual_cached_available = current_available.wrapping_sub(unwrap_difference);
         // The current cached availability value may be less than the difference if the consumer's
         // sequence has wrapped since it last re-checked availability: the consumer's sequence value
         // is closer to the publisher's before the wrapping occurs, which results in a less inflated
