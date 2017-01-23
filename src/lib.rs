@@ -1665,7 +1665,7 @@ pub trait Consumer<T: Send> : Send {
      * Waits for a single item to become available, then calls the given function to process the
      * value.
       */
-    fn consume<C: Fn(&T)>(&self, consume_callback: C);
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C);
 }
 
 /**
@@ -1770,7 +1770,7 @@ impl<SB: SequenceBarrier>
         }
     }
 
-    fn consume<C: Fn(&SB::T)>(&self, consume_callback: C) {
+    fn consume<C: FnMut(&SB::T)>(&self, mut consume_callback: C) {
         unsafe {
             let sequence_barrier = &mut *self.sequence_barrier.get();
             sequence_barrier.next();
@@ -1836,7 +1836,7 @@ impl <SB: SequenceBarrier>
     }
 
     /// See the GenericConsumer.consume method.
-    fn consume<C: Fn(&SB::T)>(&self, consume_callback: C) { self.sc.consume(consume_callback) }
+    fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) { self.sc.consume(consume_callback) }
 
     fn take(&self) -> SB::T {
         unsafe {
@@ -2627,11 +2627,11 @@ impl<T: Send, W: ProcessingWaitStrategy> Publisher<T> for SinglePublisher<T, W> 
 }
 
 impl <T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleConsumer<T, W> {
-    fn consume<C: Fn(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
 }
 
 impl <T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleFinalConsumer<T, W> {
-    fn consume<C: Fn(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
 }
 
 impl <T: Send, W: ProcessingWaitStrategy> FinalConsumer<T> for SingleFinalConsumer<T, W> {
@@ -2714,11 +2714,11 @@ impl<T: Send> Publisher<T> for SingleResizingPublisher<T> {
 }
 
 impl<T: Send> Consumer<T> for SingleResizingConsumer<T> {
-    fn consume<C: Fn(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
 }
 
 impl<T: Send> Consumer<T> for SingleResizingFinalConsumer<T> {
-    fn consume<C: Fn(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
 }
 
 impl <T: Send> FinalConsumer<T> for SingleResizingFinalConsumer<T> {
