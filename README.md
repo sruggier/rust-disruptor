@@ -32,9 +32,9 @@ newer versions. It's currently tested to work with rustc at commit
 
 You can build, run tests, and run benchmarks using `cargo build`, `cargo test`,
 and `cargo bench`, respectively. Additionally, `cargo test` builds
-examples/UnicastThroughputTest, which is a simple throughput benchmark that
-compares rust's channel API to the disruptor implementation using various wait
-strategies.
+examples/unicast_throughput_benchmark, which is a simple throughput benchmark
+that compares rust's channel API to the disruptor implementation using various
+wait strategies.
 
 # Hacking
 
