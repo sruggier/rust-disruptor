@@ -17,6 +17,6 @@ while inotifywait -q -e attrib,close_write,create,delete,delete_self,move_self,m
 		cargo build &&
 		cargo test &&
 		cargo bench &&
-		./target/examples/unicast_throughput_benchmark
+		./target/debug/examples/unicast_throughput_benchmark
 	) || true
 done
