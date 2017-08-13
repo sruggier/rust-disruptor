@@ -1,3 +1,4 @@
+#![feature(test)]
 extern crate disruptor;
 extern crate time;
 extern crate test;
