@@ -6,7 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(phase)]
 extern crate disruptor;
 #[macro_use]
 extern crate log;
