@@ -19,47 +19,6 @@ However, current users can enjoy the following features:
    strategy when the CPU is idle, but doesn't waste as many CPU cycles when
    other software is executing.
 
-# Building
-
-The build system requires the following items in the path:
- * git (to clone the RustCMake submodule)
- * CMake 2.8
- * rustc
- * Optional: inotifywait (for auto-rebuild.sh)
-
-The code is developed against Rust's master branch, and periodically ported to
-newer versions. It's currently tested to work with rustc at commit
-`567b90ff095076054c98fa2f08d6c552ae60968d`
-
-For those in a hurry, initiate the build with the following command:
-
-	./build.sh
-
-You can also build manually, with the following sequence of commands:
-
-	git submodule init
-	git submodule update
-
-	mkdir -p build
-	cd build
-	cmake ..
-	make
-
-Optionally, you can pass `-j <jobs>` to run multiple build tasks in parallel
-and save time.
-
-The build will place built files under `build` in the following directories:
-
-	lib     # the main library
-	test    # executables that can be run with no arguments
-	example # executables that can be run with --bench
-
-# Hacking
-
-The auto-rebuild.sh script rebuilds whenever any source files change. Leave it
-open in a terminal as you hack on the code for convenient feedback about compile
-errors, test results, and performance.
-
 # License
 
 To be compatible with Rust, this library is dual-licenced under the terms of the

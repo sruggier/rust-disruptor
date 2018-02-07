@@ -1,3 +1,5 @@
+#![feature(test)]
+
 extern crate disruptor;
 extern crate time;
 extern crate test;
@@ -5,8 +7,7 @@ extern crate test;
 use disruptor::{SinglePublisher, ProcessingWaitStrategy, SpinWaitStrategy, YieldWaitStrategy,
     BlockingWaitStrategy, PipelineInit, Publisher, Consumer, FinalConsumer};
 use test::Bencher;
-use std::u64;
-use std::task::{spawn};
+use std::thread;
 
 /**
  * Run a two-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
@@ -16,7 +17,7 @@ use std::task::{spawn};
  * * b - the Bencher
  * * w - The wait strategy to use
  */
-fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy>(
+fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy + 'static>(
     b: &mut Bencher,
     w: W
 )
@@ -26,12 +27,12 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy>(
     let mut pong_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
     let pong_consumer = pong_publisher.create_single_consumer_pipeline();
 
-    spawn(proc() {
+    thread::spawn(move || {
         loop {
             // Echo every received value
             let i = ping_consumer.take();
             // In-band magic value indicates that we should exit
-            if u64::MAX == i {
+            if u64::max_value() == i {
                 break;
             }
             else {
@@ -48,7 +49,7 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy>(
         assert_eq!(i, i_echo);
         i += 1;
     });
-    ping_publisher.publish(u64::MAX);
+    ping_publisher.publish(u64::max_value());
 }
 
 #[bench]
@@ -79,7 +80,7 @@ fn measure_ping_pong_latency_two_ringbuffers_block(b: &mut Bencher) {
  * * b - the Bencher
  * * w - The wait strategy to use
  */
-fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
+fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 'static>(
     b: &mut Bencher,
     w: W
 )
@@ -91,7 +92,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
     let (mut ping_consumer_vec, pong_consumer) = ping_publisher.create_consumer_pipeline(2);
     let ping_consumer = ping_consumer_vec.pop().take().unwrap();
 
-    spawn(proc() {
+    thread::spawn(move || {
         loop {
             // It's possible to allow consumers to mutate each item during processing to communicate
             // with downstream consumers, but that's not implemented yet. For now, the received
@@ -104,7 +105,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
                 i = *value;
             });
             // In-band magic value indicates that we should exit
-            if u64::MAX == i {
+            if u64::max_value() == i {
                 break;
             }
         }
@@ -118,7 +119,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy>(
         assert_eq!(i, i_echo);
         i += 1;
     });
-    ping_publisher.publish(u64::MAX);
+    ping_publisher.publish(u64::max_value());
 }
 
 #[bench]

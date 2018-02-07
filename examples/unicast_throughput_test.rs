@@ -6,21 +6,78 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(phase)]
 extern crate disruptor;
-#[phase(plugin,link)] extern crate log;
+#[macro_use]
+extern crate log;
 extern crate time;
+extern crate getopts;
+
+use self::getopts::Options;
+use std::str::FromStr;
 
 use time::precise_time_ns;
-use std::fmt;
-use std::string;
-use std::u64;
-use std::task::{spawn};
+use std::{fmt, string, thread};
+use std::sync::mpsc::channel;
+use fmt::Debug;
 
 use disruptor::{SinglePublisher, SingleResizingPublisher, ProcessingWaitStrategy,SpinWaitStrategy,
-    YieldWaitStrategy,BlockingWaitStrategy, PipelineInit, Publisher, FinalConsumer};
-use benchmark_utils::{parse_args};
-mod benchmark_utils;
+    YieldWaitStrategy,BlockingWaitStrategy, PipelineInit, Publisher, FinalConsumer, Consumer};
+
+/// Contains values obtained from common argument processing.
+pub struct CommonTestOpts {
+    pub n_iterations: u64,
+}
+
+fn usage(argv0: &str, opts: Options) -> ! {
+    let brief = format!("Usage: {} [OPTIONS]", argv0);
+    println!("{}", opts.usage(&brief));
+    // Exit immediately
+    panic!();
+}
+
+/**
+ * Retrieve a parsed representation of the command-line arguments, or die trying. If the user has
+ * requested a help string or given an invalid argument, this will print out help information and
+ * exit.
+ *
+ * The API of this function will clearly have to change if some callers want to include their own
+ * arguments, but for now, this will do.
+ */
+pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
+    let mut opts = Options::new();
+    opts.optflag("h", "help", "show this message and exit");
+    opts.optopt("n", "iterations",
+                &format!("how many iterations to perform in each benchmark (default {})",
+                         default_n_iterations), "N");
+
+    let args = ::std::env::args().collect::<Vec<String>>();
+    let arg_flags = &args[1..];
+    let argv0 = &args[0];
+
+    let matches = match opts.parse(arg_flags) {
+        Ok(m) => m,
+        Err(fail) => {
+            println!("{}\nUse '{} --help' to see a list of valid options.", fail, argv0);
+            panic!();
+        }
+    };
+    if matches.opt_present("h") {
+        usage(&argv0, opts);
+    }
+
+    // Validate as integer if -n specified
+    let iterations = matches.opt_str("n")
+        .map(|n_str|
+            u64::from_str(&n_str)
+                .expect("Expected a positive number of iterations")
+        )
+        .unwrap_or(default_n_iterations);
+
+    CommonTestOpts {
+        n_iterations: iterations,
+    }
+}
+
 
 /**
  * Given a start time, finish time, and number of iterations, calculates and
@@ -49,7 +106,7 @@ static NUM_ITERATIONS: u64 = 1000 * 1000 * 100 - 1;
  */
 fn triangle_number(n: u64) -> u64 {
     let mut sum : u64 = 0;
-    for num in range(1, n+1) {
+    for num in 1..(n+1) {
         sum += num as u64;
     }
     sum
@@ -77,25 +134,25 @@ fn run_task_pipe_benchmark(iterations: u64) {
 
     // Listen on input_receiver, summing all the received numbers, then return the
     // sum through result_sender.
-    spawn(proc() {
+    thread::spawn(move || {
         let mut sum = 0u64;
-        let mut i = input_receiver.recv();
-        while i != u64::MAX {
+        let mut i = input_receiver.recv().unwrap();
+        while i != u64::max_value() {
             sum += i;
-            i = input_receiver.recv();
+            i = input_receiver.recv().unwrap();
         }
-        result_sender.send(sum);
+        result_sender.send(sum).unwrap();
     });
 
     // Send every number from 1 to (iterations + 1), and then tell the task
     // to finish and return by sending uint::MAX.
-    for num in range(1, iterations + 1) {
-        input_sender.send(num as u64);
+    for num in 1..(iterations + 1) {
+        input_sender.send(num as u64).unwrap();
     }
-    input_sender.send(u64::MAX);
+    input_sender.send(u64::max_value()).unwrap();
     // Wait for the task to finish
     let loop_end = precise_time_ns();
-    let result = result_receiver.recv();
+    let result = result_receiver.recv().unwrap();
     let after = precise_time_ns();
 
     let expected_value = triangle_number(iterations);
@@ -105,17 +162,17 @@ fn run_task_pipe_benchmark(iterations: u64) {
     println!("Pipes: {} ops/sec, result wait: {} ns", ops, wait_latency);
 }
 
-fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
+fn run_disruptor_benchmark<C: Consumer<u64>, FC: FinalConsumer<u64> + 'static, P: Publisher<u64> + PipelineInit<u64, C, FC>>(
     iterations: u64,
-    publisher: P,
-    consumer: FC,
+    mut publisher: P,
     desc: string::String
 ) {
     let (result_sender, result_receiver) = channel::<u64>();
 
     let before = precise_time_ns();
 
-    spawn(proc() {
+    let consumer = publisher.create_single_consumer_pipeline();
+    thread::spawn(move || {
         let mut sum = 0u64;
 
         let mut expected_value = 1u64;
@@ -123,8 +180,8 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
             let i = consumer.take();
             debug!("{}", i);
             // In-band magic number value tells us when to break out of the loop
-            if i == u64::MAX {
-                result_sender.send(sum);
+            if i == u64::max_value() {
+                result_sender.send(sum).unwrap();
                 break;
             }
             assert_eq!(i, expected_value);
@@ -135,13 +192,13 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
 
     // Send every number from 1 to (iterations + 1), and then tell the task
     // to finish and return by sending uint::MAX.
-    for num in range(1, iterations + 1) {
+    for num in 1..(iterations + 1) {
         publisher.publish(num as u64)
     }
-    publisher.publish(u64::MAX);
+    publisher.publish(u64::max_value());
 
     let loop_end = precise_time_ns();
-    let result = result_receiver.recv();
+    let result = result_receiver.recv().unwrap();
     let after = precise_time_ns();
 
     let expected_value = triangle_number(iterations);
@@ -151,14 +208,13 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     println!("Disruptor ({}): {} ops/sec, result wait: {} ns", desc, ops, wait_latency);
 }
 
-fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Show>(
+fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + Debug + 'static>(
     iterations: u64,
     w: W
 ) {
-    let desc = format!("{}", w);
-    let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
-    let consumer = publisher.create_single_consumer_pipeline();
-    run_disruptor_benchmark(iterations, publisher, consumer, desc);
+    let desc = format!("{:?}", w);
+    let publisher = SinglePublisher::<u64, W>::new(8192, w);
+    run_disruptor_benchmark(iterations, publisher, desc);
 }
 
 fn run_disruptor_benchmark_spin(iterations: u64) {
@@ -180,19 +236,18 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
     let resize_timeout = 6;
     let mstp = disruptor::DEFAULT_MAX_SPIN_TRIES_PUBLISHER;
     let mstc = disruptor::DEFAULT_MAX_SPIN_TRIES_CONSUMER;
-    let mut publisher = SingleResizingPublisher::<u64>::new_resize_after_timeout_with_params(
+    let publisher = SingleResizingPublisher::<u64>::new_resize_after_timeout_with_params(
         8192,
         resize_timeout,
         mstp,
         mstc
     );
-    let consumer = publisher.create_single_consumer_pipeline();
     let desc = format!("disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
         resize_timeout,
         mstp,
         mstc
     );
-    run_disruptor_benchmark(iterations, publisher, consumer, desc);;
+    run_disruptor_benchmark(iterations, publisher, desc);;
 }
 
 fn main() {

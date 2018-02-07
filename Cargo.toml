@@ -1,0 +1,13 @@
+[package]
+name = "disruptor"
+version = "0.1.0"
+description = "Fast inter-thread communication for Rust"
+authors = ["Simon Ruggier <>"]
+license = "MIT/Apache-2.0"
+
+[dependencies]
+time = "0.1.39"
+log = "0.4.1"
+
+[dev-dependencies]
+getopts = "0.2.17"
