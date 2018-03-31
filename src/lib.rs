@@ -38,27 +38,27 @@ use std::sync::{Mutex,Condvar};
  * callers, so instead, the buffer will store pointers to Option<T>. The pointers are cloned as
  * needed, but the ring buffer has to handle deallocation of these objects to maintain safety.
  */
-struct Slot<T: Send> {
+struct RefSlot<T: Send> {
     payload: *mut Option<T>
 }
 
-unsafe impl<T: Send> Send for Slot<T> { }
+unsafe impl<T: Send> Send for RefSlot<T> { }
 
-impl<T: Send> Clone for Slot<T> {
-    fn clone(&self) -> Slot<T> {
-        Slot { payload: self.payload }
+impl<T: Send> Clone for RefSlot<T> {
+    fn clone(&self) -> RefSlot<T> {
+        RefSlot { payload: self.payload }
     }
 }
 
-impl<T: Send> Slot<T> {
+impl<T: Send> RefSlot<T> {
     /**
      * Allocates an owned box containing Option<T>, then overrides Rust's memory management by
      * storing it as a raw pointer.
      */
-    fn new() -> Slot<T> {
+    fn new() -> RefSlot<T> {
         let payload: Box<Option<T>> = Box::new(None);
         let payload_raw: *mut Option<T> = unsafe { mem::transmute(payload) };
-        Slot {
+        RefSlot {
             payload: payload_raw
         }
     }
@@ -142,13 +142,13 @@ impl<T: Send> Slot<T> {
  * Contains the underlying std::vec::Vec, and manages the lifetime of the slots.
  */
 struct RingBufferData<T: Send> {
-    entries: Vec<Slot<T>>,
+    entries: Vec<RefSlot<T>>,
 }
 
 impl<T: Send> RingBufferData<T> {
     fn new(size: usize) -> RingBufferData<T> {
         // See Drop below for corresponding slot deallocation
-        let buffer = (0..size).map(|_i| { Slot::new() } ).collect();
+        let buffer = (0..size).map(|_i| { RefSlot::new() } ).collect();
         RingBufferData {
             entries: buffer,
         }
