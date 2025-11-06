@@ -1,13 +1,15 @@
 #![feature(test)]
 extern crate disruptor;
-extern crate time;
 extern crate test;
+extern crate time;
 
-use disruptor::{SinglePublisher, ProcessingWaitStrategy, SpinWaitStrategy, YieldWaitStrategy,
-    BlockingWaitStrategy, PipelineInit, Publisher, Consumer, FinalConsumer};
-use test::Bencher;
+use disruptor::{
+    BlockingWaitStrategy, Consumer, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
+    SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
+};
+use std::thread::spawn;
 use std::u64;
-use std::thread::{spawn};
+use test::Bencher;
 
 /**
  * Run a two-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
@@ -19,9 +21,8 @@ use std::thread::{spawn};
  */
 fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy + 'static>(
     b: &mut Bencher,
-    w: W
-)
-{
+    w: W,
+) {
     let mut ping_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
     let ping_consumer = ping_publisher.create_single_consumer_pipeline();
     let mut pong_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
@@ -34,8 +35,7 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy +
             // In-band magic value indicates that we should exit
             if u64::MAX == i {
                 break;
-            }
-            else {
+            } else {
                 pong_publisher.publish(i);
             }
         }
@@ -82,9 +82,8 @@ fn measure_ping_pong_latency_two_ringbuffers_block(b: &mut Bencher) {
  */
 fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 'static>(
     b: &mut Bencher,
-    w: W
-)
-{
+    w: W,
+) {
     let mut ping_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
 
     // The second task listens for items from ping_consumer, and the publisher waits for the ping to
@@ -101,7 +100,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 
             // Initialize to a dummy value, to avoid compile error about capturing a possibly
             // uninitialized variable.
             let mut i = 0;
-            ping_consumer.consume( |value: &u64| {
+            ping_consumer.consume(|value: &u64| {
                 i = *value;
             });
             // In-band magic value indicates that we should exit

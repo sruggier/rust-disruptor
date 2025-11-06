@@ -6,7 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
 extern crate disruptor;
 
 extern crate getopts;
@@ -14,16 +13,18 @@ extern crate getopts;
 extern crate log;
 extern crate time;
 
-use time::precise_time_ns;
 use std::fmt;
 use std::string;
 use std::sync::mpsc::channel;
+use std::thread::spawn;
 use std::u64;
-use std::thread::{spawn};
+use time::precise_time_ns;
 
-use disruptor::{SinglePublisher, SingleResizingPublisher, ProcessingWaitStrategy,SpinWaitStrategy,
-    YieldWaitStrategy,BlockingWaitStrategy, PipelineInit, Publisher, FinalConsumer};
-use benchmark_utils::{parse_args};
+use benchmark_utils::parse_args;
+use disruptor::{
+    BlockingWaitStrategy, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
+    SinglePublisher, SingleResizingPublisher, SpinWaitStrategy, YieldWaitStrategy,
+};
 #[path = "../src/benchmark_utils.rs"]
 mod benchmark_utils;
 
@@ -32,7 +33,7 @@ mod benchmark_utils;
  * returns the number of operations per second.
  */
 fn calculate_ops_per_second(before: u64, after: u64, iterations: u64) -> u64 {
-    1000*1000*1000*iterations/(after-before)
+    1000 * 1000 * 1000 * iterations / (after - before)
 }
 
 /**
@@ -53,8 +54,8 @@ static NUM_ITERATIONS: u64 = 1000 * 1000 * 100 - 1;
  * levels 2 and above.
  */
 fn triangle_number(n: u64) -> u64 {
-    let mut sum : u64 = 0;
-    for num in 1..n+1 {
+    let mut sum: u64 = 0;
+    for num in 1..n + 1 {
         sum += num as u64;
     }
     sum
@@ -74,7 +75,6 @@ fn run_single_threaded_benchmark(iterations: u64) -> u64 {
 }
 
 fn run_task_pipe_benchmark(iterations: u64) {
-
     let (result_sender, result_receiver) = channel::<u64>();
     let (input_sender, input_receiver) = channel::<u64>();
 
@@ -117,7 +117,7 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     iterations: u64,
     publisher: P,
     consumer: FC,
-    desc: string::String
+    desc: string::String,
 ) {
     let (result_sender, result_receiver) = channel::<u64>();
 
@@ -157,12 +157,15 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     assert_eq!(result, expected_value);
     let ops = calculate_ops_per_second(before, after, iterations);
     let wait_latency = after - loop_end;
-    println!("Disruptor ({}): {} ops/sec, result wait: {} ns", desc, ops, wait_latency);
+    println!(
+        "Disruptor ({}): {} ops/sec, result wait: {} ns",
+        desc, ops, wait_latency
+    );
 }
 
 fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Debug + 'static>(
     iterations: u64,
-    w: W
+    w: W,
 ) {
     let desc = format!("{:?}", w);
     let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
@@ -193,15 +196,14 @@ fn run_disruptor_benchmark_resizeable(iterations: u64) {
         8192,
         resize_timeout,
         mstp,
-        mstc
+        mstc,
     );
     let consumer = publisher.create_single_consumer_pipeline();
-    let desc = format!("disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
-        resize_timeout,
-        mstp,
-        mstc
+    let desc = format!(
+        "disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
+        resize_timeout, mstp, mstc
     );
-    run_disruptor_benchmark(iterations, publisher, consumer, desc);;
+    run_disruptor_benchmark(iterations, publisher, consumer, desc);
 }
 
 fn main() {
@@ -221,6 +223,6 @@ fn main() {
     run_disruptor_benchmark_spin(iterations);
     run_disruptor_benchmark_spin(iterations);
     // The pipes are slower, so we avoid long execution times by running fewer iterations
-    run_task_pipe_benchmark(iterations/100);
-    run_task_pipe_benchmark(iterations/100);
+    run_task_pipe_benchmark(iterations / 100);
+    run_task_pipe_benchmark(iterations / 100);
 }

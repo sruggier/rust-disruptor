@@ -16,20 +16,20 @@
 extern crate log;
 extern crate time;
 use self::time::precise_time_ns;
+use std::cell::UnsafeCell;
 use std::clone::Clone;
-use std::mem;
 use std::cmp;
 use std::fmt;
-use std::option::{Option};
+use std::mem;
+use std::option::Option;
 use std::ptr;
-use std::thread;
-use std::vec::Vec;
-use std::usize;
-use std::cell::UnsafeCell;
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize,AtomicBool};
-use std::sync::atomic::Ordering::{Acquire,Release,AcqRel};
-use std::sync::{Mutex,Condvar};
+use std::sync::{Condvar, Mutex};
+use std::thread;
+use std::usize;
+use std::vec::Vec;
 
 /**
  * Raw pointer to a single nullable element of T. We are going to communicate between tasks by
@@ -39,14 +39,16 @@ use std::sync::{Mutex,Condvar};
  * needed, but the ring buffer has to handle deallocation of these objects to maintain safety.
  */
 struct RefSlot<T: Send> {
-    payload: *mut Option<T>
+    payload: *mut Option<T>,
 }
 
-unsafe impl<T: Send> Send for RefSlot<T> { }
+unsafe impl<T: Send> Send for RefSlot<T> {}
 
 impl<T: Send> Clone for RefSlot<T> {
     fn clone(&self) -> RefSlot<T> {
-        RefSlot { payload: self.payload }
+        RefSlot {
+            payload: self.payload,
+        }
     }
 }
 
@@ -59,7 +61,7 @@ impl<T: Send> RefSlot<T> {
         let payload: Box<Option<T>> = Box::new(None);
         let payload_raw: *mut Option<T> = unsafe { mem::transmute(payload) };
         RefSlot {
-            payload: payload_raw
+            payload: payload_raw,
         }
     }
 
@@ -148,10 +150,8 @@ struct RingBufferData<T: Send> {
 impl<T: Send> RingBufferData<T> {
     fn new(size: usize) -> RingBufferData<T> {
         // See Drop below for corresponding slot deallocation
-        let buffer = (0..size).map(|_i| { RefSlot::new() } ).collect();
-        RingBufferData {
-            entries: buffer,
-        }
+        let buffer = (0..size).map(|_i| RefSlot::new()).collect();
+        RingBufferData { entries: buffer }
     }
 
     /**
@@ -175,9 +175,7 @@ impl<T: Send> RingBufferData<T> {
     /// Get an immutable reference to the value pointed to by `sequence`.
     fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
         let index = sequence.as_index(self.size());
-        unsafe {
-            self.entries[index].get()
-        }
+        unsafe { self.entries[index].get() }
     }
 
     /**
@@ -190,7 +188,11 @@ impl<T: Send> RingBufferData<T> {
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.size());
         unsafe {
-            assert!(self.entries[index].is_set(), "Take of None at sequence: {}", sequence.value());
+            assert!(
+                self.entries[index].is_set(),
+                "Take of None at sequence: {}",
+                sequence.value()
+            );
             self.entries[index].take()
         }
     }
@@ -211,9 +213,7 @@ impl<T: Send> RingBufferData<T> {
      */
     fn is_set(&self, sequence: SequenceNumber) -> bool {
         let index = sequence.as_index(self.size());
-        unsafe {
-            self.entries[index].is_set()
-        }
+        unsafe { self.entries[index].is_set() }
     }
 }
 
@@ -235,7 +235,7 @@ impl<T: Send> Drop for RingBufferData<T> {
  * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
  * processing.
  */
-#[derive(Clone,Copy)]
+#[derive(Clone, Copy)]
 pub struct SequenceNumber(usize);
 
 /**
@@ -332,7 +332,9 @@ unsafe impl<T: Send> Send for RingBuffer<T> {}
 impl<T: Send> Clone for RingBuffer<T> {
     /// Copy a reference to the original buffer.
     fn clone(&self) -> RingBuffer<T> {
-        RingBuffer { data: self.data.clone() }
+        RingBuffer {
+            data: self.data.clone(),
+        }
     }
 }
 
@@ -340,7 +342,7 @@ impl<T: Send> Clone for RingBuffer<T> {
  * Allows for different ring buffer implementations to be used by the higher level types in this
  * module.
  */
-trait RingBufferTrait : RingBufferOps + Clone { }
+trait RingBufferTrait: RingBufferOps + Clone {}
 // Automatically apply RingBufferTrait to qualifying types
 impl<RB: RingBufferOps + Clone> RingBufferTrait for RB {}
 
@@ -348,7 +350,7 @@ impl<RB: RingBufferOps + Clone> RingBufferTrait for RB {}
  * Allows the actual operations a ring buffer exposes to be wrapped by other traits without also
  * bringing in the Send + Clone bounds.
  */
-trait RingBufferOps : Send {
+trait RingBufferOps: Send {
     type T: Send;
 
     /// See `RingBufferData::size`
@@ -380,9 +382,15 @@ impl<T: Send> RingBuffer<T> {
      * two, a property that will be exploited for performance reasons.
      */
     fn new(size: usize) -> RingBuffer<T> {
-        assert!(size.count_ones() == 1, "RingBuffer size must be a power of two (received {})", size);
+        assert!(
+            size.count_ones() == 1,
+            "RingBuffer size must be a power of two (received {})",
+            size
+        );
         let data = RingBufferData::new(size);
-        RingBuffer { data: UncheckedUnsafeArc::new(data) }
+        RingBuffer {
+            data: UncheckedUnsafeArc::new(data),
+        }
     }
 }
 
@@ -390,9 +398,7 @@ impl<T: Send> RingBufferOps for RingBuffer<T> {
     type T = T;
 
     fn size(&self) -> usize {
-        unsafe {
-            self.data.get_immut().size()
-        }
+        unsafe { self.data.get_immut().size() }
     }
 
     unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
@@ -435,7 +441,7 @@ fn ring_buffer_size_must_be_power_of_two_8() {
 fn calculate_available_consumer(
     gating_sequence: SequenceNumber,
     waiting_sequence: SequenceNumber,
-    buffer_size: usize
+    buffer_size: usize,
 ) -> usize {
     let SequenceNumber(mut gating) = gating_sequence;
     let SequenceNumber(waiting) = waiting_sequence;
@@ -467,7 +473,6 @@ fn test_calculate_available_consumer() {
     assert!(7 == calculate_available_consumer(SequenceNumber(31), SequenceNumber(24), 8));
     assert!(8 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(24), 8));
     assert!(7 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(25), 8));
-
 }
 
 /**
@@ -477,7 +482,7 @@ fn test_calculate_available_consumer() {
 fn calculate_available_publisher(
     gating_sequence: SequenceNumber,
     waiting_sequence: SequenceNumber,
-    buffer_size: usize
+    buffer_size: usize,
 ) -> usize {
     let SequenceNumber(gating_value) = gating_sequence;
     let SequenceNumber(waiting_value) = waiting_sequence;
@@ -516,16 +521,20 @@ fn test_calculate_available_publisher() {
  * with other threads.
  */
 struct UintPadding {
-    _padding: [u8; UINT_PADDING_SIZE]
+    _padding: [u8; UINT_PADDING_SIZE],
 }
 
 // This is calculated to be (cache line size - usize size), in bytes
-#[cfg(target_pointer_width = "32")] const UINT_PADDING_SIZE: usize = 60;
-#[cfg(target_pointer_width = "64")] const UINT_PADDING_SIZE: usize = 56;
+#[cfg(target_pointer_width = "32")]
+const UINT_PADDING_SIZE: usize = 60;
+#[cfg(target_pointer_width = "64")]
+const UINT_PADDING_SIZE: usize = 56;
 
 impl UintPadding {
     fn new() -> UintPadding {
-        UintPadding { _padding: [0; UINT_PADDING_SIZE] }
+        UintPadding {
+            _padding: [0; UINT_PADDING_SIZE],
+        }
     }
 }
 
@@ -560,7 +569,7 @@ impl SequenceData {
  * indices and other usize values. Memory is managed via reference counting.
  */
 struct Sequence {
-    value_arc: UncheckedUnsafeArc<SequenceData>
+    value_arc: UncheckedUnsafeArc<SequenceData>,
 }
 
 unsafe impl Send for Sequence {}
@@ -575,9 +584,7 @@ impl Sequence {
 
     /// See SequenceReader's get method
     fn get(&self) -> SequenceNumber {
-        unsafe {
-            SequenceNumber(self.value_arc.get_immut().value.load(Acquire))
-        }
+        unsafe { SequenceNumber(self.value_arc.get_immut().value.load(Acquire)) }
     }
 
     /**
@@ -586,9 +593,7 @@ impl Sequence {
      * number)
      */
     fn get_owned(&self) -> SequenceNumber {
-        unsafe {
-            SequenceNumber(self.value_arc.get_immut().private_value)
-        }
+        unsafe { SequenceNumber(self.value_arc.get_immut().private_value) }
     }
 
     /**
@@ -597,8 +602,8 @@ impl Sequence {
     fn clone_immut(&self) -> SequenceReader {
         SequenceReader {
             sequence: Sequence {
-                value_arc: self.value_arc.clone()
-            }
+                value_arc: self.value_arc.clone(),
+            },
         }
     }
 
@@ -654,7 +659,8 @@ impl Sequence {
     fn unwrap(&mut self, buffer_size: usize) {
         unsafe {
             let d = self.value_arc.get();
-            let SequenceNumber(unwrapped) = Sequence::unwrap_number(SequenceNumber(d.private_value), buffer_size);
+            let SequenceNumber(unwrapped) =
+                Sequence::unwrap_number(SequenceNumber(d.private_value), buffer_size);
             d.private_value = unwrapped;
         }
     }
@@ -676,7 +682,11 @@ impl Sequence {
 // For now, this is only used by the test code below, so conditionally compile it
 #[cfg(test)]
 fn log2(mut power_of_2: usize) -> usize {
-    assert!(power_of_2.count_ones() == 1, "Argument must be a power of two (received {})", power_of_2);
+    assert!(
+        power_of_2.count_ones() == 1,
+        "Argument must be a power of two (received {})",
+        power_of_2
+    );
     let mut exp = 0;
     while power_of_2 > 1 {
         exp += 1;
@@ -693,7 +703,7 @@ fn test_sequence_overflow() {
     // evaluate to usize::MAX, and unsigned integer arithmetic will naturally take care of the
     // wrapping. The sequence will wrap to 0 at wrap_boundary(buffer_size), i.e. usize::MAX + 1.
     let exp = log2(wrap_boundary(1));
-    let max_buffer_size = 1 << (mem::size_of::<usize>()*8 - exp);
+    let max_buffer_size = 1 << (mem::size_of::<usize>() * 8 - exp);
 
     let mut s = Sequence::new();
     assert_eq!(s.get().value(), SEQUENCE_INITIAL);
@@ -708,7 +718,7 @@ fn test_sequence_overflow() {
     assert_eq!(s.get().value(), max_buffer_size);
 
     // Overflow to 4*max_buffer_size + 1 and confirm that it wrapped to 1
-    s.advance_and_flush(3*max_buffer_size + 1, max_buffer_size);
+    s.advance_and_flush(3 * max_buffer_size + 1, max_buffer_size);
     assert_eq!(s.get().value(), 1);
 }
 
@@ -725,9 +735,13 @@ impl SequenceReader {
      * Gets the value of the sequence, using acquire semantics. For use by publishers/consumers to
      * confirm that slots have been released by the task(s) ahead of them in the pipeline.
      */
-    pub fn get(&self) -> SequenceNumber { self.sequence.get() }
+    pub fn get(&self) -> SequenceNumber {
+        self.sequence.get()
+    }
     /// Get another reference to the sequence.
-    pub fn clone_immut(&self) -> SequenceReader { self.sequence.clone_immut() }
+    pub fn clone_immut(&self) -> SequenceReader {
+        self.sequence.clone_immut()
+    }
 }
 
 #[test]
@@ -736,7 +750,7 @@ fn test_sequencereader() {
     // larger than the tested sequence numbers
     let buffer_size = 8192;
 
-    let mut sequence =  Sequence::new();
+    let mut sequence = Sequence::new();
     let reader = sequence.clone_immut();
     assert!(0 == reader.get().value());
     sequence.advance_and_flush(1, buffer_size);
@@ -746,7 +760,7 @@ fn test_sequencereader() {
 }
 
 /// Helps consumers wait on upstream dependencies.
-pub trait ProcessingWaitStrategy : PublishingWaitStrategy {
+pub trait ProcessingWaitStrategy: PublishingWaitStrategy {
     /**
      * Wait for `cursor` to release the next `n` slots, then return the actual number of available
      * slots, which may be greater than `n`.
@@ -770,20 +784,19 @@ pub trait ProcessingWaitStrategy : PublishingWaitStrategy {
         n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        buffer_size: usize
+        buffer_size: usize,
     ) -> usize;
 }
 
 // Create a shorthand for availability calculation functions, since this gets repeated several
 // times below.
 pub trait AvailabilityFn: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
-impl<F: Fn(SequenceNumber, SequenceNumber, usize) -> usize>
-    AvailabilityFn for F {}
+impl<F: Fn(SequenceNumber, SequenceNumber, usize) -> usize> AvailabilityFn for F {}
 
 /**
  * Helps the publisher wait to avoid overwriting values that are still being consumed.
  */
-pub trait PublishingWaitStrategy : Clone + Send {
+pub trait PublishingWaitStrategy: Clone + Send {
     /**
      * Wait for upstream consumers to finish processing items that have already been published, then
      * returns the actual number of available items, which may be greater than n. Returns
@@ -795,7 +808,7 @@ pub trait PublishingWaitStrategy : Clone + Send {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F
+        calculate_available: &F,
     ) -> usize;
 
     /**
@@ -818,7 +831,7 @@ fn calculate_available_list<F: AvailabilityFn>(
     waiting_sequence: SequenceNumber,
     dependencies: &[SequenceReader],
     buffer_size: usize,
-    calculate_available: &F
+    calculate_available: &F,
 ) -> usize {
     let mut available = usize::MAX;
     for consumer_sequence in dependencies.iter() {
@@ -828,7 +841,6 @@ fn calculate_available_list<F: AvailabilityFn>(
     available
 }
 
-
 /**
  * Waits using simple busy waiting.
  *
@@ -837,7 +849,7 @@ fn calculate_available_list<F: AvailabilityFn>(
  * Using this strategy can result in livelock when used with tasks spawned using default scheduler
  * options. Ensure all publishers and consumers are on separate OS threads when using this.
  */
-#[derive(Clone,Copy)]
+#[derive(Clone, Copy)]
 pub struct SpinWaitStrategy;
 
 impl ProcessingWaitStrategy for SpinWaitStrategy {
@@ -846,9 +858,10 @@ impl ProcessingWaitStrategy for SpinWaitStrategy {
         n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        buffer_size: usize
+        buffer_size: usize,
     ) -> usize {
-        let mut available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+        let mut available =
+            calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
         while n > available {
             // busy wait
             available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
@@ -864,19 +877,22 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F
+        calculate_available: &F,
     ) -> usize {
         let mut available = 0;
         while available < n {
             // busy wait
-            available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
-                calculate_available);
+            available = calculate_available_list(
+                waiting_sequence,
+                dependencies,
+                buffer_size,
+                calculate_available,
+            );
         }
         available
     }
 
-    fn notify_all_waiters(&mut self) {
-    }
+    fn notify_all_waiters(&mut self) {}
 }
 
 impl fmt::Debug for SpinWaitStrategy {
@@ -900,14 +916,18 @@ fn spin_for_consumer_retries<F: AvailabilityFn>(
     dependencies: &[SequenceReader],
     buffer_size: usize,
     calculate_available: &F,
-    max_tries: usize
+    max_tries: usize,
 ) -> usize {
     let mut tries = 0;
     let mut available = 0;
     while available < n && tries < max_tries {
         // busy wait
-        available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
-            calculate_available);
+        available = calculate_available_list(
+            waiting_sequence,
+            dependencies,
+            buffer_size,
+            calculate_available,
+        );
         tries += 1;
     }
     available
@@ -927,7 +947,7 @@ fn spin_for_publisher_retries(
     waiting_sequence: SequenceNumber,
     cursor: &SequenceReader,
     buffer_size: usize,
-    max_tries: usize
+    max_tries: usize,
 ) -> usize {
     let mut tries = 0;
     let mut available = 0;
@@ -963,7 +983,7 @@ impl YieldWaitStrategy {
     pub fn new() -> YieldWaitStrategy {
         YieldWaitStrategy::new_with_retry_count(
             DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
-            DEFAULT_MAX_SPIN_TRIES_CONSUMER
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER,
         )
     }
 
@@ -983,7 +1003,7 @@ impl YieldWaitStrategy {
      */
     pub fn new_with_retry_count(
         max_spin_tries_publisher: usize,
-        max_spin_tries_consumer: usize
+        max_spin_tries_consumer: usize,
     ) -> YieldWaitStrategy {
         YieldWaitStrategy {
             max_spin_tries_publisher: max_spin_tries_publisher,
@@ -995,7 +1015,9 @@ impl YieldWaitStrategy {
 impl Clone for YieldWaitStrategy {
     fn clone(&self) -> YieldWaitStrategy {
         YieldWaitStrategy::new_with_retry_count(
-            self.max_spin_tries_publisher, self.max_spin_tries_consumer)
+            self.max_spin_tries_publisher,
+            self.max_spin_tries_consumer,
+        )
     }
 }
 
@@ -1006,26 +1028,35 @@ impl PublishingWaitStrategy for YieldWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F
+        calculate_available: &F,
     ) -> usize {
-        let mut available = spin_for_consumer_retries(n, waiting_sequence, dependencies, buffer_size,
-            calculate_available, self.max_spin_tries_consumer);
+        let mut available = spin_for_consumer_retries(
+            n,
+            waiting_sequence,
+            dependencies,
+            buffer_size,
+            calculate_available,
+            self.max_spin_tries_consumer,
+        );
 
         if available >= n {
             return available;
         }
 
         while n > available {
-            available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
-                calculate_available);
+            available = calculate_available_list(
+                waiting_sequence,
+                dependencies,
+                buffer_size,
+                calculate_available,
+            );
             thread::yield_now();
         }
 
         available
     }
 
-    fn notify_all_waiters(&mut self) {
-    }
+    fn notify_all_waiters(&mut self) {}
 }
 
 impl ProcessingWaitStrategy for YieldWaitStrategy {
@@ -1034,10 +1065,15 @@ impl ProcessingWaitStrategy for YieldWaitStrategy {
         n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        buffer_size: usize
+        buffer_size: usize,
     ) -> usize {
-        let mut available = spin_for_publisher_retries(n, waiting_sequence, cursor, buffer_size,
-            self.max_spin_tries_publisher);
+        let mut available = spin_for_publisher_retries(
+            n,
+            waiting_sequence,
+            cursor,
+            buffer_size,
+            self.max_spin_tries_publisher,
+        );
 
         if available >= n {
             return available;
@@ -1054,10 +1090,10 @@ impl ProcessingWaitStrategy for YieldWaitStrategy {
 
 impl fmt::Debug for YieldWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
+        write!(
+            f,
             "disruptor::YieldWaitStrategy{{p: {}, c: {}}}",
-            self.max_spin_tries_publisher,
-            self.max_spin_tries_consumer
+            self.max_spin_tries_publisher, self.max_spin_tries_consumer
         )
     }
 }
@@ -1172,7 +1208,7 @@ impl BlockingWaitStrategy {
     pub fn new() -> BlockingWaitStrategy {
         BlockingWaitStrategy::new_with_retry_count(
             DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
-            DEFAULT_MAX_SPIN_TRIES_CONSUMER
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER,
         )
     }
 
@@ -1188,12 +1224,12 @@ impl BlockingWaitStrategy {
      */
     pub fn new_with_retry_count(
         max_spin_tries_publisher: usize,
-        max_spin_tries_consumer: usize
+        max_spin_tries_consumer: usize,
     ) -> BlockingWaitStrategy {
         let d = BlockingWaitStrategyData {
             signal_needed: AtomicBool::new(false),
             wait_mutex: Mutex::new(false),
-            wait_condvar: Condvar::new()
+            wait_condvar: Condvar::new(),
         };
         BlockingWaitStrategy {
             d: UncheckedUnsafeArc::new(d),
@@ -1222,10 +1258,15 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
         n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        buffer_size: usize
+        buffer_size: usize,
     ) -> usize {
-        let mut available = spin_for_publisher_retries(n, waiting_sequence, cursor, buffer_size,
-            self.max_spin_tries_publisher);
+        let mut available = spin_for_publisher_retries(
+            n,
+            waiting_sequence,
+            cursor,
+            buffer_size,
+            self.max_spin_tries_publisher,
+        );
 
         if available >= n {
             return available;
@@ -1245,12 +1286,14 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
                 // Communicate intent to wait to publisher
                 let _dummy: bool = signal_needed.swap(true, AcqRel);
                 // Verify that no slot was published
-                available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+                available =
+                    calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 if n > available {
                     // Sleep
                     let lock_result = d.wait_condvar.wait(mutex_guard);
                     assert!(lock_result.is_ok());
-                    available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+                    available =
+                        calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
                 }
             }
         }
@@ -1266,13 +1309,20 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F
+        calculate_available: &F,
     ) -> usize {
         let w = YieldWaitStrategy::new_with_retry_count(
-            self.max_spin_tries_publisher, self.max_spin_tries_consumer
+            self.max_spin_tries_publisher,
+            self.max_spin_tries_consumer,
         );
 
-        w.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size, calculate_available)
+        w.wait_for_consumers(
+            n,
+            waiting_sequence,
+            dependencies,
+            buffer_size,
+            calculate_available,
+        )
     }
 
     fn notify_all_waiters(&mut self) {
@@ -1304,10 +1354,10 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
 
 impl fmt::Debug for BlockingWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
+        write!(
+            f,
             "disruptor::BlockingWaitStrategy{{p: {}, c: {}}}",
-            self.max_spin_tries_publisher,
-            self.max_spin_tries_consumer
+            self.max_spin_tries_publisher, self.max_spin_tries_consumer
         )
     }
 }
@@ -1441,7 +1491,7 @@ trait SequenceBarrier: Send {
  * users of the SequenceBarrier type, and users of the GenericPublisher type.
  */
 trait PublisherSequenceBarrier {
-    type CSB : SequenceBarrier + ConsumerSequenceBarrier;
+    type CSB: SequenceBarrier + ConsumerSequenceBarrier;
 
     /**
      * Constructs a consumer barrier that is set up to wait on this SequenceBarrier's sequence
@@ -1474,47 +1524,63 @@ impl<W: PublishingWaitStrategy, RB: RingBufferTrait> SinglePublisherSequenceBarr
     fn new(
         ring_buffer: RB,
         dependencies: Vec<SequenceReader>,
-        wait_strategy: W
+        wait_strategy: W,
     ) -> SinglePublisherSequenceBarrier<W, RB> {
         SinglePublisherSequenceBarrier {
             ring_buffer: ring_buffer,
             sequence: Sequence::new(),
             dependencies: dependencies,
             wait_strategy: wait_strategy,
-            cached_available: 0
+            cached_available: 0,
         }
     }
 }
 
 impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
-        for SinglePublisherSequenceBarrier<W, RB> {
+    for SinglePublisherSequenceBarrier<W, RB>
+{
     type T = RB::T;
 
-    fn get_current(&self) -> SequenceNumber { self.sequence.get_owned() }
-    fn set_cached_available(&mut self, available: usize) { self.cached_available = available }
-    fn get_cached_available(&self) -> usize { self.cached_available }
+    fn get_current(&self) -> SequenceNumber {
+        self.sequence.get_owned()
+    }
+    fn set_cached_available(&mut self, available: usize) {
+        self.cached_available = available
+    }
+    fn get_cached_available(&self) -> usize {
+        self.cached_available
+    }
     fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] {
         self.dependencies.as_slice()
     }
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
         self.dependencies = dependencies;
     }
-    fn get_sequence(&self) -> SequenceReader { self.sequence.clone_immut() }
+    fn get_sequence(&self) -> SequenceReader {
+        self.sequence.clone_immut()
+    }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.sequence.get_owned();
-        let available = self.wait_strategy.wait_for_consumers(batch_size, current_sequence,
-                self.dependencies.as_slice(), self.ring_buffer.size(),
-                &calculate_available_publisher);
+        let available = self.wait_strategy.wait_for_consumers(
+            batch_size,
+            current_sequence,
+            self.dependencies.as_slice(),
+            self.ring_buffer.size(),
+            &calculate_available_publisher,
+        );
         available
     }
 
     fn release_n_real(&mut self, batch_size: usize) {
-        self.sequence.advance_and_flush(batch_size, self.ring_buffer.size());
+        self.sequence
+            .advance_and_flush(batch_size, self.ring_buffer.size());
         self.wait_strategy.notify_all_waiters();
     }
 
-    fn size(&self) -> usize { self.ring_buffer.size() }
+    fn size(&self) -> usize {
+        self.ring_buffer.size()
+    }
 
     unsafe fn set(&mut self, value: RB::T) {
         let current_sequence = self.get_current();
@@ -1533,7 +1599,8 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
 }
 
 impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> PublisherSequenceBarrier
-        for SinglePublisherSequenceBarrier<W, RB> {
+    for SinglePublisherSequenceBarrier<W, RB>
+{
     type CSB = SingleConsumerSequenceBarrier<W, RB>;
 
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
@@ -1545,7 +1612,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> PublisherSequenceBarrier
             // consumers regardless of their position in the pipeline. It's not necessary to provide a
             // second reference to the same sequence, so an empty array is provided instead.
             Vec::new(),
-            self.wait_strategy.clone()
+            self.wait_strategy.clone(),
         )
     }
 }
@@ -1568,59 +1635,88 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SingleConsumerSequenceBarri
         ring_buffer: RB,
         cursor: SequenceReader,
         dependencies: Vec<SequenceReader>,
-        wait_strategy: W
+        wait_strategy: W,
     ) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier {
-            sb: SinglePublisherSequenceBarrier::new(
-                ring_buffer,
-                dependencies,
-                wait_strategy
-            ),
+            sb: SinglePublisherSequenceBarrier::new(ring_buffer, dependencies, wait_strategy),
             cursor: cursor,
         }
     }
 }
 
 impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
-        for SingleConsumerSequenceBarrier<W, RB> {
+    for SingleConsumerSequenceBarrier<W, RB>
+{
     type T = RB::T;
 
-    fn get_current(&self) -> SequenceNumber { self.sb.get_current() }
-    fn set_cached_available(&mut self, available: usize) { self.sb.set_cached_available(available) }
-    fn get_cached_available(&self) -> usize { self.sb.get_cached_available() }
-    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] { self.sb.get_dependencies() }
-    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) { self.sb.set_dependencies(dependencies) }
-    fn get_sequence(&self) -> SequenceReader { self.sb.get_sequence() }
+    fn get_current(&self) -> SequenceNumber {
+        self.sb.get_current()
+    }
+    fn set_cached_available(&mut self, available: usize) {
+        self.sb.set_cached_available(available)
+    }
+    fn get_cached_available(&self) -> usize {
+        self.sb.get_cached_available()
+    }
+    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] {
+        self.sb.get_dependencies()
+    }
+    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
+        self.sb.set_dependencies(dependencies)
+    }
+    fn get_sequence(&self) -> SequenceReader {
+        self.sb.get_sequence()
+    }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.get_current();
-        let available = self.sb.wait_strategy.wait_for_publisher(batch_size, current_sequence,
-                &self.cursor, self.sb.ring_buffer.size());
-        let a = self.sb.wait_strategy.wait_for_consumers(batch_size, current_sequence,
-                self.sb.dependencies.as_slice(), self.sb.ring_buffer.size(), &calculate_available_consumer);
+        let available = self.sb.wait_strategy.wait_for_publisher(
+            batch_size,
+            current_sequence,
+            &self.cursor,
+            self.sb.ring_buffer.size(),
+        );
+        let a = self.sb.wait_strategy.wait_for_consumers(
+            batch_size,
+            current_sequence,
+            self.sb.dependencies.as_slice(),
+            self.sb.ring_buffer.size(),
+            &calculate_available_consumer,
+        );
         // wait_for_consumers returns usize::MAX if there are no other dependencies
         cmp::min(available, a)
     }
 
     fn release_n_real(&mut self, batch_size: usize) {
-        self.sb.sequence.advance(batch_size, self.sb.ring_buffer.size());
+        self.sb
+            .sequence
+            .advance(batch_size, self.sb.ring_buffer.size());
         self.sb.sequence.flush();
     }
 
-    fn size(&self) -> usize { self.sb.size() }
-    unsafe fn set(&mut self, value: Self::T) { self.sb.set(value) }
-    unsafe fn get<'s>(&'s mut self, ) -> &'s Self::T { self.sb.get() }
-    unsafe fn take(&mut self) -> Self::T { self.sb.take() }
+    fn size(&self) -> usize {
+        self.sb.size()
+    }
+    unsafe fn set(&mut self, value: Self::T) {
+        self.sb.set(value)
+    }
+    unsafe fn get<'s>(&'s mut self) -> &'s Self::T {
+        self.sb.get()
+    }
+    unsafe fn take(&mut self) -> Self::T {
+        self.sb.take()
+    }
 }
 
 impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> ConsumerSequenceBarrier
-        for SingleConsumerSequenceBarrier<W, RB> {
+    for SingleConsumerSequenceBarrier<W, RB>
+{
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
             self.sb.ring_buffer.clone(),
             self.cursor.clone_immut(),
-            vec!(self.sb.sequence.clone_immut()),
-            self.sb.wait_strategy.clone()
+            vec![self.sb.sequence.clone_immut()],
+            self.sb.wait_strategy.clone(),
         )
     }
 }
@@ -1628,7 +1724,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> ConsumerSequenceBarrier
 /**
  * Allows callers to send items through a disruptor pipeline.
  */
-pub trait Publisher<T: Send> : Send {
+pub trait Publisher<T: Send>: Send {
     /**
      * Sends a single item into the pipeline. The value will be exposed to each consumer downstream
      * in the pipeline.
@@ -1653,18 +1749,17 @@ pub trait PipelineInit<T: Send, C: Consumer<T>, FC: FinalConsumer<T>> {
      * Creates a chain of dependent consumers, and then adds the final
      * consumer(s) in the chain as a dependency of the publisher.
      */
-    fn create_consumer_pipeline(&mut self, count_consumers: usize)
-        -> (Vec<C>, FC);
+    fn create_consumer_pipeline(&mut self, count_consumers: usize) -> (Vec<C>, FC);
 }
 
 /**
  * Provides access Exposes values that are passing through the the pipeline
  */
-pub trait Consumer<T: Send> : Send {
+pub trait Consumer<T: Send>: Send {
     /**
      * Waits for a single item to become available, then calls the given function to process the
      * value.
-      */
+     */
     fn consume<C: FnMut(&T)>(&self, consume_callback: C);
 }
 
@@ -1672,7 +1767,7 @@ pub trait Consumer<T: Send> : Send {
  * The last consumer in the pipeline is able to take ownership of items, if they aren't operating
  * concurrently with another consumer.
  */
-pub trait FinalConsumer<T: Send> : Consumer<T> {
+pub trait FinalConsumer<T: Send>: Consumer<T> {
     /**
      * Waits for the next value to be available, moves it out of the ring buffer, and returns it.
      */
@@ -1719,13 +1814,16 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
      */
     fn create_consumer_pipeline(
         &mut self,
-        count_consumers: usize
+        count_consumers: usize,
     ) -> (Vec<GenericConsumer<SB::CSB>>, GenericFinalConsumer<SB::CSB>) {
         let sequence_barrier;
         unsafe {
             sequence_barrier = &mut *self.sequence_barrier.get();
         }
-        assert!(sequence_barrier.get_dependencies().len() == 0, "The create_consumer_pipeline method can only be called once.");
+        assert!(
+            sequence_barrier.get_dependencies().len() == 0,
+            "The create_consumer_pipeline method can only be called once."
+        );
 
         // Create each stage in the chain, adding the previous stage as a gating dependency
 
@@ -1733,7 +1831,7 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
-                Vec::<GenericConsumer<SB::CSB>>::with_capacity(count_nonfinal_consumers);
+            Vec::<GenericConsumer<SB::CSB>>::with_capacity(count_nonfinal_consumers);
         let final_consumer;
 
         for _ in 0..count_nonfinal_consumers {
@@ -1745,7 +1843,7 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
         }
 
         // Last consumer gets the ability to take ownership
-        let dependencies = vec!(sb.get_sequence());
+        let dependencies = vec![sb.get_sequence()];
         let c = GenericConsumer::new(sb);
         final_consumer = GenericFinalConsumer::new(c);
 
@@ -1762,8 +1860,7 @@ struct GenericConsumer<SB: SequenceBarrier> {
     sequence_barrier: UnsafeCell<SB>,
 }
 
-impl<SB: SequenceBarrier>
-        GenericConsumer<SB> {
+impl<SB: SequenceBarrier> GenericConsumer<SB> {
     fn new(sb: SB) -> GenericConsumer<SB> {
         GenericConsumer {
             sequence_barrier: UnsafeCell::new(sb),
@@ -1779,14 +1876,15 @@ impl<SB: SequenceBarrier>
                 consume_callback(item);
             }
             sequence_barrier.release();
-
         }
     }
 }
 
 #[cfg(test)]
 mod generic_publisher_tests {
-    use super::{SinglePublisher, SpinWaitStrategy, PipelineInit, Publisher, Consumer, FinalConsumer};
+    use super::{
+        Consumer, FinalConsumer, PipelineInit, Publisher, SinglePublisher, SpinWaitStrategy,
+    };
 
     #[test]
     fn send_single_value() {
@@ -1818,25 +1916,23 @@ mod generic_publisher_tests {
  * normal GenericConsumer.
  */
 struct GenericFinalConsumer<SB: SequenceBarrier> {
-    sc: GenericConsumer<SB>
+    sc: GenericConsumer<SB>,
 }
 
-impl <SB: SequenceBarrier>
-        GenericFinalConsumer<SB> {
-
+impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
     /**
      * Return a new GenericFinalConsumer instance wrapped around a given GenericConsumer instance. In
      * addition to existing GenericConsumer features, this object also allows the caller to take
      * ownership of the items that it accesses.
      */
     fn new(sc: GenericConsumer<SB>) -> GenericFinalConsumer<SB> {
-        GenericFinalConsumer {
-            sc: sc
-        }
+        GenericFinalConsumer { sc: sc }
     }
 
     /// See the GenericConsumer.consume method.
-    fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) { self.sc.consume(consume_callback) }
+    fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) {
+        self.sc.consume(consume_callback)
+    }
 
     fn take(&self) -> SB::T {
         unsafe {
@@ -1844,7 +1940,7 @@ impl <SB: SequenceBarrier>
             sequence_barrier.next();
             let value;
             {
-                 value = sequence_barrier.take();
+                value = sequence_barrier.take();
             }
             sequence_barrier.release();
             value
@@ -1950,10 +2046,10 @@ struct ResizableRingBufferData<T: Send> {
 
 impl<T: Send> ResizableRingBufferData<T> {
     /// Constructs a new ring buffer with the given size.
-    fn new(size: usize) -> ResizableRingBufferData <T> {
+    fn new(size: usize) -> ResizableRingBufferData<T> {
         ResizableRingBufferData {
             rb_data: RingBufferData::new(size),
-            next: None
+            next: None,
         }
     }
 
@@ -1962,9 +2058,11 @@ impl<T: Send> ResizableRingBufferData<T> {
      * corresponding slot in the old buffer to signal to consumers that there is a larger buffer.  A
      * reference to the new buffer is returned.
      */
-    unsafe fn reallocate(&mut self, sequence: SequenceNumber, new_size: usize)
-        -> UncheckedUnsafeArc<ResizableRingBufferData<T>> {
-
+    unsafe fn reallocate(
+        &mut self,
+        sequence: SequenceNumber,
+        new_size: usize,
+    ) -> UncheckedUnsafeArc<ResizableRingBufferData<T>> {
         let new_rrbd = ResizableRingBufferData::new(new_size);
         self.next = Some(UncheckedUnsafeArc::new(new_rrbd));
         self.rb_data.unset(sequence);
@@ -1973,17 +2071,25 @@ impl<T: Send> ResizableRingBufferData<T> {
 
     // Functions "inherited" from RingBufferData
     /// See `RingBufferData::size`
-    fn size(&self) -> usize { self.rb_data.size() }
+    fn size(&self) -> usize {
+        self.rb_data.size()
+    }
     /// See `RingBufferData::set`
     fn set(&mut self, sequence: SequenceNumber, value: T) {
         self.rb_data.set(sequence, value);
     }
     /// See `RingBufferData::get`
-    fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T { self.rb_data.get(sequence) }
+    fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
+        self.rb_data.get(sequence)
+    }
     /// See `RingBufferData::take`
-    unsafe fn take(&mut self, sequence: SequenceNumber) -> T { self.rb_data.take(sequence) }
+    unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
+        self.rb_data.take(sequence)
+    }
     /// See `RingBufferData::is_set`
-    unsafe fn is_set(&self, sequence: SequenceNumber) -> bool { self.rb_data.is_set(sequence) }
+    unsafe fn is_set(&self, sequence: SequenceNumber) -> bool {
+        self.rb_data.is_set(sequence)
+    }
 }
 
 /**
@@ -1993,7 +2099,7 @@ impl<T: Send> ResizableRingBufferData<T> {
  * pointer and retrieve items from the next buffer from now on.
  */
 struct ResizableRingBuffer<T: Send> {
-    d: UncheckedUnsafeArc<ResizableRingBufferData<T>>
+    d: UncheckedUnsafeArc<ResizableRingBufferData<T>>,
 }
 
 unsafe impl<T: Send> Send for ResizableRingBufferData<T> {}
@@ -2004,7 +2110,7 @@ impl<T: Send> ResizableRingBuffer<T> {
     /// RingBuffer, `size` must be a power of two.
     fn new(size: usize) -> ResizableRingBuffer<T> {
         ResizableRingBuffer {
-            d: UncheckedUnsafeArc::new(ResizableRingBufferData::new(size))
+            d: UncheckedUnsafeArc::new(ResizableRingBufferData::new(size)),
         }
     }
 
@@ -2015,8 +2121,11 @@ impl<T: Send> ResizableRingBuffer<T> {
     unsafe fn try_switch_next(&mut self, sequence: SequenceNumber) -> bool {
         if !self.d.get().is_set(sequence) {
             // Switch to newly allocated buffer
-            debug!("Following switch, sequence: {:?}, unwrapped_sequence: {:?}", sequence,
-                    Sequence::unwrap_number(sequence, self.size()));
+            debug!(
+                "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
+                sequence,
+                Sequence::unwrap_number(sequence, self.size())
+            );
             self.d = self.d.get().next.as_mut().unwrap().clone();
             return true;
         }
@@ -2044,9 +2153,7 @@ impl<T: Send> RingBufferOps for ResizableRingBuffer<T> {
     type T = T;
 
     fn size(&self) -> usize {
-        unsafe {
-            self.d.get_immut().size()
-        }
+        unsafe { self.d.get_immut().size() }
     }
     unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
         let rrbd = self.d.get();
@@ -2074,18 +2181,26 @@ fn test_resizeable_ring_buffer() {
     // Hypothetical publisher writes a value, then resizes, then writes 2 more values (3 total,
     // whereas the initial buffer only holds two values)
     let mut s = 0;
-    unsafe { publisher_rb.set(SequenceNumber(s), v[0]); }
+    unsafe {
+        publisher_rb.set(SequenceNumber(s), v[0]);
+    }
     s += 1;
-    unsafe { publisher_rb.reallocate(SequenceNumber(s), 4); }
-    unsafe { publisher_rb.set(SequenceNumber(s), v[1]); }
+    unsafe {
+        publisher_rb.reallocate(SequenceNumber(s), 4);
+    }
+    unsafe {
+        publisher_rb.set(SequenceNumber(s), v[1]);
+    }
     s += 1;
-    unsafe { publisher_rb.set(SequenceNumber(s), v[2]); }
+    unsafe {
+        publisher_rb.set(SequenceNumber(s), v[2]);
+    }
 
     // The consumer gets all three values, switching to the next buffer as needed
     let mut s2 = 0;
     for i in v.iter() {
         let _switch_occurred = unsafe { consumer_rb.try_switch_next(SequenceNumber(s2)) };
-        assert_eq!( unsafe { consumer_rb.take(SequenceNumber(s2)) }, *i);
+        assert_eq!(unsafe { consumer_rb.take(SequenceNumber(s2)) }, *i);
         s2 += 1;
     }
 }
@@ -2097,7 +2212,7 @@ fn test_resizeable_ring_buffer() {
 fn calculate_available_publisher_resizing(
     gating_sequence: SequenceNumber,
     waiting_sequence: SequenceNumber,
-    buffer_size: usize
+    buffer_size: usize,
 ) -> usize {
     let SequenceNumber(gating_value) = gating_sequence;
     let SequenceNumber(mut waiting_value) = waiting_sequence;
@@ -2117,9 +2232,8 @@ fn calculate_available_publisher_resizing(
 #[test]
 fn test_calculate_available_publisher_resizing() {
     // Test a few in sequence:
-    let test = |g, w, s | {
-        calculate_available_publisher_resizing(SequenceNumber(g), SequenceNumber(w), s)
-    };
+    let test =
+        |g, w, s| calculate_available_publisher_resizing(SequenceNumber(g), SequenceNumber(w), s);
     let buffer_size = 4;
     assert_eq!(test(0, 0, buffer_size), 4);
     assert_eq!(test(0, 1, buffer_size), 3);
@@ -2135,7 +2249,6 @@ fn test_calculate_available_publisher_resizing() {
     assert_eq!(test(3, 19, new_buffer_size), 0);
 }
 
-
 /**
  * Resizing variant of SinglePublisherSequenceBarrier.
  */
@@ -2148,7 +2261,7 @@ impl<T: Send, W: ResizingWaitStrategy> SingleResizingPublisherSequenceBarrier<T,
     fn new(
         ring_buffer: ResizableRingBuffer<T>,
         dependencies: Vec<SequenceReader>,
-        wait_strategy: W
+        wait_strategy: W,
     ) -> SingleResizingPublisherSequenceBarrier<T, W> {
         SingleResizingPublisherSequenceBarrier {
             sb: SinglePublisherSequenceBarrier::new(ring_buffer, dependencies, wait_strategy),
@@ -2156,25 +2269,45 @@ impl<T: Send, W: ResizingWaitStrategy> SingleResizingPublisherSequenceBarrier<T,
     }
 }
 
-impl<T: Send, W: ResizingWaitStrategy>
-        SequenceBarrier
-        for SingleResizingPublisherSequenceBarrier<T, W> {
+impl<T: Send, W: ResizingWaitStrategy> SequenceBarrier
+    for SingleResizingPublisherSequenceBarrier<T, W>
+{
     type T = T;
 
     // Inherited functions
-    fn get_current(&self) -> SequenceNumber { self.sb.get_current() }
-    fn set_cached_available(&mut self, available: usize) { self.sb.set_cached_available(available) }
-    fn get_cached_available(&self) -> usize { self.sb.get_cached_available() }
-    fn release_n_real(&mut self, batch_size: usize) { self.sb.release_n_real(batch_size) }
-    fn get_sequence(&self) -> SequenceReader { self.sb.get_sequence() }
-    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] { self.sb.get_dependencies() }
+    fn get_current(&self) -> SequenceNumber {
+        self.sb.get_current()
+    }
+    fn set_cached_available(&mut self, available: usize) {
+        self.sb.set_cached_available(available)
+    }
+    fn get_cached_available(&self) -> usize {
+        self.sb.get_cached_available()
+    }
+    fn release_n_real(&mut self, batch_size: usize) {
+        self.sb.release_n_real(batch_size)
+    }
+    fn get_sequence(&self) -> SequenceReader {
+        self.sb.get_sequence()
+    }
+    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] {
+        self.sb.get_dependencies()
+    }
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
         self.sb.set_dependencies(dependencies);
     }
-    fn size(&self) -> usize { self.sb.size() }
-    unsafe fn set(&mut self, value: T) { self.sb.set(value) }
-    unsafe fn get<'s>(&'s mut self) -> &'s T { self.sb.get() }
-    unsafe fn take(&mut self) -> T { self.sb.take() }
+    fn size(&self) -> usize {
+        self.sb.size()
+    }
+    unsafe fn set(&mut self, value: T) {
+        self.sb.set(value)
+    }
+    unsafe fn get<'s>(&'s mut self) -> &'s T {
+        self.sb.get()
+    }
+    unsafe fn take(&mut self) -> T {
+        self.sb.take()
+    }
 
     /**
      * Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
@@ -2186,15 +2319,19 @@ impl<T: Send, W: ResizingWaitStrategy>
         // function.
         let current_size = self.sb.ring_buffer.size();
         let mut available = self.sb.wait_strategy.try_wait_for_consumers(
-            batch_size, self.get_current(), self.sb.dependencies.as_slice(), current_size,
-            &calculate_available_publisher_resizing);
+            batch_size,
+            self.get_current(),
+            self.sb.dependencies.as_slice(),
+            current_size,
+            &calculate_available_publisher_resizing,
+        );
 
         if available < batch_size {
             // The ResizingWaitStrategy decided that we should allocate a new buffer instead of
             // waiting long enough, so we reallocate here.
 
             // Make the new buffer twice as large
-            let new_size = 2*current_size;
+            let new_size = 2 * current_size;
 
             // If the sequence has been wrapped, then it is temporarily going to be less than
             // consumer sequence numbers in the other stages of the pipeline. If we allocate a
@@ -2212,8 +2349,11 @@ impl<T: Send, W: ResizingWaitStrategy>
                 "Possible deadlock detected, allocating a larger buffer for disruptor events. Current buffer size: {}, new size: {}, batch size: {}",
                 current_size, new_size, batch_size
             );
-            debug!("sequence: {}, unwrapped sequence: {}",
-                    old_sequence.value(), unwrapped_sequence.value());
+            debug!(
+                "sequence: {}, unwrapped sequence: {}",
+                old_sequence.value(),
+                unwrapped_sequence.value()
+            );
 
             unsafe {
                 self.sb.ring_buffer.reallocate(unwrapped_sequence, new_size);
@@ -2236,7 +2376,8 @@ impl<T: Send, W: ResizingWaitStrategy>
 }
 
 impl<T: Send, W: ProcessingWaitStrategy> PublisherSequenceBarrier
-        for SingleResizingPublisherSequenceBarrier<T, W> {
+    for SingleResizingPublisherSequenceBarrier<T, W>
+{
     type CSB = SingleResizingConsumerSequenceBarrier<T, W>;
 
     fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T, W> {
@@ -2249,16 +2390,14 @@ impl<T: Send, W: ProcessingWaitStrategy> PublisherSequenceBarrier
  */
 struct SingleResizingConsumerSequenceBarrier<T: Send, W> {
     /// Reuse data and constructor from SingleConsumerSequenceBarrier
-    cb: SingleConsumerSequenceBarrier<W, ResizableRingBuffer<T>>
+    cb: SingleConsumerSequenceBarrier<W, ResizableRingBuffer<T>>,
 }
 
 impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T, W> {
     fn new(
-        cb: SingleConsumerSequenceBarrier<W, ResizableRingBuffer<T>>
+        cb: SingleConsumerSequenceBarrier<W, ResizableRingBuffer<T>>,
     ) -> SingleResizingConsumerSequenceBarrier<T, W> {
-        SingleResizingConsumerSequenceBarrier {
-            cb: cb
-        }
+        SingleResizingConsumerSequenceBarrier { cb: cb }
     }
 
     /**
@@ -2297,9 +2436,14 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
         if current_available <= unwrap_difference {
             actual_cached_available = 1;
         }
-        debug!("Adjusting available by {}, from {} to {}. Original sequence: {}, unwrapped: {}",
-                unwrap_difference, self.get_cached_available(), actual_cached_available,
-                original_sequence, unwrapped_sequence);
+        debug!(
+            "Adjusting available by {}, from {} to {}. Original sequence: {}, unwrapped: {}",
+            unwrap_difference,
+            self.get_cached_available(),
+            actual_cached_available,
+            original_sequence,
+            unwrapped_sequence
+        );
         self.set_cached_available(actual_cached_available);
     }
 
@@ -2318,33 +2462,50 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy>
-        SequenceBarrier
-        for SingleResizingConsumerSequenceBarrier<T, W> {
+impl<T: Send, W: ProcessingWaitStrategy> SequenceBarrier
+    for SingleResizingConsumerSequenceBarrier<T, W>
+{
     type T = T;
 
-    fn get_current(&self) -> SequenceNumber { self.cb.get_current() }
-    fn set_cached_available(&mut self, available: usize) { self.cb.set_cached_available(available) }
-    fn get_cached_available(&self) -> usize { self.cb.get_cached_available() }
-    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] { self.cb.get_dependencies() }
+    fn get_current(&self) -> SequenceNumber {
+        self.cb.get_current()
+    }
+    fn set_cached_available(&mut self, available: usize) {
+        self.cb.set_cached_available(available)
+    }
+    fn get_cached_available(&self) -> usize {
+        self.cb.get_cached_available()
+    }
+    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] {
+        self.cb.get_dependencies()
+    }
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
         self.cb.set_dependencies(dependencies);
     }
-    fn get_sequence(&self) -> SequenceReader { self.cb.get_sequence() }
+    fn get_sequence(&self) -> SequenceReader {
+        self.cb.get_sequence()
+    }
 
     // Unfortunately, the resizing scheme removes the ability to guarantee that more than one slot
     // is actually available after returning from next_n, because the next slot could be the last
     // one that was published in the current buffer. This is fixable, but for now, just disable
     // support for larger batch sizes.
     fn next_n_real(&mut self, batch_size: usize) -> usize {
-        assert!(batch_size == 1, "Batch sizes larger than 1 are currently not supported with resizable buffers.");
+        assert!(
+            batch_size == 1,
+            "Batch sizes larger than 1 are currently not supported with resizable buffers."
+        );
         self.cb.next_n_real(1)
     }
     fn release_n_real(&mut self, batch_size: usize) {
         self.cb.release_n_real(batch_size)
     }
-    fn size(&self) -> usize { self.cb.size() }
-    unsafe fn set(&mut self, value: T) { self.cb.set(value) }
+    fn size(&self) -> usize {
+        self.cb.size()
+    }
+    unsafe fn set(&mut self, value: T) {
+        self.cb.set(value)
+    }
 
     // The get and take functions check for reallocation events, and adjust the passed in sequence
     // and the barrier's sequence as necessary to match the adjustment to the publisher's sequence
@@ -2360,12 +2521,12 @@ impl<T: Send, W: ProcessingWaitStrategy>
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy>
-        ConsumerSequenceBarrier
-        for SingleResizingConsumerSequenceBarrier<T, W> {
+impl<T: Send, W: ProcessingWaitStrategy> ConsumerSequenceBarrier
+    for SingleResizingConsumerSequenceBarrier<T, W>
+{
     fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T, W> {
         SingleResizingConsumerSequenceBarrier {
-            cb: self.cb.new_consumer_barrier()
+            cb: self.cb.new_consumer_barrier(),
         }
     }
 }
@@ -2380,7 +2541,7 @@ pub const DEFAULT_RESIZE_TIMEOUT: usize = 500;
  * This trait provides policy decisions regarding how long to wait before reallocating a larger
  * buffer.
  */
-trait ResizingWaitStrategy : ProcessingWaitStrategy {
+trait ResizingWaitStrategy: ProcessingWaitStrategy {
     /**
      * See PublishingWaitStrategy::wait_for_consumers. This function has identical semantics, except
      * that it may finish before the requested number of slots are available, returning a value that
@@ -2395,7 +2556,7 @@ trait ResizingWaitStrategy : ProcessingWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F
+        calculate_available: &F,
     ) -> usize;
 }
 
@@ -2426,7 +2587,10 @@ impl TimeoutResizeWaitStrategy {
      * configure how long the publisher's task should spin when waiting for consumers, before
      * backing off to yielding.
      */
-    fn new_with_timeout(timeout_msecs: usize, wait_strategy: BlockingWaitStrategy) -> TimeoutResizeWaitStrategy {
+    fn new_with_timeout(
+        timeout_msecs: usize,
+        wait_strategy: BlockingWaitStrategy,
+    ) -> TimeoutResizeWaitStrategy {
         TimeoutResizeWaitStrategy {
             timeout: timeout_msecs,
             wait_strategy: wait_strategy,
@@ -2455,7 +2619,7 @@ impl TimeoutResizeWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F
+        calculate_available: &F,
     ) -> usize {
         // Try once before querying the current time, in case the slots have become available since
         // the last wait.
@@ -2465,7 +2629,7 @@ impl TimeoutResizeWaitStrategy {
             dependencies,
             buffer_size,
             calculate_available,
-            1
+            1,
         );
         if available >= n {
             return available;
@@ -2473,7 +2637,7 @@ impl TimeoutResizeWaitStrategy {
 
         // Not enough slots are available. Spin up to max_spin_tries_consumer times, then yield
         // repeatedly until either the items become available, or the timeout is reached.
-        let calculate_end_time = | now: u64 | { now + (self.timeout as u64) * 1000 * 1000 };
+        let calculate_end_time = |now: u64| now + (self.timeout as u64) * 1000 * 1000;
         let mut end_time = calculate_end_time(precise_time_ns());
         // Used to check if the pipeline makes any progress
         let mut previous_available = available;
@@ -2484,7 +2648,7 @@ impl TimeoutResizeWaitStrategy {
             dependencies,
             buffer_size,
             calculate_available,
-            self.wait_strategy.max_spin_tries_consumer
+            self.wait_strategy.max_spin_tries_consumer,
         );
         if available >= n {
             return available;
@@ -2498,8 +2662,12 @@ impl TimeoutResizeWaitStrategy {
                 end_time = calculate_end_time(precise_time_ns());
             }
 
-            available = calculate_available_list(waiting_sequence, dependencies, buffer_size,
-                calculate_available);
+            available = calculate_available_list(
+                waiting_sequence,
+                dependencies,
+                buffer_size,
+                calculate_available,
+            );
             thread::yield_now();
         }
         // If the timeout was reached, this will be less than n
@@ -2514,7 +2682,7 @@ impl ResizingWaitStrategy for TimeoutResizeWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F
+        calculate_available: &F,
     ) -> usize {
         // Always leave an extra slot available, for use being marked if we decide to allocate a
         // larger buffer.
@@ -2524,14 +2692,13 @@ impl ResizingWaitStrategy for TimeoutResizeWaitStrategy {
             waiting_sequence,
             dependencies,
             buffer_size,
-            calculate_available
+            calculate_available,
         );
 
         // Don't expose the extra slot to callers, so it remains unused
         if available >= 1 {
             available - 1
-        }
-        else {
+        } else {
             0
         }
     }
@@ -2543,10 +2710,11 @@ impl ProcessingWaitStrategy for TimeoutResizeWaitStrategy {
         n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
-        buffer_size: usize
+        buffer_size: usize,
     ) -> usize {
         // Consumers wait as normal
-        self.wait_strategy.wait_for_publisher(n, waiting_sequence, cursor, buffer_size)
+        self.wait_strategy
+            .wait_for_publisher(n, waiting_sequence, cursor, buffer_size)
     }
 }
 
@@ -2557,10 +2725,16 @@ impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F
+        calculate_available: &F,
     ) -> usize {
         // This code path should be unused
-        self.wait_strategy.wait_for_consumers(n, waiting_sequence, dependencies, buffer_size, calculate_available)
+        self.wait_strategy.wait_for_consumers(
+            n,
+            waiting_sequence,
+            dependencies,
+            buffer_size,
+            calculate_available,
+        )
     }
 
     fn notify_all_waiters(&mut self) {
@@ -2570,7 +2744,8 @@ impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
 
 impl fmt::Debug for TimeoutResizeWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
+        write!(
+            f,
             "disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
             self.timeout,
             self.wait_strategy.max_spin_tries_publisher,
@@ -2580,7 +2755,7 @@ impl fmt::Debug for TimeoutResizeWaitStrategy {
 }
 
 pub struct SinglePublisher<T: Send, W: ProcessingWaitStrategy> {
-    p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>>
+    p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>>,
 }
 
 pub struct SingleConsumer<T: Send, W: ProcessingWaitStrategy> {
@@ -2588,68 +2763,71 @@ pub struct SingleConsumer<T: Send, W: ProcessingWaitStrategy> {
 }
 
 pub struct SingleFinalConsumer<T: Send, W: ProcessingWaitStrategy> {
-    c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T>>>
+    c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T>>>,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy>
-        SinglePublisher<T, W> {
-
+impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
     /**
      * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
      * SinglePublisher object.
      */
     pub fn new(size: usize, wait_strategy: W) -> SinglePublisher<T, W> {
-        let ring_buffer =  RingBuffer::<T>::new(size);
+        let ring_buffer = RingBuffer::<T>::new(size);
         let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
         let gp =
-            GenericPublisher::<SinglePublisherSequenceBarrier<W, RingBuffer<T>> >::new_common(sb);
+            GenericPublisher::<SinglePublisherSequenceBarrier<W, RingBuffer<T>>>::new_common(sb);
         SinglePublisher { p: gp }
     }
-
 }
 
 impl<T: Send, W: ProcessingWaitStrategy>
-    PipelineInit<T, SingleConsumer<T, W>, SingleFinalConsumer<T, W>>
-    for SinglePublisher<T, W> {
-
-    fn create_consumer_pipeline(&mut self, count_consumers: usize)
-        -> (Vec<SingleConsumer<T,W>>, SingleFinalConsumer<T, W>)
-    {
+    PipelineInit<T, SingleConsumer<T, W>, SingleFinalConsumer<T, W>> for SinglePublisher<T, W>
+{
+    fn create_consumer_pipeline(
+        &mut self,
+        count_consumers: usize,
+    ) -> (Vec<SingleConsumer<T, W>>, SingleFinalConsumer<T, W>) {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc.into_iter().map( |x| SingleConsumer { c: x } ).collect();
+        let c = gc.into_iter().map(|x| SingleConsumer { c: x }).collect();
         let fc = SingleFinalConsumer { c: gfc };
         (c, fc)
     }
 }
 
 impl<T: Send, W: ProcessingWaitStrategy> Publisher<T> for SinglePublisher<T, W> {
-    fn publish(&self, value: T) { self.p.publish(value) }
+    fn publish(&self, value: T) {
+        self.p.publish(value)
+    }
 }
 
-impl <T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleConsumer<T, W> {
-    fn consume<C: FnMut(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
+impl<T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleConsumer<T, W> {
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
+        self.c.consume(consume_callback)
+    }
 }
 
-impl <T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleFinalConsumer<T, W> {
-    fn consume<C: FnMut(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
+impl<T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleFinalConsumer<T, W> {
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
+        self.c.consume(consume_callback)
+    }
 }
 
-impl <T: Send, W: ProcessingWaitStrategy> FinalConsumer<T> for SingleFinalConsumer<T, W> {
+impl<T: Send, W: ProcessingWaitStrategy> FinalConsumer<T> for SingleFinalConsumer<T, W> {
     fn take(&self) -> T {
         self.c.take()
     }
 }
 
 pub struct SingleResizingPublisher<T: Send> {
-    p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>>
+    p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
 }
 
 pub struct SingleResizingConsumer<T: Send> {
-    c: GenericConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>
+    c: GenericConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
 }
 
 pub struct SingleResizingFinalConsumer<T: Send> {
-    c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>
+    c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
 }
 
 /**
@@ -2670,58 +2848,72 @@ impl<T: Send> SingleResizingPublisher<T> {
         size: usize,
         resize_timeout: usize,
         max_spin_tries_publisher: usize,
-        max_spin_tries_consumer: usize
+        max_spin_tries_consumer: usize,
     ) -> SingleResizingPublisher<T> {
-        let ring_buffer =  ResizableRingBuffer::<T>::new(size);
+        let ring_buffer = ResizableRingBuffer::<T>::new(size);
 
         let blocking_wait_strategy = BlockingWaitStrategy::new_with_retry_count(
-            max_spin_tries_publisher, max_spin_tries_consumer);
-        let wait_strategy = TimeoutResizeWaitStrategy::new_with_timeout(
-            resize_timeout, blocking_wait_strategy);
-        let sb = SingleResizingPublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
-        let gp = GenericPublisher::new_common(
-            sb
+            max_spin_tries_publisher,
+            max_spin_tries_consumer,
         );
+        let wait_strategy =
+            TimeoutResizeWaitStrategy::new_with_timeout(resize_timeout, blocking_wait_strategy);
+        let sb =
+            SingleResizingPublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
+        let gp = GenericPublisher::new_common(sb);
         SingleResizingPublisher { p: gp }
     }
 
     /// Construct a TimeoutResizeWaitStrategy using the default parameters.
     pub fn new_resize_after_timeout(size: usize) -> SingleResizingPublisher<T> {
-
         SingleResizingPublisher::new_resize_after_timeout_with_params(
             size,
             DEFAULT_RESIZE_TIMEOUT,
             DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
-            DEFAULT_MAX_SPIN_TRIES_CONSUMER
+            DEFAULT_MAX_SPIN_TRIES_CONSUMER,
         )
     }
 }
 
 impl<T: Send> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalConsumer<T>>
-    for SingleResizingPublisher<T> {
-
-    fn create_consumer_pipeline(&mut self, count_consumers: usize) ->
-        (Vec<SingleResizingConsumer<T>>, SingleResizingFinalConsumer<T>) {
+    for SingleResizingPublisher<T>
+{
+    fn create_consumer_pipeline(
+        &mut self,
+        count_consumers: usize,
+    ) -> (
+        Vec<SingleResizingConsumer<T>>,
+        SingleResizingFinalConsumer<T>,
+    ) {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc.into_iter().map( |x| SingleResizingConsumer { c: x } ).collect();
+        let c = gc
+            .into_iter()
+            .map(|x| SingleResizingConsumer { c: x })
+            .collect();
         let fc = SingleResizingFinalConsumer { c: gfc };
         (c, fc)
     }
 }
 
 impl<T: Send> Publisher<T> for SingleResizingPublisher<T> {
-    fn publish(&self, value: T) { self.p.publish(value) }
+    fn publish(&self, value: T) {
+        self.p.publish(value)
+    }
 }
 
 impl<T: Send> Consumer<T> for SingleResizingConsumer<T> {
-    fn consume<C: FnMut(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
+        self.c.consume(consume_callback)
+    }
 }
 
 impl<T: Send> Consumer<T> for SingleResizingFinalConsumer<T> {
-    fn consume<C: FnMut(&T)>(&self, consume_callback: C) { self.c.consume(consume_callback) }
+    fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
+        self.c.consume(consume_callback)
+    }
 }
 
-impl <T: Send> FinalConsumer<T> for SingleResizingFinalConsumer<T> {
+impl<T: Send> FinalConsumer<T> for SingleResizingFinalConsumer<T> {
     fn take(&self) -> T {
         self.c.take()
     }

@@ -24,13 +24,17 @@ fn usage(argv0: &str, opts: &Options) -> ! {
  * arguments, but for now, this will do.
  */
 pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
-
     let mut opts = Options::new();
     opts.optflag("h", "help", "show this message and exit");
     opts.optopt(
-        "n", "iterations",
-        &format!("how many iterations to perform in each benchmark (default {})",
-        default_n_iterations), "N");
+        "n",
+        "iterations",
+        &format!(
+            "how many iterations to perform in each benchmark (default {})",
+            default_n_iterations
+        ),
+        "N",
+    );
 
     let args: Vec<String> = ::std::env::args().collect();
     let arg_flags = &args[1..];
@@ -39,7 +43,10 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
     let matches = match opts.parse(arg_flags) {
         Ok(m) => m,
         Err(fail) => {
-            println!("{}\nUse '{} --help' to see a list of valid options.", fail, argv0);
+            println!(
+                "{}\nUse '{} --help' to see a list of valid options.",
+                fail, argv0
+            );
             panic!();
         }
     };
@@ -49,13 +56,11 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
 
     // Validate as integer if -n specified
     let iterations = match matches.opt_str("n") {
-        Some(n_str) => {
-            match u64::from_str(n_str.as_str()) {
-                Ok(n) => n,
-                Err(fail) => panic!("Failed to parse number of iterations '{}': {}", n_str, fail)
-            }
-        }
-        None => default_n_iterations
+        Some(n_str) => match u64::from_str(n_str.as_str()) {
+            Ok(n) => n,
+            Err(fail) => panic!("Failed to parse number of iterations '{}': {}", n_str, fail),
+        },
+        None => default_n_iterations,
     };
 
     CommonTestOpts {
