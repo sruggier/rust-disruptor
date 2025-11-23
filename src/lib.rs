@@ -14,8 +14,6 @@
 
 #[macro_use]
 extern crate log;
-extern crate time;
-use self::time::precise_time_ns;
 use std::cell::UnsafeCell;
 use std::clone::Clone;
 use std::cmp;
@@ -28,6 +26,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 use std::sync::{Condvar, Mutex};
 use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 use std::usize;
 use std::vec::Vec;
 
@@ -2535,7 +2535,7 @@ impl<T: Send, W: ProcessingWaitStrategy> ConsumerSequenceBarrier
 /// of continuing to wait. This value was chosen with a strong preference for avoiding false
 /// positives, even if it means waiting a bit longer in cases where the caller has created a
 /// deadlock.
-pub const DEFAULT_RESIZE_TIMEOUT: usize = 500;
+pub const DEFAULT_RESIZE_TIMEOUT: u64 = 500;
 
 /**
  * This trait provides policy decisions regarding how long to wait before reallocating a larger
@@ -2573,7 +2573,7 @@ struct TimeoutResizeWaitStrategy {
      * Time (in milliseconds) that the publisher should wait for the pipeline to start moving before
      * assuming that there is a deadlock and allocating a larger buffer.
      */
-    timeout: usize,
+    timeout: u64,
     /**
      * Fallback wait strategy. See the constructor documentation for details about how it's used.
      */
@@ -2588,7 +2588,7 @@ impl TimeoutResizeWaitStrategy {
      * backing off to yielding.
      */
     fn new_with_timeout(
-        timeout_msecs: usize,
+        timeout_msecs: u64,
         wait_strategy: BlockingWaitStrategy,
     ) -> TimeoutResizeWaitStrategy {
         TimeoutResizeWaitStrategy {
@@ -2637,8 +2637,8 @@ impl TimeoutResizeWaitStrategy {
 
         // Not enough slots are available. Spin up to max_spin_tries_consumer times, then yield
         // repeatedly until either the items become available, or the timeout is reached.
-        let calculate_end_time = |now: u64| now + (self.timeout as u64) * 1000 * 1000;
-        let mut end_time = calculate_end_time(precise_time_ns());
+        let timeout = Duration::from_millis(self.timeout);
+        let mut end_time = Instant::now() + timeout;
         // Used to check if the pipeline makes any progress
         let mut previous_available = available;
 
@@ -2654,12 +2654,12 @@ impl TimeoutResizeWaitStrategy {
             return available;
         }
 
-        while available < n && precise_time_ns() < end_time {
+        while available < n && Instant::now() < end_time {
             // Reset the timeout if the pipeline has made progress.There should only be
             // reallocations if it looks like the pipeline has deadlocked.
             if previous_available != available {
                 previous_available = available;
-                end_time = calculate_end_time(precise_time_ns());
+                end_time = Instant::now() + timeout;
             }
 
             available = calculate_available_list(
@@ -2846,7 +2846,7 @@ impl<T: Send> SingleResizingPublisher<T> {
      */
     pub fn new_resize_after_timeout_with_params(
         size: usize,
-        resize_timeout: usize,
+        resize_timeout: u64,
         max_spin_tries_publisher: usize,
         max_spin_tries_consumer: usize,
     ) -> SingleResizingPublisher<T> {

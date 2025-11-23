@@ -1,7 +1,6 @@
 #![feature(test)]
 extern crate disruptor;
 extern crate test;
-extern crate time;
 
 use disruptor::{
     BlockingWaitStrategy, Consumer, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,

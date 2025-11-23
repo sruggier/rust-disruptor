@@ -11,14 +11,15 @@ extern crate disruptor;
 extern crate getopts;
 #[macro_use]
 extern crate log;
-extern crate time;
 
+use std::convert::TryFrom;
 use std::fmt;
 use std::string;
 use std::sync::mpsc::channel;
 use std::thread::spawn;
+use std::time::Duration;
+use std::time::Instant;
 use std::u64;
-use time::precise_time_ns;
 
 use benchmark_utils::parse_args;
 use disruptor::{
@@ -32,17 +33,21 @@ mod benchmark_utils;
  * Given a start time, finish time, and number of iterations, calculates and
  * returns the number of operations per second.
  */
-fn calculate_ops_per_second(before: u64, after: u64, iterations: u64) -> u64 {
-    1000 * 1000 * 1000 * iterations / (after - before)
+fn calculate_ops_per_second(duration: Duration, iterations: u64) -> u64 {
+    // Support for benchmarks long enough to overflow u64 is planned for
+    // completion by the end of Q3 in 2554.
+    let duration_u64 =
+        u64::try_from(duration.as_nanos()).expect("duration was too long to store in u64");
+    1000 * 1000 * 1000 * iterations / duration_u64
 }
 
 /**
  * Given a start time and a number of iterations, retrieves the current time
  * and returns the number of operations per second.
  */
-fn get_ops_per_second(before: u64, iterations: u64) -> u64 {
-    let after = precise_time_ns();
-    calculate_ops_per_second(before, after, iterations)
+fn get_ops_per_second(start: Instant, iterations: u64) -> u64 {
+    let duration = start.elapsed();
+    calculate_ops_per_second(duration, iterations)
 }
 
 /// Default number of iterations to use on all benchmarks
@@ -66,7 +71,7 @@ fn triangle_number(n: u64) -> u64 {
  * use in other tests.
  */
 fn run_single_threaded_benchmark(iterations: u64) -> u64 {
-    let before = precise_time_ns();
+    let before = Instant::now();
     let result = triangle_number(iterations);
     let ops = get_ops_per_second(before, iterations);
     println!("Single threaded: {} ops/sec (result was {})", ops, result);
@@ -78,7 +83,7 @@ fn run_task_pipe_benchmark(iterations: u64) {
     let (result_sender, result_receiver) = channel::<u64>();
     let (input_sender, input_receiver) = channel::<u64>();
 
-    let before = precise_time_ns();
+    let before = Instant::now();
 
     // Listen on input_receiver, summing all the received numbers, then return the
     // sum through result_sender.
@@ -102,14 +107,14 @@ fn run_task_pipe_benchmark(iterations: u64) {
     let result = input_sender.send(u64::MAX);
     assert!(result.is_ok());
     // Wait for the task to finish
-    let loop_end = precise_time_ns();
+    let loop_end = Instant::now();
     let result = result_receiver.recv().unwrap();
-    let after = precise_time_ns();
+    let after = Instant::now();
 
     let expected_value = triangle_number(iterations);
     assert_eq!(result, expected_value);
-    let ops = calculate_ops_per_second(before, after, iterations);
-    let wait_latency = after - loop_end;
+    let ops = calculate_ops_per_second(after - before, iterations);
+    let wait_latency = (after - loop_end).as_nanos();
     println!("Pipes: {} ops/sec, result wait: {} ns", ops, wait_latency);
 }
 
@@ -121,7 +126,7 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
 ) {
     let (result_sender, result_receiver) = channel::<u64>();
 
-    let before = precise_time_ns();
+    let before = Instant::now();
 
     spawn(move || {
         let mut sum = 0u64;
@@ -149,17 +154,19 @@ fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
     }
     publisher.publish(u64::MAX);
 
-    let loop_end = precise_time_ns();
+    let loop_end = Instant::now();
     let result = result_receiver.recv().unwrap();
-    let after = precise_time_ns();
+    let after = Instant::now();
 
     let expected_value = triangle_number(iterations);
     assert_eq!(result, expected_value);
-    let ops = calculate_ops_per_second(before, after, iterations);
+    let ops = calculate_ops_per_second(after - before, iterations);
     let wait_latency = after - loop_end;
     println!(
         "Disruptor ({}): {} ops/sec, result wait: {} ns",
-        desc, ops, wait_latency
+        desc,
+        ops,
+        wait_latency.as_nanos()
     );
 }
 
