@@ -5,7 +5,7 @@ tasks, fulfilling use cases similar to the built-in pipes API, but with better
 performance. The core approach and many of the algorithms are based on ideas
 from the [LMAX Disruptor](http://lmax-exchange.github.io/disruptor/) project.
 
-# Features
+## Features
 
 This is a basic proof-of-concept, currently, so most functionality is missing.
 However, current users can enjoy the following features:
@@ -20,7 +20,7 @@ blocking strategy.
 strategy when the CPU is idle, but doesn't waste as many CPU cycles when other
 software is executing.
 
-# Building
+## Building
 
 The The build system requires the following items in the path:
 
@@ -38,18 +38,18 @@ examples/unicast_throughput_benchmark, which is a simple throughput benchmark
 that compares rust's channel API to the disruptor implementation using various
 wait strategies.
 
-# Hacking
+## Hacking
 
 The auto-rebuild.sh script rebuilds whenever any source files change. Leave it
 open in a terminal as you hack on the code for convenient feedback about compile
 errors, test results, and performance.
 
-# License
+## License
 
 To be compatible with Rust, this library is dual-licensed under the terms of the
 MIT and Apache 2 licenses.
 
-# Roadmap
+## Roadmap
 
 This is a list of things that may be implemented in the near future:
 
