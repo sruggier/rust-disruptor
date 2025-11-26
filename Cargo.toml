@@ -1,14 +1,14 @@
 [package]
 name = "disruptor"
 version = "0.0.1-pre"
-edition = "2021"
+edition = "2024"
 authors = ["Simon Ruggier <Simon.Ruggier@gmail.com>"]
 description = "Fast inter-task communication for Rust"
 homepage = "https://github.com/sruggier/rust-disruptor"
 repository = "https://github.com/sruggier/rust-disruptor.git"
 keywords = ["channels", "message passing", "disruptor"]
 license = "MIT/Apache-2.0"
-rust-version = "1.66.0"
+rust-version = "1.85.0"
 
 [profile.release]
 lto = true
