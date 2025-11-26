@@ -41,7 +41,9 @@ The build system requires the following items in the path:
 * rustc
 * Optional: inotifywait (for auto-rebuild.sh)
 
-The code should build on both the stable and nightly channels.
+The code should build on both the stable and nightly channels. The codebase is
+old enough not to depend on any recent features of the language, so the MSRV is
+currently set to the minimum supported by its dependencies.
 
 You can build, run tests, and run benchmarks using `cargo build`, `cargo test`,
 and `cargo bench`, respectively. Additionally, `cargo test` builds

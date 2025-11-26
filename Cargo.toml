@@ -7,6 +7,7 @@ homepage = "https://github.com/sruggier/rust-disruptor"
 repository = "https://github.com/sruggier/rust-disruptor.git"
 keywords = ["channels", "message passing", "disruptor"]
 license = "MIT/Apache-2.0"
+rust-version = "1.66.0"
 
 [profile.release]
 lto = true
