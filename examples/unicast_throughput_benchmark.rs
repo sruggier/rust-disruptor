@@ -6,9 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate disruptor;
 
-extern crate getopts;
 #[macro_use]
 extern crate log;
 
@@ -21,7 +19,7 @@ use std::time::Duration;
 use std::time::Instant;
 use std::u64;
 
-use benchmark_utils::parse_args;
+use crate::benchmark_utils::parse_args;
 use disruptor::{
     BlockingWaitStrategy, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
     SinglePublisher, SingleResizingPublisher, SpinWaitStrategy, YieldWaitStrategy,

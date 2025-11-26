@@ -1,5 +1,4 @@
 #![feature(test)]
-extern crate disruptor;
 extern crate test;
 
 use disruptor::{
