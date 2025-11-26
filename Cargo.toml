@@ -1,7 +1,7 @@
 [package]
 name = "disruptor"
 version = "0.0.1-pre"
-edition = "2018"
+edition = "2021"
 authors = ["Simon Ruggier <Simon.Ruggier@gmail.com>"]
 description = "Fast inter-task communication for Rust"
 homepage = "https://github.com/sruggier/rust-disruptor"
