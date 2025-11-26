@@ -300,8 +300,8 @@ impl<T: Send> UncheckedUnsafeArc<T> {
         let arc = Arc::new(UnsafeCell::new(data));
         let data = arc.get();
         UncheckedUnsafeArc {
-            arc: arc,
-            data: data,
+            arc,
+            data,
         }
     }
 
@@ -1020,8 +1020,8 @@ impl YieldWaitStrategy {
         max_spin_tries_consumer: usize,
     ) -> YieldWaitStrategy {
         YieldWaitStrategy {
-            max_spin_tries_publisher: max_spin_tries_publisher,
-            max_spin_tries_consumer: max_spin_tries_consumer,
+            max_spin_tries_publisher,
+            max_spin_tries_consumer,
         }
     }
 }
@@ -1247,8 +1247,8 @@ impl BlockingWaitStrategy {
         };
         BlockingWaitStrategy {
             d: UncheckedUnsafeArc::new(d),
-            max_spin_tries_publisher: max_spin_tries_publisher,
-            max_spin_tries_consumer: max_spin_tries_consumer,
+            max_spin_tries_publisher,
+            max_spin_tries_consumer,
         }
     }
 }
@@ -1541,10 +1541,10 @@ impl<W: PublishingWaitStrategy, RB: RingBufferTrait> SinglePublisherSequenceBarr
         wait_strategy: W,
     ) -> SinglePublisherSequenceBarrier<W, RB> {
         SinglePublisherSequenceBarrier {
-            ring_buffer: ring_buffer,
+            ring_buffer,
             sequence: Sequence::new(),
-            dependencies: dependencies,
-            wait_strategy: wait_strategy,
+            dependencies,
+            wait_strategy,
             cached_available: 0,
         }
     }
@@ -1659,7 +1659,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SingleConsumerSequenceBarri
     ) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier {
             sb: SinglePublisherSequenceBarrier::new(ring_buffer, dependencies, wait_strategy),
-            cursor: cursor,
+            cursor,
         }
     }
 }
@@ -1946,7 +1946,7 @@ impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
      * ownership of the items that it accesses.
      */
     fn new(sc: GenericConsumer<SB>) -> GenericFinalConsumer<SB> {
-        GenericFinalConsumer { sc: sc }
+        GenericFinalConsumer { sc }
     }
 
     /// See the GenericConsumer.consume method.
@@ -2427,7 +2427,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
     fn new(
         cb: SingleConsumerSequenceBarrier<W, ResizableRingBuffer<T>>,
     ) -> SingleResizingConsumerSequenceBarrier<T, W> {
-        SingleResizingConsumerSequenceBarrier { cb: cb }
+        SingleResizingConsumerSequenceBarrier { cb }
     }
 
     /**
@@ -2629,7 +2629,7 @@ impl TimeoutResizeWaitStrategy {
     ) -> TimeoutResizeWaitStrategy {
         TimeoutResizeWaitStrategy {
             timeout: timeout_msecs,
-            wait_strategy: wait_strategy,
+            wait_strategy,
         }
     }
 }
