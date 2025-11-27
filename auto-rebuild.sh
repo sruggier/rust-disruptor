@@ -41,7 +41,14 @@ while inotifywait -q -e attrib,close_write,create,delete,delete_self,move_self,m
 		cargo build &&
 			cargo test &&
 			if ((UNSTABLE)); then
-				cargo bench
+				# Pass +nightly, but only if it's needed, so as to avoid
+				# breaking setups where a cargo nightly is being used directly,
+				# without rustup.
+				NIGHTLY_FLAG=()
+				if ! cargo --version | grep -q -- '-nightly '; then
+					NIGHTLY_FLAG+=(+nightly)
+				fi
+				cargo "${NIGHTLY_FLAG[@]}" bench
 			fi &&
 			./target/debug/examples/unicast_throughput_benchmark -n 1000000
 	) || true
