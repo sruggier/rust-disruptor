@@ -42,3 +42,10 @@ jobs:
       - uses: taiki-e/install-action@cargo-hack
       # Skip benchmarks, for now, until the nightly dependency is removed
       - run: cargo hack check --rust-version --workspace --lib --bins --examples --tests
+  rustfmt:
+    name: Check rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable
+      - run: cargo fmt --check
