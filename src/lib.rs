@@ -31,10 +31,10 @@ use std::time::Instant;
 use std::vec::Vec;
 
 /**
- * Raw pointer to a single nullable element of T. We are going to communicate between tasks by
- * passing objects through a ring buffer. The ring buffer is implemented using std::vec::Vec, which
+ * Raw pointer to a single nullable element of `T`. We are going to communicate between tasks by
+ * passing objects through a ring buffer. The ring buffer is implemented using `std::vec::Vec`, which
  * requires that its contents are clonable. However, we don't want to impose this limitation on
- * callers, so instead, the buffer will store pointers to Option<T>. The pointers are cloned as
+ * callers, so instead, the buffer will store pointers to `Option<T>`. The pointers are cloned as
  * needed, but the ring buffer has to handle deallocation of these objects to maintain safety.
  */
 struct RefSlot<T: Send> {
@@ -60,7 +60,7 @@ impl<T: Send> Default for RefSlot<T> {
 
 impl<T: Send> RefSlot<T> {
     /**
-     * Allocates an owned box containing Option<T>, then overrides Rust's memory management by
+     * Allocates an owned box containing `Option<T>`, then overrides Rust's memory management by
      * storing it as a raw pointer.
      */
     fn new() -> RefSlot<T> {
@@ -155,7 +155,7 @@ impl<T: Send> RefSlot<T> {
 }
 
 /**
- * Contains the underlying std::vec::Vec, and manages the lifetime of the slots.
+ * Contains the underlying `std::vec::Vec`, and manages the lifetime of the slots.
  */
 struct RingBufferData<T: Send> {
     entries: Vec<RefSlot<T>>,
@@ -832,7 +832,7 @@ pub trait PublishingWaitStrategy: Clone + Send {
     /**
      * Wait for upstream consumers to finish processing items that have already been published, then
      * returns the actual number of available items, which may be greater than n. Returns
-     * usize::MAX if there are no dependencies.
+     * `usize::MAX` if there are no dependencies.
      */
     fn wait_for_consumers<F: AvailabilityFn>(
         &self,
@@ -1250,12 +1250,12 @@ impl BlockingWaitStrategy {
     }
 
     /**
-     * Create a BlockingWaitStrategy, explicitly specifying how many times to spin before
+     * Create a `BlockingWaitStrategy`, explicitly specifying how many times to spin before
      * transitioning to a yielding strategy.
      *
      * # Arguments
      *
-     * See YieldWaitStrategy::new_with_retry_count for a more detailed description of what the
+     * See `YieldWaitStrategy::new_with_retry_count` for a more detailed description of what the
      * arguments mean. This wait strategy will block instead of yielding when the maximum number of
      * retries is reached while waiting for the publisher.
      */
@@ -2602,7 +2602,7 @@ pub const DEFAULT_RESIZE_TIMEOUT: u64 = 500;
  */
 trait ResizingWaitStrategy: ProcessingWaitStrategy {
     /**
-     * See PublishingWaitStrategy::wait_for_consumers. This function has identical semantics, except
+     * See `PublishingWaitStrategy::wait_for_consumers`. This function has identical semantics, except
      * that it may finish before the requested number of slots are available, returning a value that
      * is less than `n`. If this happens, the caller should reallocate a larger buffer and start
      * publishing items into that buffer instead of waiting. It also always keeps a single extra
@@ -2896,8 +2896,8 @@ impl<T: Send> SingleResizingPublisher<T> {
      * # Arguments
      *
      * * resize_timeout - How long to wait, in milliseconds, before reallocating a larger buffer
-     * * max_spin_tries_publisher - See YieldWaitStrategy::new_with_retry_count
-     * * max_spin_tries_consumer - See YieldWaitStrategy::new_with_retry_count
+     * * max_spin_tries_publisher - See `YieldWaitStrategy::new_with_retry_count`
+     * * max_spin_tries_consumer - See `YieldWaitStrategy::new_with_retry_count`
      */
     pub fn new_resize_after_timeout_with_params(
         size: usize,
