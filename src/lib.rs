@@ -1187,6 +1187,7 @@ impl fmt::Debug for YieldWaitStrategy {
  *  - the item release happens before the publisher's shared variable access
  *  - which happens before the consumer's shared variable access
  *  - which happens before the consumer's final check for a newly released item before sleeping
+ *
  * Therefore, if the publisher concludes that it doesn't need to signal, it is certain that the
  * consumer will see the newly released item and refrain from sleeping. In other words, a consumer
  * cannot go to sleep without the publisher seeing its intent to do so.
@@ -2036,14 +2037,14 @@ impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
  * consumer to process items from the first. When the resizing support is in use, the publisher will
  * eventually decide to reallocate a larger buffer of size 8.
  *
- * During the reallocation, the final consumer's sequence number is at least 13 (`16 - (buffer_size
- * - 1)`), since the publisher has been taking care to leave an extra slot free in case a
- * reallocation is needed. The consumer's sequence will never exceed the publisher's, except through
- * wrapping, so we can also say that it is logically at most 16, where 16 would be wrapped to 0.
- * Therefore, the consumer's sequence value could be any of {13, 14, 15, 0}.  The publisher's
- * sequence value is 0 until reallocation is complete, at which point it will be unwrapped back to
- * 16, and incremented to 17. One important thing to note is that regardless of whether the
- * publisher's sequence value was 0, 4, 8, or 12, it will be unwrapped to 16.
+ * During the reallocation, the final consumer's sequence number is at least 13
+ * (`16 - (buffer_size - 1)`), since the publisher has been taking care to leave an extra slot free
+ * in case a reallocation is needed. The consumer's sequence will never exceed the publisher's,
+ * except through wrapping, so we can also say that it is logically at most 16, where 16 would be
+ * wrapped to 0. Therefore, the consumer's sequence value could be any of {13, 14, 15, 0}.  The
+ * publisher's sequence value is 0 until reallocation is complete, at which point it will be
+ * unwrapped back to 16, and incremented to 17. One important thing to note is that regardless of
+ * whether the publisher's sequence value was 0, 4, 8, or 12, it will be unwrapped to 16.
  *
  * If the consumer's sequence value was 13 prior to the reallocation, then there were 0 slots
  * available for the publisher to use: with a buffer size of 4, the last slot available to the
@@ -2061,12 +2062,12 @@ impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
  *
  * This results in several new special cases to handle versus the usual non-resizing variant:
  * - From the consumer's perspective, there may be more than `buffer_size` slots available, because
- * the publisher has started publishing into the new buffer.
+ *   the publisher has started publishing into the new buffer.
  * - When calculating availability from the publisher's perspective, the consumer sequence that
- * gates its publishing may be more than `buffer_size` slots behind. The availability calculation
- * needs to return 0 in this case.
+ *   gates its publishing may be more than `buffer_size` slots behind. The availability calculation
+ *   needs to return 0 in this case.
  * - It becomes important to ensure that the publisher does not wrap until the consumer pipeline has
- * transitioned to the new buffer, to avoid breaking the consumer's availability calculations.
+ *   transitioned to the new buffer, to avoid breaking the consumer's availability calculations.
  *
  * The publisher's availability calculation function was rewritten to correctly handle the second
  * point, and the wrap boundary was changed to `4*buffer_size` to facilitate the third point.
