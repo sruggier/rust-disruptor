@@ -21,9 +21,9 @@ use std::fmt;
 use std::mem;
 use std::option::Option;
 use std::ptr;
+use std::sync::Arc;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::Arc;
 use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -73,10 +73,12 @@ impl<T: Send> RefSlot<T> {
      * This is safe to call in between new and destroy, but is marked as unsafe because it is still
      * the caller's responsibility to ensure that it is not called after destroy.
      */
-    unsafe fn set(&mut self, value: T) { unsafe {
-        let p = self.payload;
-        (*p) = Some(value);
-    }}
+    unsafe fn set(&mut self, value: T) {
+        unsafe {
+            let p = self.payload;
+            (*p) = Some(value);
+        }
+    }
 
     /**
      * Retrieves an immutable reference to the slot's value.
@@ -85,10 +87,12 @@ impl<T: Send> RefSlot<T> {
      *
      * It is also the caller's responsibility not to call this after destroy.
      */
-    unsafe fn get<'s>(&'s self) -> &'s T { unsafe {
-        let p = self.payload;
-        (*p).as_ref().unwrap()
-    }}
+    unsafe fn get<'s>(&'s self) -> &'s T {
+        unsafe {
+            let p = self.payload;
+            (*p).as_ref().unwrap()
+        }
+    }
 
     /**
      * Moves the value out of the slot and returns it.
@@ -101,9 +105,9 @@ impl<T: Send> RefSlot<T> {
      *
      * It's the caller's responsibility not to call this after destroy.
      */
-    unsafe fn take(&mut self) -> T { unsafe {
-        (*self.payload).take().unwrap()
-    }}
+    unsafe fn take(&mut self) -> T {
+        unsafe { (*self.payload).take().unwrap() }
+    }
 
     /**
      * Destroys the value, if present, and assigns a null value. This can be used with `is_set` as a
@@ -113,9 +117,11 @@ impl<T: Send> RefSlot<T> {
      *
      * It's the caller's responsibility not to call this after destroy.
      */
-    unsafe fn unset(&mut self) { unsafe {
-        (*self.payload) = None;
-    }}
+    unsafe fn unset(&mut self) {
+        unsafe {
+            (*self.payload) = None;
+        }
+    }
 
     /**
      * Checks if a value is set in the slot.
@@ -124,20 +130,22 @@ impl<T: Send> RefSlot<T> {
      *
      * It's the caller's responsibility not to call this after destroy.
      */
-    unsafe fn is_set(&self) -> bool { unsafe {
-        (*self.payload).is_some()
-    }}
+    unsafe fn is_set(&self) -> bool {
+        unsafe { (*self.payload).is_some() }
+    }
 
     /**
      * Deallocates the owned box. This cannot happen automatically, so it is the caller's
      * responsibility to call this at the right time, then avoid dereferencing `payload` after doing
      * so.
      */
-    unsafe fn destroy(&mut self) { unsafe {
-        // Deallocate
-        let _payload: Box<Option<T>> = mem::transmute(self.payload);
-        self.payload = ptr::null_mut();
-    }}
+    unsafe fn destroy(&mut self) {
+        unsafe {
+            // Deallocate
+            let _payload: Box<Option<T>> = mem::transmute(self.payload);
+            self.payload = ptr::null_mut();
+        }
+    }
 }
 
 /**
@@ -297,13 +305,13 @@ impl<T: Send> UncheckedUnsafeArc<T> {
         }
     }
 
-    unsafe fn get<'s>(&'s mut self) -> &'s mut T { unsafe {
-        &mut *self.data
-    }}
+    unsafe fn get<'s>(&'s mut self) -> &'s mut T {
+        unsafe { &mut *self.data }
+    }
 
-    unsafe fn get_immut<'s>(&'s self) -> &'s T { unsafe {
-        &*self.data
-    }}
+    unsafe fn get_immut<'s>(&'s self) -> &'s T {
+        unsafe { &*self.data }
+    }
 }
 
 impl<T: Send> Clone for UncheckedUnsafeArc<T> {
@@ -401,20 +409,26 @@ impl<T: Send> RingBufferOps for RingBuffer<T> {
         unsafe { self.data.get_immut().size() }
     }
 
-    unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T) { unsafe {
-        let d = self.data.get();
-        d.set(sequence, value);
-    }}
+    unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
+        unsafe {
+            let d = self.data.get();
+            d.set(sequence, value);
+        }
+    }
 
-    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s Self::T { unsafe {
-        let d = self.data.get_immut();
-        d.get(sequence)
-    }}
+    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s Self::T {
+        unsafe {
+            let d = self.data.get_immut();
+            d.get(sequence)
+        }
+    }
 
-    unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T { unsafe {
-        let d = self.data.get();
-        d.take(sequence)
-    }}
+    unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T {
+        unsafe {
+            let d = self.data.get();
+            d.take(sequence)
+        }
+    }
 }
 
 #[should_panic]
@@ -1582,20 +1596,26 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
         self.ring_buffer.size()
     }
 
-    unsafe fn set(&mut self, value: RB::T) { unsafe {
-        let current_sequence = self.get_current();
-        self.ring_buffer.set(current_sequence, value)
-    }}
+    unsafe fn set(&mut self, value: RB::T) {
+        unsafe {
+            let current_sequence = self.get_current();
+            self.ring_buffer.set(current_sequence, value)
+        }
+    }
 
-    unsafe fn get<'s>(&'s mut self) -> &'s RB::T { unsafe {
-        let current_sequence = self.get_current();
-        self.ring_buffer.get(current_sequence)
-    }}
+    unsafe fn get<'s>(&'s mut self) -> &'s RB::T {
+        unsafe {
+            let current_sequence = self.get_current();
+            self.ring_buffer.get(current_sequence)
+        }
+    }
 
-    unsafe fn take(&mut self) -> RB::T { unsafe {
-        let current_sequence = self.get_current();
-        self.ring_buffer.take(current_sequence)
-    }}
+    unsafe fn take(&mut self) -> RB::T {
+        unsafe {
+            let current_sequence = self.get_current();
+            self.ring_buffer.take(current_sequence)
+        }
+    }
 }
 
 impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> PublisherSequenceBarrier
@@ -1697,15 +1717,15 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     fn size(&self) -> usize {
         self.sb.size()
     }
-    unsafe fn set(&mut self, value: Self::T) { unsafe {
-        self.sb.set(value)
-    }}
-    unsafe fn get<'s>(&'s mut self) -> &'s Self::T { unsafe {
-        self.sb.get()
-    }}
-    unsafe fn take(&mut self) -> Self::T { unsafe {
-        self.sb.take()
-    }}
+    unsafe fn set(&mut self, value: Self::T) {
+        unsafe { self.sb.set(value) }
+    }
+    unsafe fn get<'s>(&'s mut self) -> &'s Self::T {
+        unsafe { self.sb.get() }
+    }
+    unsafe fn take(&mut self) -> Self::T {
+        unsafe { self.sb.take() }
+    }
 }
 
 impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> ConsumerSequenceBarrier
@@ -2118,28 +2138,32 @@ impl<T: Send> ResizableRingBuffer<T> {
     /// reference on the ResizableRingBufferData and switch to it.
     ///
     /// Returns true if a switch to a newly allocated buffer occurred.
-    unsafe fn try_switch_next(&mut self, sequence: SequenceNumber) -> bool { unsafe {
-        if !self.d.get().is_set(sequence) {
-            // Switch to newly allocated buffer
-            debug!(
-                "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
-                sequence,
-                Sequence::unwrap_number(sequence, self.size())
-            );
-            self.d = self.d.get().next.as_mut().unwrap().clone();
-            return true;
+    unsafe fn try_switch_next(&mut self, sequence: SequenceNumber) -> bool {
+        unsafe {
+            if !self.d.get().is_set(sequence) {
+                // Switch to newly allocated buffer
+                debug!(
+                    "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
+                    sequence,
+                    Sequence::unwrap_number(sequence, self.size())
+                );
+                self.d = self.d.get().next.as_mut().unwrap().clone();
+                return true;
+            }
+            false
         }
-        false
-    }}
+    }
 
     /**
      * Allocates a new ring buffer of the given size, then replaces self with a reference to the
      * newly allocated buffer.
      */
-    unsafe fn reallocate(&mut self, sequence: SequenceNumber, new_size: usize) { unsafe {
-        let new_rrbd = self.d.get().reallocate(sequence, new_size);
-        self.d = new_rrbd;
-    }}
+    unsafe fn reallocate(&mut self, sequence: SequenceNumber, new_size: usize) {
+        unsafe {
+            let new_rrbd = self.d.get().reallocate(sequence, new_size);
+            self.d = new_rrbd;
+        }
+    }
 }
 
 impl<T: Send> Clone for ResizableRingBuffer<T> {
@@ -2155,18 +2179,24 @@ impl<T: Send> RingBufferOps for ResizableRingBuffer<T> {
     fn size(&self) -> usize {
         unsafe { self.d.get_immut().size() }
     }
-    unsafe fn set(&mut self, sequence: SequenceNumber, value: T) { unsafe {
-        let rrbd = self.d.get();
-        rrbd.set(sequence, value);
-    }}
-    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s T { unsafe {
-        let rrbd = self.d.get();
-        rrbd.get(sequence)
-    }}
-    unsafe fn take(&mut self, sequence: SequenceNumber) -> T { unsafe {
-        let rrbd = self.d.get();
-        rrbd.take(sequence)
-    }}
+    unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
+        unsafe {
+            let rrbd = self.d.get();
+            rrbd.set(sequence, value);
+        }
+    }
+    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s T {
+        unsafe {
+            let rrbd = self.d.get();
+            rrbd.get(sequence)
+        }
+    }
+    unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
+        unsafe {
+            let rrbd = self.d.get();
+            rrbd.take(sequence)
+        }
+    }
 }
 
 #[test]
@@ -2299,15 +2329,15 @@ impl<T: Send, W: ResizingWaitStrategy> SequenceBarrier
     fn size(&self) -> usize {
         self.sb.size()
     }
-    unsafe fn set(&mut self, value: T) { unsafe {
-        self.sb.set(value)
-    }}
-    unsafe fn get<'s>(&'s mut self) -> &'s T { unsafe {
-        self.sb.get()
-    }}
-    unsafe fn take(&mut self) -> T { unsafe {
-        self.sb.take()
-    }}
+    unsafe fn set(&mut self, value: T) {
+        unsafe { self.sb.set(value) }
+    }
+    unsafe fn get<'s>(&'s mut self) -> &'s T {
+        unsafe { self.sb.get() }
+    }
+    unsafe fn take(&mut self) -> T {
+        unsafe { self.sb.take() }
+    }
 
     /**
      * Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
@@ -2450,16 +2480,18 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
     /// Check for a reallocation flag in the slot pointed to by `sequence`. If so, adjust our
     /// sequence to match the change that would have happened to the publisher's sequence, and
     /// adjust the cached availability value to compensate for that jump.
-    unsafe fn try_switch_next(&mut self) { unsafe {
-        let old_buffer_size = self.size();
-        let old_sequence = self.get_current();
-        let switch_occurred = self.cb.sb.ring_buffer.try_switch_next(old_sequence);
-        if switch_occurred {
-            // This is necessary to dereference the same slots that the publisher has written to.
-            // In other words, downstream consumers must retrace the publisher's steps.
-            self.unwrap_sequence(old_buffer_size);
+    unsafe fn try_switch_next(&mut self) {
+        unsafe {
+            let old_buffer_size = self.size();
+            let old_sequence = self.get_current();
+            let switch_occurred = self.cb.sb.ring_buffer.try_switch_next(old_sequence);
+            if switch_occurred {
+                // This is necessary to dereference the same slots that the publisher has written to.
+                // In other words, downstream consumers must retrace the publisher's steps.
+                self.unwrap_sequence(old_buffer_size);
+            }
         }
-    }}
+    }
 }
 
 impl<T: Send, W: ProcessingWaitStrategy> SequenceBarrier
@@ -2503,22 +2535,26 @@ impl<T: Send, W: ProcessingWaitStrategy> SequenceBarrier
     fn size(&self) -> usize {
         self.cb.size()
     }
-    unsafe fn set(&mut self, value: T) { unsafe {
-        self.cb.set(value)
-    }}
+    unsafe fn set(&mut self, value: T) {
+        unsafe { self.cb.set(value) }
+    }
 
     // The get and take functions check for reallocation events, and adjust the passed in sequence
     // and the barrier's sequence as necessary to match the adjustment to the publisher's sequence
     // that occurred at the time of reallocation.
 
-    unsafe fn get<'s>(&'s mut self) -> &'s T { unsafe {
-        self.try_switch_next();
-        self.cb.get()
-    }}
-    unsafe fn take(&mut self) -> T { unsafe {
-        self.try_switch_next();
-        self.cb.take()
-    }}
+    unsafe fn get<'s>(&'s mut self) -> &'s T {
+        unsafe {
+            self.try_switch_next();
+            self.cb.get()
+        }
+    }
+    unsafe fn take(&mut self) -> T {
+        unsafe {
+            self.try_switch_next();
+            self.cb.take()
+        }
+    }
 }
 
 impl<T: Send, W: ProcessingWaitStrategy> ConsumerSequenceBarrier
@@ -2696,11 +2732,7 @@ impl ResizingWaitStrategy for TimeoutResizeWaitStrategy {
         );
 
         // Don't expose the extra slot to callers, so it remains unused
-        if available >= 1 {
-            available - 1
-        } else {
-            0
-        }
+        if available >= 1 { available - 1 } else { 0 }
     }
 }
 
