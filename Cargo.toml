@@ -27,3 +27,6 @@ lto = true
 [dependencies]
 log = "0.4.28"
 getopts = "0.2.14"
+
+[lints.clippy]
+let_and_return = "allow"
