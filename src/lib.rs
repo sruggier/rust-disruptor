@@ -1002,7 +1002,7 @@ pub const DEFAULT_MAX_SPIN_TRIES_CONSUMER: usize = 2500;
  * latency is paramount, and the caller has taken steps to pin the publisher and consumers to their
  * own threads, or even cores.
  */
-#[derive(Copy)]
+#[derive(Clone, Copy)]
 pub struct YieldWaitStrategy {
     max_spin_tries_publisher: usize,
     max_spin_tries_consumer: usize,
@@ -1048,15 +1048,6 @@ impl YieldWaitStrategy {
             max_spin_tries_publisher,
             max_spin_tries_consumer,
         }
-    }
-}
-
-impl Clone for YieldWaitStrategy {
-    fn clone(&self) -> YieldWaitStrategy {
-        YieldWaitStrategy::new_with_retry_count(
-            self.max_spin_tries_publisher,
-            self.max_spin_tries_consumer,
-        )
     }
 }
 
