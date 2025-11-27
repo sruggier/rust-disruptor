@@ -28,7 +28,6 @@ use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use std::usize;
 use std::vec::Vec;
 
 /**
