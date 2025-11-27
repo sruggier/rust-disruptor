@@ -1865,7 +1865,7 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
             sequence_barrier = &mut *self.sequence_barrier.get();
         }
         assert!(
-            sequence_barrier.get_dependencies().len() == 0,
+            sequence_barrier.get_dependencies().is_empty(),
             "The create_consumer_pipeline method can only be called once."
         );
 
