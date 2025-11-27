@@ -86,7 +86,7 @@ impl<T: Send> RefSlot<T> {
      *
      * It is also the caller's responsibility not to call this after destroy.
      */
-    unsafe fn get<'s>(&'s self) -> &'s T {
+    unsafe fn get(&self) -> &T {
         unsafe {
             let p = self.payload;
             (*p).as_ref().unwrap()
@@ -180,7 +180,7 @@ impl<T: Send> RingBufferData<T> {
     }
 
     /// Get an immutable reference to the value pointed to by `sequence`.
-    fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
+    fn get(&self, sequence: SequenceNumber) -> &T {
         let index = sequence.as_index(self.size());
         unsafe { self.entries[index].get() }
     }
@@ -298,17 +298,14 @@ impl<T: Send> UncheckedUnsafeArc<T> {
     fn new(data: T) -> UncheckedUnsafeArc<T> {
         let arc = Arc::new(UnsafeCell::new(data));
         let data = arc.get();
-        UncheckedUnsafeArc {
-            arc,
-            data,
-        }
+        UncheckedUnsafeArc { arc, data }
     }
 
-    unsafe fn get<'s>(&'s mut self) -> &'s mut T {
+    unsafe fn get(&mut self) -> &mut T {
         unsafe { &mut *self.data }
     }
 
-    unsafe fn get_immut<'s>(&'s self) -> &'s T {
+    unsafe fn get_immut(&self) -> &T {
         unsafe { &*self.data }
     }
 }
@@ -377,7 +374,7 @@ trait RingBufferOps: Send {
      *
      * Mutable to facilitate transparent transitions to larger buffers.
      */
-    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s Self::T;
+    unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T;
 
     /// See `RingBufferData::take`. Unsafe: allows data races.
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
@@ -415,7 +412,7 @@ impl<T: Send> RingBufferOps for RingBuffer<T> {
         }
     }
 
-    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s Self::T {
+    unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T {
         unsafe {
             let d = self.data.get_immut();
             d.get(sequence)
@@ -1461,7 +1458,7 @@ trait SequenceBarrier: Send {
     fn get_sequence(&self) -> SequenceReader;
 
     /// Returns a borrowed pointer to the dependency list.
-    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader];
+    fn get_dependencies(&self) -> &[SequenceReader];
 
     /**
      * Assign a new set of dependencies to this barrier.
@@ -1490,7 +1487,7 @@ trait SequenceBarrier: Send {
      *
      * Mutable to facilitate transparent transitions to larger buffers.
      */
-    unsafe fn get<'s>(&'s mut self) -> &'s Self::T;
+    unsafe fn get(&mut self) -> &Self::T;
 
     /**
      * Takes the value stored in the sequnce barrier's current slot, moving it out of the ring
@@ -1563,7 +1560,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     fn get_cached_available(&self) -> usize {
         self.cached_available
     }
-    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] {
+    fn get_dependencies(&self) -> &[SequenceReader] {
         self.dependencies.as_slice()
     }
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
@@ -1602,7 +1599,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
         }
     }
 
-    unsafe fn get<'s>(&'s mut self) -> &'s RB::T {
+    unsafe fn get(&mut self) -> &RB::T {
         unsafe {
             let current_sequence = self.get_current();
             self.ring_buffer.get(current_sequence)
@@ -1677,7 +1674,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     fn get_cached_available(&self) -> usize {
         self.sb.get_cached_available()
     }
-    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] {
+    fn get_dependencies(&self) -> &[SequenceReader] {
         self.sb.get_dependencies()
     }
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
@@ -1719,7 +1716,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     unsafe fn set(&mut self, value: Self::T) {
         unsafe { self.sb.set(value) }
     }
-    unsafe fn get<'s>(&'s mut self) -> &'s Self::T {
+    unsafe fn get(&mut self) -> &Self::T {
         unsafe { self.sb.get() }
     }
     unsafe fn take(&mut self) -> Self::T {
@@ -2098,7 +2095,7 @@ impl<T: Send> ResizableRingBufferData<T> {
         self.rb_data.set(sequence, value);
     }
     /// See `RingBufferData::get`
-    fn get<'s>(&'s self, sequence: SequenceNumber) -> &'s T {
+    fn get(&self, sequence: SequenceNumber) -> &T {
         self.rb_data.get(sequence)
     }
     /// See `RingBufferData::take`
@@ -2184,7 +2181,7 @@ impl<T: Send> RingBufferOps for ResizableRingBuffer<T> {
             rrbd.set(sequence, value);
         }
     }
-    unsafe fn get<'s>(&'s mut self, sequence: SequenceNumber) -> &'s T {
+    unsafe fn get(&mut self, sequence: SequenceNumber) -> &T {
         unsafe {
             let rrbd = self.d.get();
             rrbd.get(sequence)
@@ -2319,7 +2316,7 @@ impl<T: Send, W: ResizingWaitStrategy> SequenceBarrier
     fn get_sequence(&self) -> SequenceReader {
         self.sb.get_sequence()
     }
-    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] {
+    fn get_dependencies(&self) -> &[SequenceReader] {
         self.sb.get_dependencies()
     }
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
@@ -2331,7 +2328,7 @@ impl<T: Send, W: ResizingWaitStrategy> SequenceBarrier
     unsafe fn set(&mut self, value: T) {
         unsafe { self.sb.set(value) }
     }
-    unsafe fn get<'s>(&'s mut self) -> &'s T {
+    unsafe fn get(&mut self) -> &T {
         unsafe { self.sb.get() }
     }
     unsafe fn take(&mut self) -> T {
@@ -2507,7 +2504,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SequenceBarrier
     fn get_cached_available(&self) -> usize {
         self.cb.get_cached_available()
     }
-    fn get_dependencies<'s>(&'s self) -> &'s [SequenceReader] {
+    fn get_dependencies(&self) -> &[SequenceReader] {
         self.cb.get_dependencies()
     }
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
@@ -2542,7 +2539,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SequenceBarrier
     // and the barrier's sequence as necessary to match the adjustment to the publisher's sequence
     // that occurred at the time of reallocation.
 
-    unsafe fn get<'s>(&'s mut self) -> &'s T {
+    unsafe fn get(&mut self) -> &T {
         unsafe {
             self.try_switch_next();
             self.cb.get()
