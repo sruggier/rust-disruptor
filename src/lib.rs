@@ -464,6 +464,7 @@ fn calculate_available_consumer(
     let available = gating - waiting;
     // No longer a valid assumption, given the possibility of resizable buffers
     // assert!(available <= buffer_size, "available: {}, gating: {}, waiting: {}", available, gating, waiting);
+    #[allow(clippy::let_and_return)]
     available
 }
 
