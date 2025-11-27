@@ -9,7 +9,7 @@ env:
 
 jobs:
   build_and_test:
-    name: Rust project - latest
+    name: Test Rust toolchain
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,7 +23,7 @@ jobs:
       - run: cargo build --verbose
       - run: cargo test --verbose
   latest_deps:
-    name: Latest Dependencies
+    name: Test latest dependencies
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
@@ -35,6 +35,7 @@ jobs:
       - run: cargo build --verbose
       - run: cargo test --verbose
   msrv:
+    name: Verify MSRV
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
