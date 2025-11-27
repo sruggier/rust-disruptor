@@ -2756,7 +2756,7 @@ impl ResizingWaitStrategy for TimeoutResizeWaitStrategy {
         );
 
         // Don't expose the extra slot to callers, so it remains unused
-        if available >= 1 { available - 1 } else { 0 }
+        available.saturating_sub(1)
     }
 }
 
