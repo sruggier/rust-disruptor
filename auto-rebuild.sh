@@ -43,6 +43,6 @@ while inotifywait -q -e attrib,close_write,create,delete,delete_self,move_self,m
 			if ((UNSTABLE)); then
 				cargo bench
 			fi &&
-			./target/debug/examples/unicast_throughput_benchmark
+			./target/debug/examples/unicast_throughput_benchmark -n 1000000
 	) || true
 done
