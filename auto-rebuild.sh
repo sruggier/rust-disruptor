@@ -18,10 +18,13 @@ options:
 
 UNSTABLE=0
 
-while getopts "u" ARG; do
+while getopts "uh" ARG; do
 	case $ARG in
 	u)
 		UNSTABLE=1
+		;;
+	h | ?)
+		usage
 		;;
 	esac
 done
