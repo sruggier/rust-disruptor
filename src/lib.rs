@@ -51,6 +51,13 @@ impl<T: Send> Clone for RefSlot<T> {
     }
 }
 
+impl<T: Send> Default for RefSlot<T> {
+    /// Calls Self::new()
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Send> RefSlot<T> {
     /**
      * Allocates an owned box containing Option<T>, then overrides Rust's memory management by
@@ -541,6 +548,13 @@ const UINT_PADDING_SIZE: usize = 60;
 #[cfg(target_pointer_width = "64")]
 const UINT_PADDING_SIZE: usize = 56;
 
+impl Default for UintPadding {
+    /// Calls Self::new()
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UintPadding {
     fn new() -> UintPadding {
         UintPadding {
@@ -584,6 +598,13 @@ struct Sequence {
 }
 
 unsafe impl Send for Sequence {}
+
+impl Default for Sequence {
+    /// Calls Self::new()
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Sequence {
     /// Allocates a new sequence.
@@ -987,6 +1008,13 @@ pub struct YieldWaitStrategy {
     max_spin_tries_consumer: usize,
 }
 
+impl Default for YieldWaitStrategy {
+    /// Calls Self::new()
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl YieldWaitStrategy {
     /**
      * Create a YieldWaitStrategy that will spin for the default number of times before yielding.
@@ -1214,6 +1242,13 @@ struct BlockingWaitStrategyData {
 }
 
 unsafe impl Send for BlockingWaitStrategy {}
+
+impl Default for BlockingWaitStrategy {
+    /// Calls Self::new()
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl BlockingWaitStrategy {
     pub fn new() -> BlockingWaitStrategy {
