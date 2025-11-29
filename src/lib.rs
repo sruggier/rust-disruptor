@@ -2251,11 +2251,9 @@ fn test_resizeable_ring_buffer() {
     }
 
     // The consumer gets all three values, switching to the next buffer as needed
-    let mut s2 = 0;
-    for i in v.iter() {
+    for (s2, i) in v.iter().enumerate() {
         let _switch_occurred = unsafe { consumer_rb.try_switch_next(SequenceNumber(s2)) };
         assert_eq!(unsafe { consumer_rb.take(SequenceNumber(s2)) }, *i);
-        s2 += 1;
     }
 }
 
