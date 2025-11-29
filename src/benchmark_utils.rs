@@ -51,7 +51,7 @@ pub fn parse_args(default_n_iterations: u64) -> CommonTestOpts {
         }
     };
     if matches.opt_present("h") {
-        usage(&argv0, &opts);
+        usage(argv0, &opts);
     }
 
     // Validate as integer if -n specified
