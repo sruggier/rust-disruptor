@@ -6,7 +6,6 @@ use disruptor::{
     SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
 use std::thread::spawn;
-use std::u64;
 use test::Bencher;
 
 /**

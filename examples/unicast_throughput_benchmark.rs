@@ -16,7 +16,6 @@ use std::sync::mpsc::channel;
 use std::thread::spawn;
 use std::time::Duration;
 use std::time::Instant;
-use std::u64;
 
 use crate::benchmark_utils::parse_args;
 use disruptor::{

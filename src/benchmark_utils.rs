@@ -1,7 +1,6 @@
 use getopts::Options;
 
 use std::str::FromStr;
-use std::u64;
 
 /// Contains values obtained from common argument processing.
 pub struct CommonTestOpts {
