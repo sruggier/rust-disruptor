@@ -6,23 +6,13 @@
 set -e
 
 function usage() {
-	CMDNAME=$(basename $0)
-	echo "usage:
-$CMDNAME [-n]
-
-options:
-    -u            Enable features that depend on unstable, namely benchmarking
-"
+	CMDNAME=$(basename "$0")
+	echo "usage: $CMDNAME"
 	exit 2
 }
 
-UNSTABLE=0
-
-while getopts "uh" ARG; do
+while getopts "h" ARG; do
 	case $ARG in
-	u)
-		UNSTABLE=1
-		;;
 	h | ?)
 		usage
 		;;
@@ -40,16 +30,7 @@ while inotifywait -q -e attrib,close_write,create,delete,delete_self,move_self,m
 	(
 		cargo build &&
 			cargo test &&
-			if ((UNSTABLE)); then
-				# Pass +nightly, but only if it's needed, so as to avoid
-				# breaking setups where a cargo nightly is being used directly,
-				# without rustup.
-				NIGHTLY_FLAG=()
-				if ! cargo --version | grep -q -- '-nightly '; then
-					NIGHTLY_FLAG+=(+nightly)
-				fi
-				cargo "${NIGHTLY_FLAG[@]}" bench
-			fi &&
+			cargo bench &&
 			./target/debug/examples/unicast_throughput_benchmark -n 1000000
 	) || true
 done
