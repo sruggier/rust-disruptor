@@ -1835,6 +1835,8 @@ impl<SB: SequenceBarrier> GenericPublisher<SB> {
         }
     }
 
+    // In the worst case (minimal microbenchmarking), call overhead is significant.
+    #[inline]
     fn publish(&self, value: SB::T) {
         unsafe {
             let sb = &mut *self.sequence_barrier.get();
@@ -2850,6 +2852,8 @@ impl<T: Send, W: ProcessingWaitStrategy>
 }
 
 impl<T: Send, W: ProcessingWaitStrategy> Publisher<T> for SinglePublisher<T, W> {
+    // In the worst case (minimal microbenchmarking), call overhead is significant.
+    #[inline]
     fn publish(&self, value: T) {
         self.p.publish(value)
     }
@@ -2951,6 +2955,8 @@ impl<T: Send> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalCons
 }
 
 impl<T: Send> Publisher<T> for SingleResizingPublisher<T> {
+    // In the worst case (minimal microbenchmarking), call overhead is significant.
+    #[inline]
     fn publish(&self, value: T) {
         self.p.publish(value)
     }
