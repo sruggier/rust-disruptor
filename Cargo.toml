@@ -23,6 +23,8 @@ lto = true
 
 [profile.bench]
 lto = true
+# Ensure profiling tools can map costs to the corresponding source code.
+debug = "full"
 
 [[bench]]
 name = "benchmarks"
