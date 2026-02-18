@@ -137,6 +137,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 
 
 fn bench_latency(c: &mut Criterion) {
     let mut latency_group = c.benchmark_group("ping-pong latency");
+    latency_group.throughput(criterion::Throughput::Elements(1));
     measure_ping_pong_latency_one_ringbuffer_generic("spin", &mut latency_group, SpinWaitStrategy);
     measure_ping_pong_latency_one_ringbuffer_generic(
         "yield",
