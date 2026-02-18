@@ -1,9 +1,37 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Bencher, Criterion, criterion_group, criterion_main};
 use disruptor::{
     BlockingWaitStrategy, Consumer, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
     SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
-use std::thread::spawn;
+use std::{
+    hint::black_box,
+    thread::{spawn, yield_now},
+    time::{Duration, Instant},
+};
+
+fn iter_latency<O, R>(b: &mut Bencher, mut routine: R)
+where
+    R: FnMut() -> O,
+{
+    const PAUSE_DURATION: Duration = Duration::from_micros(1);
+
+    b.iter_custom(move |iters| {
+        let mut total_time = Duration::ZERO;
+        for _i in 0..iters {
+            let latency_start = Instant::now();
+            black_box(routine());
+            total_time += latency_start.elapsed();
+
+            // Pause for 1 µs after each measurement, to show the worst-case latency from each
+            // wait strategy.
+            let pause_start = Instant::now();
+            while pause_start.elapsed() < PAUSE_DURATION {
+                yield_now();
+            }
+        }
+        total_time
+    });
+}
 
 /**
  * Run a two-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
@@ -40,7 +68,7 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy +
 
     let bench_id = format!("two-ringbuffer ping pong latency ({})", flavour);
     c.bench_function(bench_id.as_str(), |b| {
-        b.iter(|| {
+        iter_latency(b, || {
             ping_publisher.publish(i);
             let i_echo = pong_consumer.take();
             assert_eq!(i, i_echo);
@@ -110,7 +138,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 
 
     let bench_id = format!("same-thread ping-pong latency ({})", flavour);
     c.bench_function(bench_id.as_str(), |b| {
-        b.iter(|| {
+        iter_latency(b, || {
             ping_publisher.publish(i);
             let i_echo = pong_consumer.take();
             assert_eq!(i, i_echo);
