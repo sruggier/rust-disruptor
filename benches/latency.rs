@@ -1,4 +1,7 @@
-use criterion::{Bencher, Criterion, criterion_group, criterion_main};
+use criterion::{
+    Bencher, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
+    measurement::WallTime,
+};
 use disruptor::{
     BlockingWaitStrategy, Consumer, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
     SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
@@ -44,7 +47,7 @@ where
  */
 fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy + 'static>(
     flavour: &str,
-    c: &mut Criterion,
+    g: &mut BenchmarkGroup<WallTime>,
     w: W,
 ) {
     let mut ping_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
@@ -67,8 +70,7 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy +
 
     let mut i = 0;
 
-    let bench_id = format!("two-ringbuffer ping pong latency ({})", flavour);
-    c.bench_function(bench_id.as_str(), |b| {
+    g.bench_function(BenchmarkId::new("two ring buffers", flavour), |b| {
         iter_latency(b, || {
             ping_publisher.publish(i);
             let i_echo = pong_consumer.take();
@@ -77,21 +79,6 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy +
         })
     });
     ping_publisher.publish(u64::MAX);
-}
-
-fn measure_ping_pong_latency_two_ringbuffers_spin(c: &mut Criterion) {
-    let w = SpinWaitStrategy;
-    measure_ping_pong_latency_two_ringbuffers_generic("spin", c, w);
-}
-
-fn measure_ping_pong_latency_two_ringbuffers_yield(c: &mut Criterion) {
-    let w = YieldWaitStrategy::new();
-    measure_ping_pong_latency_two_ringbuffers_generic("yield", c, w);
-}
-
-fn measure_ping_pong_latency_two_ringbuffers_block(c: &mut Criterion) {
-    let w = BlockingWaitStrategy::new();
-    measure_ping_pong_latency_two_ringbuffers_generic("block", c, w);
 }
 
 /**
@@ -106,7 +93,7 @@ fn measure_ping_pong_latency_two_ringbuffers_block(c: &mut Criterion) {
  */
 fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 'static>(
     flavour: &str,
-    c: &mut Criterion,
+    g: &mut BenchmarkGroup<WallTime>,
     w: W,
 ) {
     let mut ping_publisher = SinglePublisher::<u64, W>::new(8192, w.clone());
@@ -137,8 +124,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 
 
     let mut i = 0;
 
-    let bench_id = format!("same-thread ping-pong latency ({})", flavour);
-    c.bench_function(bench_id.as_str(), |b| {
+    g.bench_function(BenchmarkId::new("single ring buffer", flavour), |b| {
         iter_latency(b, || {
             ping_publisher.publish(i);
             let i_echo = pong_consumer.take();
@@ -149,28 +135,32 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 
     ping_publisher.publish(u64::MAX);
 }
 
-fn measure_ping_pong_latency_one_ringbuffer_spin(c: &mut Criterion) {
-    let w = SpinWaitStrategy;
-    measure_ping_pong_latency_one_ringbuffer_generic("spin", c, w);
+fn bench_latency(c: &mut Criterion) {
+    let mut latency_group = c.benchmark_group("ping-pong latency");
+    measure_ping_pong_latency_one_ringbuffer_generic("spin", &mut latency_group, SpinWaitStrategy);
+    measure_ping_pong_latency_one_ringbuffer_generic(
+        "yield",
+        &mut latency_group,
+        YieldWaitStrategy::new(),
+    );
+    measure_ping_pong_latency_one_ringbuffer_generic(
+        "block",
+        &mut latency_group,
+        BlockingWaitStrategy::new(),
+    );
+    measure_ping_pong_latency_two_ringbuffers_generic("spin", &mut latency_group, SpinWaitStrategy);
+    measure_ping_pong_latency_two_ringbuffers_generic(
+        "yield",
+        &mut latency_group,
+        YieldWaitStrategy::new(),
+    );
+    measure_ping_pong_latency_two_ringbuffers_generic(
+        "block",
+        &mut latency_group,
+        BlockingWaitStrategy::new(),
+    );
+    latency_group.finish();
 }
 
-fn measure_ping_pong_latency_one_ringbuffer_yield(c: &mut Criterion) {
-    let w = YieldWaitStrategy::new();
-    measure_ping_pong_latency_one_ringbuffer_generic("yield", c, w);
-}
-
-fn measure_ping_pong_latency_one_ringbuffer_block(c: &mut Criterion) {
-    let w = BlockingWaitStrategy::new();
-    measure_ping_pong_latency_one_ringbuffer_generic("block", c, w);
-}
-
-criterion_group!(
-    benches,
-    measure_ping_pong_latency_one_ringbuffer_spin,
-    measure_ping_pong_latency_one_ringbuffer_yield,
-    measure_ping_pong_latency_one_ringbuffer_block,
-    measure_ping_pong_latency_two_ringbuffers_spin,
-    measure_ping_pong_latency_two_ringbuffers_yield,
-    measure_ping_pong_latency_two_ringbuffers_block,
-);
+criterion_group!(benches, bench_latency,);
 criterion_main!(benches);
