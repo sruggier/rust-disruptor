@@ -27,8 +27,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 use std::vec::Vec;
+
+use quanta::Instant;
 
 /**
  * Raw pointer to a single nullable element of `T`. We are going to communicate between tasks by

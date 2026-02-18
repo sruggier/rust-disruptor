@@ -15,13 +15,13 @@ use std::string;
 use std::sync::mpsc::channel;
 use std::thread::spawn;
 use std::time::Duration;
-use std::time::Instant;
 
 use crate::benchmark_utils::parse_args;
 use disruptor::{
     BlockingWaitStrategy, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
     SinglePublisher, SingleResizingPublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
+use quanta::Instant;
 #[path = "../src/benchmark_utils.rs"]
 mod benchmark_utils;
 

@@ -3,10 +3,11 @@ use disruptor::{
     BlockingWaitStrategy, Consumer, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
     SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
+use quanta::Instant;
 use std::{
     hint::black_box,
     thread::{spawn, yield_now},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 fn iter_latency<O, R>(b: &mut Bencher, mut routine: R)
