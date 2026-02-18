@@ -27,7 +27,7 @@ lto = true
 debug = "full"
 
 [[bench]]
-name = "benchmarks"
+name = "latency"
 harness = false
 
 [dependencies]
