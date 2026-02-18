@@ -28,7 +28,8 @@ while inotifywait -q -e attrib,close_write,create,delete,delete_self,move_self,m
 	reset
 	echo -e "\n\nRebuilding...\n"
 	(
-		cargo build &&
+		cargo check &&
+			cargo build &&
 			cargo test &&
 			cargo bench &&
 			./target/debug/examples/unicast_throughput_benchmark -n 1000000
