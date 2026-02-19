@@ -30,6 +30,10 @@ debug = "full"
 name = "latency"
 harness = false
 
+[[bench]]
+name = "throughput"
+harness = false
+
 [dependencies]
 log = "0.4.28"
 getopts = "0.2.14"

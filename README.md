@@ -46,10 +46,7 @@ old enough not to depend on any recent features of the language, so the MSRV is
 currently set to the minimum supported by its dependencies.
 
 You can build, run tests, and run benchmarks using `cargo build`, `cargo test`,
-and `cargo bench`, respectively. Additionally, `cargo test` builds
-examples/unicast_throughput_benchmark, which is a simple throughput benchmark
-that compares rust's channel API to the disruptor implementation using various
-wait strategies.
+and `cargo bench`, respectively.
 
 ## Hacking
 
