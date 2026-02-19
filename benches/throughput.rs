@@ -1,4 +1,4 @@
-// Copyright 2014 Simon Ruggier.
+// Copyright 2026 Simon Ruggier.
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -9,46 +9,23 @@
 #[macro_use]
 extern crate log;
 
-use std::convert::TryFrom;
 use std::fmt;
 use std::hint::black_box;
 use std::string;
 use std::sync::mpsc::channel;
 use std::thread::spawn;
-use std::time::Duration;
 
-use crate::benchmark_utils::parse_args;
+use criterion::BenchmarkGroup;
+use criterion::BenchmarkId;
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::measurement::WallTime;
 use disruptor::{
     BlockingWaitStrategy, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
     SinglePublisher, SingleResizingPublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
 use quanta::Instant;
-#[path = "../src/benchmark_utils.rs"]
-mod benchmark_utils;
-
-/**
- * Given a start time, finish time, and number of iterations, calculates and
- * returns the number of operations per second.
- */
-fn calculate_ops_per_second(duration: Duration, iterations: u64) -> u64 {
-    // Support for benchmarks long enough to overflow u64 is planned for
-    // completion by the end of Q3 in 2554.
-    let duration_u64 =
-        u64::try_from(duration.as_nanos()).expect("duration was too long to store in u64");
-    1000 * 1000 * 1000 * iterations / duration_u64
-}
-
-/**
- * Given a start time and a number of iterations, retrieves the current time
- * and returns the number of operations per second.
- */
-fn get_ops_per_second(start: Instant, iterations: u64) -> u64 {
-    let duration = start.elapsed();
-    calculate_ops_per_second(duration, iterations)
-}
-
-/// Default number of iterations to use on all benchmarks
-static NUM_ITERATIONS: u64 = 1000 * 1000 * 100 - 1;
 
 /**
  * Calculates the nth triangle number by summing the numbers from 1 to n in a
@@ -82,166 +59,173 @@ fn triangle_number_slow(n: u64) -> u64 {
  * Single threaded version of the benchmark. Returns the calculated value, for
  * use in other tests.
  */
-fn run_single_threaded_benchmark(iterations: u64) -> u64 {
-    let before = Instant::now();
-    let result = triangle_number_slow(iterations);
-    let ops = get_ops_per_second(before, iterations);
-    println!("Single threaded: {} ops/sec (result was {})", ops, result);
-
-    result
-}
-
-fn run_task_pipe_benchmark(iterations: u64) {
-    let (result_sender, result_receiver) = channel::<u64>();
-    let (input_sender, input_receiver) = channel::<u64>();
-
-    let before = Instant::now();
-
-    // Listen on input_receiver, summing all the received numbers, then return the
-    // sum through result_sender.
-    spawn(move || {
-        let mut sum = 0u64;
-        let mut i = input_receiver.recv().unwrap();
-        while i != u64::MAX {
-            sum += i;
-            i = input_receiver.recv().unwrap();
-        }
-        let result = result_sender.send(sum);
-        assert!(result.is_ok());
+fn bench_serial(g: &mut BenchmarkGroup<WallTime>) {
+    g.bench_function("serial loop", |b| {
+        b.iter_custom(|iterations| {
+            let iteration_start = Instant::now();
+            triangle_number_slow(iterations);
+            iteration_start.elapsed()
+        })
     });
-
-    // Send every number from 1 to (iterations + 1), and then tell the task
-    // to finish and return by sending usize::MAX.
-    for num in 1..iterations + 1 {
-        let result = input_sender.send(num);
-        assert!(result.is_ok())
-    }
-    let result = input_sender.send(u64::MAX);
-    assert!(result.is_ok());
-    // Wait for the task to finish
-    let loop_end = Instant::now();
-    let result = result_receiver.recv().unwrap();
-    let after = Instant::now();
-
-    let expected_value = triangle_number(iterations);
-    assert_eq!(result, expected_value);
-    let ops = calculate_ops_per_second(after - before, iterations);
-    let wait_latency = (after - loop_end).as_nanos();
-    println!("Pipes: {} ops/sec, result wait: {} ns", ops, wait_latency);
 }
 
-fn run_disruptor_benchmark<P: Publisher<u64>, FC: FinalConsumer<u64> + 'static>(
-    iterations: u64,
-    publisher: P,
-    consumer: FC,
-    desc: string::String,
-) {
-    let (result_sender, result_receiver) = channel::<u64>();
+fn bench_channel(g: &mut BenchmarkGroup<WallTime>) {
+    g.bench_function("std::sync::mpsc::channel", |b| {
+        b.iter_custom(|iterations| {
+            let (result_sender, result_receiver) = channel::<u64>();
+            let (input_sender, input_receiver) = channel::<u64>();
 
-    let before = Instant::now();
-
-    spawn(move || {
-        let mut sum = 0u64;
-
-        let mut expected_value = 1u64;
-        loop {
-            let i = consumer.take();
-            debug!("{}", i);
-            // In-band magic number value tells us when to break out of the loop
-            if i == u64::MAX {
+            // Listen on input_receiver, summing all the received numbers, then return the
+            // sum through result_sender.
+            spawn(move || {
+                let mut sum = 0u64;
+                let mut i = input_receiver.recv().unwrap();
+                while i != u64::MAX {
+                    sum += i;
+                    i = input_receiver.recv().unwrap();
+                }
                 let result = result_sender.send(sum);
                 assert!(result.is_ok());
-                break;
+            });
+
+            let iteration_start = Instant::now();
+
+            // Send every number from 1 to (iterations + 1), and then tell the task to finish and
+            // return by sending usize::MAX.
+            for num in 1..iterations + 1 {
+                let result = input_sender.send(num);
+                assert!(result.is_ok())
             }
-            assert_eq!(i, expected_value);
-            expected_value += 1;
-            sum += i;
-        }
+            let result = input_sender.send(u64::MAX);
+            assert!(result.is_ok());
+            // Wait for the task to finish
+            let sum = result_receiver.recv().unwrap();
+
+            let elapsed_time = iteration_start.elapsed();
+
+            let expected_value = triangle_number(iterations);
+            assert_eq!(sum, expected_value);
+
+            elapsed_time
+        });
     });
-
-    // Send every number from 1 to (iterations + 1), and then tell the task
-    // to finish and return by sending usize::MAX.
-    for num in 1..iterations + 1 {
-        publisher.publish(num)
-    }
-    publisher.publish(u64::MAX);
-
-    let loop_end = Instant::now();
-    let result = result_receiver.recv().unwrap();
-    let after = Instant::now();
-
-    let expected_value = triangle_number(iterations);
-    assert_eq!(result, expected_value);
-    let ops = calculate_ops_per_second(after - before, iterations);
-    let wait_latency = after - loop_end;
-    println!(
-        "Disruptor ({}): {} ops/sec, result wait: {} ns",
-        desc,
-        ops,
-        wait_latency.as_nanos()
-    );
 }
 
-fn run_nonresizing_disruptor_benchmark<W: ProcessingWaitStrategy + fmt::Debug + 'static>(
-    iterations: u64,
-    w: W,
-) {
-    let desc = format!("{:?}", w);
-    let mut publisher = SinglePublisher::<u64, W>::new(8192, w);
-    let consumer = publisher.create_single_consumer_pipeline();
-    run_disruptor_benchmark(iterations, publisher, consumer, desc);
+fn bench_disruptor<P, FC, DisruptorFactory>(
+    g: &mut BenchmarkGroup<WallTime>,
+    create_disruptor: DisruptorFactory,
+    desc: string::String,
+) where
+    P: Publisher<u64>,
+    FC: FinalConsumer<u64> + 'static,
+    DisruptorFactory: Fn() -> (P, FC),
+{
+    g.bench_function(BenchmarkId::new("disruptor", desc), |b| {
+        b.iter_custom(|iterations| {
+            let (publisher, consumer) = create_disruptor();
+            let (result_sender, result_receiver) = channel::<u64>();
+
+            spawn(move || {
+                let mut sum = 0u64;
+
+                let mut expected_value = 1u64;
+                loop {
+                    let i = consumer.take();
+                    debug!("{}", i);
+                    // In-band magic number value tells us when to break out of the loop
+                    if i == u64::MAX {
+                        let result = result_sender.send(sum);
+                        assert!(result.is_ok());
+                        break;
+                    }
+                    assert_eq!(i, expected_value);
+                    expected_value += 1;
+                    sum += i;
+                }
+            });
+
+            let iteration_start = Instant::now();
+
+            // Send every number from 1 to (iterations + 1), and then tell the task
+            // to finish and return by sending usize::MAX.
+            for num in 1..iterations + 1 {
+                publisher.publish(num)
+            }
+            publisher.publish(u64::MAX);
+
+            let result = result_receiver.recv().unwrap();
+            let iteration_duration = iteration_start.elapsed();
+
+            let expected_value = triangle_number(iterations);
+            assert_eq!(result, expected_value);
+
+            iteration_duration
+        });
+    });
 }
 
-fn run_disruptor_benchmark_spin(iterations: u64) {
+fn run_nonresizing_disruptor_benchmark<W, WF>(
+    g: &mut BenchmarkGroup<WallTime>,
+    create_wait_strategy: WF,
+) where
+    W: ProcessingWaitStrategy + fmt::Debug + 'static,
+    WF: Fn() -> W,
+{
+    let desc = format!("{:?}", create_wait_strategy());
+    let create_disruptor = || {
+        let mut publisher = SinglePublisher::<u64, W>::new(8192, create_wait_strategy());
+        let consumer = publisher.create_single_consumer_pipeline();
+        (publisher, consumer)
+    };
+    bench_disruptor(g, create_disruptor, desc);
+}
+
+fn bench_disruptor_spin(g: &mut BenchmarkGroup<WallTime>) {
     // SpinWaitStrategy fully blocks the threads it's on, so the second task needs to be native to
     // avoid deadlock. Previously, deliberate action was needed to ensure this. Currently, though,
     // std::task::spawn spawns a native task by default, so no further action is necessary.
-    run_nonresizing_disruptor_benchmark(iterations, SpinWaitStrategy);
+    run_nonresizing_disruptor_benchmark(g, || SpinWaitStrategy);
 }
 
-fn run_disruptor_benchmark_yield(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, YieldWaitStrategy::new());
+fn bench_disruptor_yield(g: &mut BenchmarkGroup<WallTime>) {
+    run_nonresizing_disruptor_benchmark(g, YieldWaitStrategy::new);
 }
 
-fn run_disruptor_benchmark_block(iterations: u64) {
-    run_nonresizing_disruptor_benchmark(iterations, BlockingWaitStrategy::new());
+fn bench_disruptor_block(g: &mut BenchmarkGroup<WallTime>) {
+    run_nonresizing_disruptor_benchmark(g, BlockingWaitStrategy::new);
 }
 
-fn run_disruptor_benchmark_resizeable(iterations: u64) {
+fn bench_disruptor_resizeable(g: &mut BenchmarkGroup<WallTime>) {
     let resize_timeout = 6;
     let mstp = disruptor::DEFAULT_MAX_SPIN_TRIES_PUBLISHER;
     let mstc = disruptor::DEFAULT_MAX_SPIN_TRIES_CONSUMER;
-    let mut publisher = SingleResizingPublisher::<u64>::new_resize_after_timeout_with_params(
-        8192,
-        resize_timeout,
-        mstp,
-        mstc,
-    );
-    let consumer = publisher.create_single_consumer_pipeline();
+    let create_disruptor = || {
+        let mut publisher = SingleResizingPublisher::<u64>::new_resize_after_timeout_with_params(
+            8192,
+            resize_timeout,
+            mstp,
+            mstc,
+        );
+        let consumer = publisher.create_single_consumer_pipeline();
+        (publisher, consumer)
+    };
     let desc = format!(
         "disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
         resize_timeout, mstp, mstc
     );
-    run_disruptor_benchmark(iterations, publisher, consumer, desc);
+    bench_disruptor(g, create_disruptor, desc);
 }
 
-fn main() {
-    // Default to NUM_ITERATIONS
-    let common_opts = parse_args(NUM_ITERATIONS);
-    let iterations = common_opts.n_iterations;
+fn bench_throughput(c: &mut Criterion) {
+    let mut throughput_group = c.benchmark_group("throughput");
+    throughput_group.throughput(criterion::Throughput::Elements(1));
 
-    run_single_threaded_benchmark(iterations);
-    run_disruptor_benchmark_resizeable(iterations);
-    run_disruptor_benchmark_block(iterations);
-    run_disruptor_benchmark_block(iterations);
-    run_disruptor_benchmark_block(iterations);
-    run_disruptor_benchmark_yield(iterations);
-    run_disruptor_benchmark_yield(iterations);
-    run_disruptor_benchmark_yield(iterations);
-    run_disruptor_benchmark_spin(iterations);
-    run_disruptor_benchmark_spin(iterations);
-    run_disruptor_benchmark_spin(iterations);
-    // The pipes are slower, so we avoid long execution times by running fewer iterations
-    run_task_pipe_benchmark(iterations / 100);
-    run_task_pipe_benchmark(iterations / 100);
+    bench_serial(&mut throughput_group);
+    bench_disruptor_resizeable(&mut throughput_group);
+    bench_disruptor_block(&mut throughput_group);
+    bench_disruptor_yield(&mut throughput_group);
+    bench_disruptor_spin(&mut throughput_group);
+    bench_channel(&mut throughput_group);
 }
+criterion_group!(benches, bench_throughput,);
+criterion_main!(benches);
