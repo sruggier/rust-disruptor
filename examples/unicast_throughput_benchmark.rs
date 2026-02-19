@@ -11,6 +11,7 @@ extern crate log;
 
 use std::convert::TryFrom;
 use std::fmt;
+use std::hint::black_box;
 use std::string;
 use std::sync::mpsc::channel;
 use std::thread::spawn;
@@ -63,12 +64,27 @@ fn triangle_number(n: u64) -> u64 {
 }
 
 /**
+* A slower version of triangle_number, where black_box has been used to deoptimize the loop.
+*
+* This ensures the CPU is executing every iteration of the loop, producing a more reasonable
+* comparison for microbenchmarking purposes.
+*/
+fn triangle_number_slow(n: u64) -> u64 {
+    let mut sum: u64 = 0;
+    for num in 1..n + 1 {
+        sum += num;
+        black_box(sum);
+    }
+    sum
+}
+
+/**
  * Single threaded version of the benchmark. Returns the calculated value, for
  * use in other tests.
  */
 fn run_single_threaded_benchmark(iterations: u64) -> u64 {
     let before = Instant::now();
-    let result = triangle_number(iterations);
+    let result = triangle_number_slow(iterations);
     let ops = get_ops_per_second(before, iterations);
     println!("Single threaded: {} ops/sec (result was {})", ops, result);
 
