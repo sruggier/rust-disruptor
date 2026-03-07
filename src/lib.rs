@@ -29,6 +29,7 @@ use std::thread;
 use std::time::Duration;
 use std::vec::Vec;
 
+use crossbeam_utils::CachePadded;
 use quanta::Instant;
 
 /**
@@ -536,43 +537,11 @@ fn test_calculate_available_publisher() {
 }
 
 /**
- * Used on either side of Uint values to fill the remainder of a cache line, to avoid false sharing
- * with other threads.
- */
-struct UintPadding {
-    _padding: [u8; UINT_PADDING_SIZE],
-}
-
-// This is calculated to be (cache line size - usize size), in bytes
-#[cfg(target_pointer_width = "32")]
-const UINT_PADDING_SIZE: usize = 60;
-#[cfg(target_pointer_width = "64")]
-const UINT_PADDING_SIZE: usize = 56;
-
-impl Default for UintPadding {
-    /// Calls Self::new()
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl UintPadding {
-    fn new() -> UintPadding {
-        UintPadding {
-            _padding: [0; UINT_PADDING_SIZE],
-        }
-    }
-}
-
-/**
  * The underlying data referenced by Sequence.
  */
 struct SequenceData {
-    // Prevent false sharing by padding either side of the value
-    _padding1: UintPadding,
     /// The published value of the sequence, visible to waiting consumers.
-    value: AtomicUsize,
-    _padding2: UintPadding,
+    value: CachePadded<AtomicUsize>,
     /// We can avoid atomic operations by using this cached value whenever possible.
     private_value: usize,
 }
@@ -580,9 +549,7 @@ struct SequenceData {
 impl SequenceData {
     fn new(initial_value: usize) -> SequenceData {
         SequenceData {
-            _padding1: UintPadding::new(),
-            value: AtomicUsize::new(initial_value),
-            _padding2: UintPadding::new(),
+            value: CachePadded::new(AtomicUsize::new(initial_value)),
             private_value: initial_value,
         }
     }
