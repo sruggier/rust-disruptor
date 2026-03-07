@@ -26,6 +26,9 @@ lto = true
 # Ensure profiling tools can map costs to the corresponding source code.
 debug = "full"
 
+[lib]
+bench = false
+
 [[bench]]
 name = "latency"
 harness = false
