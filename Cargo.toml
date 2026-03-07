@@ -36,7 +36,6 @@ harness = false
 
 [dependencies]
 log = "0.4.29"
-getopts = "0.2.14"
 quanta = "0.12.6"
 
 [lints.clippy]
