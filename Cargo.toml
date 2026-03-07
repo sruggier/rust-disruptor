@@ -8,7 +8,7 @@ homepage = "https://github.com/sruggier/rust-disruptor"
 repository = "https://github.com/sruggier/rust-disruptor.git"
 keywords = ["channels", "message passing", "disruptor"]
 license = "MIT/Apache-2.0"
-rust-version = "1.85.0"
+rust-version = "1.86.0"
 
 [profile.release]
 lto = true
@@ -42,4 +42,4 @@ quanta = "0.12.6"
 let_and_return = "allow"
 
 [dev-dependencies]
-criterion = "0.7.0"
+criterion = "0.8.2"
