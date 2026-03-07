@@ -575,7 +575,6 @@ struct SequenceData {
     _padding2: UintPadding,
     /// We can avoid atomic operations by using this cached value whenever possible.
     private_value: usize,
-    _padding3: UintPadding,
 }
 
 impl SequenceData {
@@ -585,7 +584,6 @@ impl SequenceData {
             value: AtomicUsize::new(initial_value),
             _padding2: UintPadding::new(),
             private_value: initial_value,
-            _padding3: UintPadding::new(),
         }
     }
 }
