@@ -6,12 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Copy rust-http's crate-id style for now. Until the API stabilizes, the versioning scheme merely
-// needs to convey that it is unstable.
-#![crate_name = "disruptor"]
-#![crate_type = "rlib"]
-#![crate_type = "dylib"]
-
 #[macro_use]
 extern crate log;
 use std::cell::UnsafeCell;
