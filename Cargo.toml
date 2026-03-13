@@ -38,6 +38,7 @@ name = "throughput"
 harness = false
 
 [dependencies]
+const_power_of_two = "1.0.0"
 crossbeam-utils = "0.8.21"
 log = "0.4.29"
 quanta = "0.12.6"

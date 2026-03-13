@@ -173,7 +173,7 @@ fn run_nonresizing_disruptor_benchmark<W, WF>(
 {
     let desc = format!("{:?}", create_wait_strategy());
     let create_disruptor = || {
-        let mut publisher = SinglePublisher::<u64, W>::new(8192, create_wait_strategy());
+        let mut publisher = SinglePublisher::<u64, 8192, W>::new(create_wait_strategy());
         let consumer = publisher.create_single_consumer_pipeline();
         (publisher, consumer)
     };

@@ -8,13 +8,12 @@
 
 #[macro_use]
 extern crate log;
+use std::array::from_fn;
 use std::cell::UnsafeCell;
 use std::clone::Clone;
 use std::cmp;
 use std::fmt;
-use std::mem;
 use std::option::Option;
-use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -23,158 +22,40 @@ use std::thread;
 use std::time::Duration;
 use std::vec::Vec;
 
+use const_power_of_two::PowerOfTwoUsize;
 use crossbeam_utils::CachePadded;
 use quanta::Instant;
 
-/**
- * Raw pointer to a single nullable element of `T`. We are going to communicate between tasks by
- * passing objects through a ring buffer. The ring buffer is implemented using `std::vec::Vec`, which
- * requires that its contents are clonable. However, we don't want to impose this limitation on
- * callers, so instead, the buffer will store pointers to `Option<T>`. The pointers are cloned as
- * needed, but the ring buffer has to handle deallocation of these objects to maintain safety.
- */
-struct RefSlot<T: Send> {
-    payload: *mut Option<T>,
+/// A statically-sized buffer.
+struct RingBufferData<T, const N: usize>
+where
+    usize: PowerOfTwoUsize<N>,
+{
+    entries: [CachePadded<Option<T>>; N],
 }
 
-unsafe impl<T: Send> Send for RefSlot<T> {}
-
-impl<T: Send> Clone for RefSlot<T> {
-    fn clone(&self) -> RefSlot<T> {
-        RefSlot {
-            payload: self.payload,
-        }
-    }
-}
-
-impl<T: Send> Default for RefSlot<T> {
-    /// Calls Self::new()
+impl<T, const N: usize> Default for RingBufferData<T, N>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T: Send> RefSlot<T> {
-    /**
-     * Allocates an owned box containing `Option<T>`, then overrides Rust's memory management by
-     * storing it as a raw pointer.
-     */
-    fn new() -> RefSlot<T> {
-        let payload: Box<Option<T>> = Box::new(None);
-        let payload_raw: *mut Option<T> = unsafe { mem::transmute(payload) };
-        RefSlot {
-            payload: payload_raw,
-        }
-    }
-
-    /**
-     * Overwrites the slot's value with `value`.
-     *
-     * # Safety notes
-     *
-     * This is safe to call in between new and destroy, but is marked as unsafe because it is still
-     * the caller's responsibility to ensure that it is not called after destroy.
-     */
-    unsafe fn set(&mut self, value: T) {
-        unsafe {
-            let p = self.payload;
-            (*p) = Some(value);
-        }
-    }
-
-    /**
-     * Retrieves an immutable reference to the slot's value.
-     *
-     * # Safety notes
-     *
-     * It is also the caller's responsibility not to call this after destroy.
-     */
-    unsafe fn get(&self) -> &T {
-        unsafe {
-            let p = self.payload;
-            (*p).as_ref().unwrap()
-        }
-    }
-
-    /**
-     * Moves the value out of the slot and returns it.
-     *
-     * # Failure
-     *
-     * When called a second time, this function doubles as a convenient way to end your task.
-     *
-     * # Safety notes
-     *
-     * It's the caller's responsibility not to call this after destroy.
-     */
-    unsafe fn take(&mut self) -> T {
-        unsafe { (*self.payload).take().unwrap() }
-    }
-
-    /**
-     * Destroys the value, if present, and assigns a null value. This can be used with `is_set` as a
-     * signalling mechanism.
-     *
-     * # Safety notes
-     *
-     * It's the caller's responsibility not to call this after destroy.
-     */
-    unsafe fn unset(&mut self) {
-        unsafe {
-            (*self.payload) = None;
-        }
-    }
-
-    /**
-     * Checks if a value is set in the slot.
-     *
-     * # Safety notes
-     *
-     * It's the caller's responsibility not to call this after destroy.
-     */
-    unsafe fn is_set(&self) -> bool {
-        unsafe { (*self.payload).is_some() }
-    }
-
-    /**
-     * Deallocates the owned box. This cannot happen automatically, so it is the caller's
-     * responsibility to call this at the right time, then avoid dereferencing `payload` after doing
-     * so.
-     */
-    unsafe fn destroy(&mut self) {
-        unsafe {
-            // Deallocate
-            let _payload: Box<Option<T>> = mem::transmute(self.payload);
-            self.payload = ptr::null_mut();
+        RingBufferData {
+            entries: from_fn(|_| CachePadded::new(None)),
         }
     }
 }
 
-/**
- * Contains the underlying `std::vec::Vec`, and manages the lifetime of the slots.
- */
-struct RingBufferData<T: Send> {
-    entries: Vec<RefSlot<T>>,
-}
-
-impl<T: Send> RingBufferData<T> {
-    fn new(size: usize) -> RingBufferData<T> {
-        // See Drop below for corresponding slot deallocation
-        let buffer = (0..size).map(|_i| RefSlot::new()).collect();
-        RingBufferData { entries: buffer }
-    }
-
+impl<T, const N: usize> RingBufferData<T, N>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     /**
      * Write a value into the ring buffer. The given sequence number is converted into an index into
      * the buffer, and the value is moved in into that element of the buffer.
      */
     fn set(&mut self, sequence: SequenceNumber, value: T) {
         let index = sequence.as_index(self.entries.len());
-        // We're guaranteed not to have called destroy during the lifetime of this type, so it's safe
-        // to call set and get.
-        unsafe {
-            self.entries[index].set(value);
-        }
+        self.entries[index].replace(value);
     }
 
     /// Get the size of the underlying buffer.
@@ -183,9 +64,13 @@ impl<T: Send> RingBufferData<T> {
     }
 
     /// Get an immutable reference to the value pointed to by `sequence`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slot is unset
     fn get(&self, sequence: SequenceNumber) -> &T {
         let index = sequence.as_index(self.len());
-        unsafe { self.entries[index].get() }
+        self.entries[index].as_ref().unwrap()
     }
 
     /**
@@ -197,43 +82,12 @@ impl<T: Send> RingBufferData<T> {
      */
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.len());
-        unsafe {
-            assert!(
-                self.entries[index].is_set(),
-                "Take of None at sequence: {}",
-                sequence.value()
-            );
-            self.entries[index].take()
-        }
-    }
-
-    /**
-     * Assigns a special null value to the slot pointed to by `sequence`, which can be checked using
-     * the `is_set` method.
-     */
-    fn unset(&mut self, sequence: SequenceNumber) {
-        let index = sequence.as_index(self.len());
-        unsafe {
-            self.entries[index].unset();
-        }
-    }
-
-    /**
-     * Checks whether the slot corresponding to `sequence` contains a value or not.
-     */
-    fn is_set(&self, sequence: SequenceNumber) -> bool {
-        let index = sequence.as_index(self.len());
-        unsafe { self.entries[index].is_set() }
-    }
-}
-
-impl<T: Send> Drop for RingBufferData<T> {
-    fn drop(&mut self) {
-        unsafe {
-            for entry in self.entries.iter_mut() {
-                entry.destroy();
-            }
-        }
+        debug_assert!(
+            self.entries[index].is_some(),
+            "Take of None at sequence: {}",
+            sequence.value()
+        );
+        self.entries[index].take().unwrap()
     }
 }
 
@@ -330,15 +184,22 @@ impl<T: Send> Clone for UncheckedUnsafeArc<T> {
  *
  * It is the caller's responsibility to avoid data races when reading and writing elements.
  */
-struct RingBuffer<T: Send> {
-    data: UncheckedUnsafeArc<RingBufferData<T>>,
+struct RingBuffer<T, const N: usize>
+where
+    T: Send,
+    usize: PowerOfTwoUsize<N>,
+{
+    data: UncheckedUnsafeArc<RingBufferData<T, N>>,
 }
 
-unsafe impl<T: Send> Send for RingBuffer<T> {}
+unsafe impl<T: Send, const N: usize> Send for RingBuffer<T, N> where usize: PowerOfTwoUsize<N> {}
 
-impl<T: Send> Clone for RingBuffer<T> {
+impl<T: Send, const N: usize> Clone for RingBuffer<T, N>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     /// Copy a reference to the original buffer.
-    fn clone(&self) -> RingBuffer<T> {
+    fn clone(&self) -> RingBuffer<T, N> {
         RingBuffer {
             data: self.data.clone(),
         }
@@ -383,25 +244,33 @@ trait RingBufferOps: Send {
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
 }
 
-impl<T: Send> RingBuffer<T> {
-    /**
-     * Constructs a new RingBuffer with a capacity of `size` elements. The size must be a power of
-     * two, a property that will be exploited for performance reasons.
-     */
-    fn new(size: usize) -> RingBuffer<T> {
-        assert!(
-            size.count_ones() == 1,
+impl<T: Send, const N: usize> RingBuffer<T, N>
+where
+    usize: PowerOfTwoUsize<N>,
+{
+    /// Constructs a new RingBuffer with a capacity of `N` elements. The const
+    /// parameter `N` must be a power of two.
+    fn new() -> RingBuffer<T, N>
+    where
+        usize: PowerOfTwoUsize<N>,
+    {
+        let data = RingBufferData::default();
+        let size = data.len();
+        debug_assert!(
+            size.is_power_of_two(),
             "RingBuffer size must be a power of two (received {})",
             size
         );
-        let data = RingBufferData::new(size);
         RingBuffer {
             data: UncheckedUnsafeArc::new(data),
         }
     }
 }
 
-impl<T: Send> RingBufferOps for RingBuffer<T> {
+impl<T: Send, const N: usize> RingBufferOps for RingBuffer<T, N>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     type T = T;
 
     fn len(&self) -> usize {
@@ -430,18 +299,13 @@ impl<T: Send> RingBufferOps for RingBuffer<T> {
     }
 }
 
-#[should_panic]
-#[test]
-fn ring_buffer_size_must_be_power_of_two_7() {
-    RingBuffer::<()>::new(7);
-}
 #[test]
 fn ring_buffer_size_must_be_power_of_two_1() {
-    RingBuffer::<()>::new(1);
+    RingBuffer::<(), 1>::new();
 }
 #[test]
 fn ring_buffer_size_must_be_power_of_two_8() {
-    RingBuffer::<()>::new(8);
+    RingBuffer::<(), 8>::new();
 }
 
 /**
@@ -695,7 +559,7 @@ fn test_sequence_overflow() {
     // evaluate to usize::MAX, and unsigned integer arithmetic will naturally take care of the
     // wrapping. The sequence will wrap to 0 at wrap_boundary(buffer_size), i.e. usize::MAX + 1.
     let exp = log2(wrap_boundary(1));
-    let max_buffer_size = 1 << (mem::size_of::<usize>() * 8 - exp);
+    let max_buffer_size = 1 << (std::mem::size_of::<usize>() * 8 - exp);
 
     let mut s = Sequence::new();
     assert_eq!(s.get().value(), SEQUENCE_INITIAL);
@@ -1894,7 +1758,7 @@ mod generic_publisher_tests {
 
     #[test]
     fn send_single_value() {
-        let mut publisher = SinglePublisher::<isize, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let mut publisher = SinglePublisher::<isize, 1, SpinWaitStrategy>::new(SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
         publisher.publish(1);
         consumer.consume(|value: &isize| {
@@ -1903,7 +1767,7 @@ mod generic_publisher_tests {
     }
     #[test]
     fn send_single_value_via_take() {
-        let mut publisher = SinglePublisher::<isize, SpinWaitStrategy>::new(1, SpinWaitStrategy);
+        let mut publisher = SinglePublisher::<isize, 1, SpinWaitStrategy>::new(SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
         let value = 1;
         publisher.publish(value);
@@ -2035,7 +1899,7 @@ impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
  * point, and the wrap boundary was changed to `4*buffer_size` to facilitate the third point.
  */
 struct ResizableRingBufferData<T: Send> {
-    rb_data: RingBufferData<T>,
+    rb_data: Vec<CachePadded<Option<T>>>,
     /**
      * When non-null, points to a larger buffer allocated by the publisher to replace this one.
      *
@@ -2054,7 +1918,7 @@ impl<T: Send> ResizableRingBufferData<T> {
     /// Constructs a new ring buffer with the given size.
     fn new(size: usize) -> ResizableRingBufferData<T> {
         ResizableRingBufferData {
-            rb_data: RingBufferData::new(size),
+            rb_data: (0..size).map(|_| CachePadded::new(None)).collect(),
             next: None,
         }
     }
@@ -2071,7 +1935,8 @@ impl<T: Send> ResizableRingBufferData<T> {
     ) -> UncheckedUnsafeArc<ResizableRingBufferData<T>> {
         let new_rrbd = ResizableRingBufferData::new(new_size);
         self.next = Some(UncheckedUnsafeArc::new(new_rrbd));
-        self.rb_data.unset(sequence);
+        let index = sequence.as_index(self.len());
+        self.rb_data[index].take();
         self.next.as_mut().unwrap().clone()
     }
 
@@ -2082,19 +1947,28 @@ impl<T: Send> ResizableRingBufferData<T> {
     }
     /// See `RingBufferData::set`
     fn set(&mut self, sequence: SequenceNumber, value: T) {
-        self.rb_data.set(sequence, value);
+        let index = sequence.as_index(self.len());
+        self.rb_data[index].replace(value);
     }
     /// See `RingBufferData::get`
     fn get(&self, sequence: SequenceNumber) -> &T {
-        self.rb_data.get(sequence)
+        let index = sequence.as_index(self.len());
+        self.rb_data[index].as_ref().unwrap()
     }
     /// See `RingBufferData::take`
     unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
-        self.rb_data.take(sequence)
+        let index = sequence.as_index(self.len());
+        debug_assert!(
+            self.rb_data[index].is_some(),
+            "Take of None at sequence: {}",
+            sequence.value()
+        );
+        self.rb_data[index].take().unwrap()
     }
     /// See `RingBufferData::is_set`
     unsafe fn is_set(&self, sequence: SequenceNumber) -> bool {
-        self.rb_data.is_set(sequence)
+        let index = sequence.as_index(self.len());
+        self.rb_data[index].is_some()
     }
 }
 
@@ -2770,39 +2644,53 @@ impl fmt::Debug for TimeoutResizeWaitStrategy {
     }
 }
 
-pub struct SinglePublisher<T: Send, W: ProcessingWaitStrategy> {
-    p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T>>>,
+pub struct SinglePublisher<T: Send, const N: usize, W: ProcessingWaitStrategy>
+where
+    usize: PowerOfTwoUsize<N>,
+{
+    p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T, N>>>,
 }
 
-pub struct SingleConsumer<T: Send, W: ProcessingWaitStrategy> {
-    c: GenericConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T>>>,
+pub struct SingleConsumer<T: Send, const N: usize, W: ProcessingWaitStrategy>
+where
+    usize: PowerOfTwoUsize<N>,
+{
+    c: GenericConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T, N>>>,
 }
 
-pub struct SingleFinalConsumer<T: Send, W: ProcessingWaitStrategy> {
-    c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T>>>,
+pub struct SingleFinalConsumer<T: Send, const N: usize, W: ProcessingWaitStrategy>
+where
+    usize: PowerOfTwoUsize<N>,
+{
+    c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T, N>>>,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> SinglePublisher<T, W> {
+impl<T: Send, const N: usize, W: ProcessingWaitStrategy> SinglePublisher<T, N, W>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     /**
      * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
      * SinglePublisher object.
      */
-    pub fn new(size: usize, wait_strategy: W) -> SinglePublisher<T, W> {
-        let ring_buffer = RingBuffer::<T>::new(size);
+    pub fn new(wait_strategy: W) -> SinglePublisher<T, N, W> {
+        let ring_buffer = RingBuffer::new();
         let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
-        let gp =
-            GenericPublisher::<SinglePublisherSequenceBarrier<W, RingBuffer<T>>>::new_common(sb);
+        let gp = GenericPublisher::new_common(sb);
         SinglePublisher { p: gp }
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy>
-    PipelineInit<T, SingleConsumer<T, W>, SingleFinalConsumer<T, W>> for SinglePublisher<T, W>
+impl<T: Send, const N: usize, W: ProcessingWaitStrategy>
+    PipelineInit<T, SingleConsumer<T, N, W>, SingleFinalConsumer<T, N, W>>
+    for SinglePublisher<T, N, W>
+where
+    usize: PowerOfTwoUsize<N>,
 {
     fn create_consumer_pipeline(
         &mut self,
         count_consumers: usize,
-    ) -> (Vec<SingleConsumer<T, W>>, SingleFinalConsumer<T, W>) {
+    ) -> (Vec<SingleConsumer<T, N, W>>, SingleFinalConsumer<T, N, W>) {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
         let c = gc.into_iter().map(|x| SingleConsumer { c: x }).collect();
         let fc = SingleFinalConsumer { c: gfc };
@@ -2810,7 +2698,10 @@ impl<T: Send, W: ProcessingWaitStrategy>
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> Publisher<T> for SinglePublisher<T, W> {
+impl<T: Send, const N: usize, W: ProcessingWaitStrategy> Publisher<T> for SinglePublisher<T, N, W>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
     fn publish(&self, value: T) {
@@ -2818,19 +2709,30 @@ impl<T: Send, W: ProcessingWaitStrategy> Publisher<T> for SinglePublisher<T, W> 
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleConsumer<T, W> {
+impl<T: Send, const N: usize, W: ProcessingWaitStrategy> Consumer<T> for SingleConsumer<T, N, W>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
         self.c.consume(consume_callback)
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> Consumer<T> for SingleFinalConsumer<T, W> {
+impl<T: Send, const N: usize, W: ProcessingWaitStrategy> Consumer<T>
+    for SingleFinalConsumer<T, N, W>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
         self.c.consume(consume_callback)
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> FinalConsumer<T> for SingleFinalConsumer<T, W> {
+impl<T: Send, const N: usize, W: ProcessingWaitStrategy> FinalConsumer<T>
+    for SingleFinalConsumer<T, N, W>
+where
+    usize: PowerOfTwoUsize<N>,
+{
     fn take(&self) -> T {
         self.c.take()
     }
