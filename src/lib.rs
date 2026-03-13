@@ -178,13 +178,13 @@ impl<T: Send> RingBufferData<T> {
     }
 
     /// Get the size of the underlying buffer.
-    fn size(&self) -> usize {
+    fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Get an immutable reference to the value pointed to by `sequence`.
     fn get(&self, sequence: SequenceNumber) -> &T {
-        let index = sequence.as_index(self.size());
+        let index = sequence.as_index(self.len());
         unsafe { self.entries[index].get() }
     }
 
@@ -196,7 +196,7 @@ impl<T: Send> RingBufferData<T> {
      * This function should only be called once for a given sequence value.
      */
     fn take(&mut self, sequence: SequenceNumber) -> T {
-        let index = sequence.as_index(self.size());
+        let index = sequence.as_index(self.len());
         unsafe {
             assert!(
                 self.entries[index].is_set(),
@@ -212,7 +212,7 @@ impl<T: Send> RingBufferData<T> {
      * the `is_set` method.
      */
     fn unset(&mut self, sequence: SequenceNumber) {
-        let index = sequence.as_index(self.size());
+        let index = sequence.as_index(self.len());
         unsafe {
             self.entries[index].unset();
         }
@@ -222,7 +222,7 @@ impl<T: Send> RingBufferData<T> {
      * Checks whether the slot corresponding to `sequence` contains a value or not.
      */
     fn is_set(&self, sequence: SequenceNumber) -> bool {
-        let index = sequence.as_index(self.size());
+        let index = sequence.as_index(self.len());
         unsafe { self.entries[index].is_set() }
     }
 }
@@ -360,8 +360,8 @@ impl<RB: RingBufferOps + Clone> RingBufferTrait for RB {}
 trait RingBufferOps: Send {
     type T: Send;
 
-    /// See `RingBufferData::size`
-    fn size(&self) -> usize;
+    /// See `RingBufferData::len`
+    fn len(&self) -> usize;
 
     /**
      * See `RingBufferData::set`
@@ -404,8 +404,8 @@ impl<T: Send> RingBuffer<T> {
 impl<T: Send> RingBufferOps for RingBuffer<T> {
     type T = T;
 
-    fn size(&self) -> usize {
-        unsafe { self.data.get_immut().size() }
+    fn len(&self) -> usize {
+        unsafe { self.data.get_immut().len() }
     }
 
     unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
@@ -1456,7 +1456,7 @@ trait SequenceBarrier: Send {
     // Ring buffer related operations
 
     /// Returns the size of the underlying ring buffer.
-    fn size(&self) -> usize;
+    fn len(&self) -> usize;
 
     /**
      * Stores a value in the sequence barrier's current slot.
@@ -1564,7 +1564,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
             batch_size,
             current_sequence,
             self.dependencies.as_slice(),
-            self.ring_buffer.size(),
+            self.ring_buffer.len(),
             &calculate_available_publisher,
         );
         available
@@ -1572,12 +1572,12 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
 
     fn release_n_real(&mut self, batch_size: usize) {
         self.sequence
-            .advance_and_flush(batch_size, self.ring_buffer.size());
+            .advance_and_flush(batch_size, self.ring_buffer.len());
         self.wait_strategy.notify_all_waiters();
     }
 
-    fn size(&self) -> usize {
-        self.ring_buffer.size()
+    fn len(&self) -> usize {
+        self.ring_buffer.len()
     }
 
     unsafe fn set(&mut self, value: RB::T) {
@@ -1678,13 +1678,13 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
             batch_size,
             current_sequence,
             &self.cursor,
-            self.sb.ring_buffer.size(),
+            self.sb.ring_buffer.len(),
         );
         let a = self.sb.wait_strategy.wait_for_consumers(
             batch_size,
             current_sequence,
             self.sb.dependencies.as_slice(),
-            self.sb.ring_buffer.size(),
+            self.sb.ring_buffer.len(),
             &calculate_available_consumer,
         );
         // wait_for_consumers returns usize::MAX if there are no other dependencies
@@ -1694,12 +1694,12 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     fn release_n_real(&mut self, batch_size: usize) {
         self.sb
             .sequence
-            .advance(batch_size, self.sb.ring_buffer.size());
+            .advance(batch_size, self.sb.ring_buffer.len());
         self.sb.sequence.flush();
     }
 
-    fn size(&self) -> usize {
-        self.sb.size()
+    fn len(&self) -> usize {
+        self.sb.len()
     }
     unsafe fn set(&mut self, value: Self::T) {
         unsafe { self.sb.set(value) }
@@ -2076,9 +2076,9 @@ impl<T: Send> ResizableRingBufferData<T> {
     }
 
     // Functions "inherited" from RingBufferData
-    /// See `RingBufferData::size`
-    fn size(&self) -> usize {
-        self.rb_data.size()
+    /// See `RingBufferData::len`
+    fn len(&self) -> usize {
+        self.rb_data.len()
     }
     /// See `RingBufferData::set`
     fn set(&mut self, sequence: SequenceNumber, value: T) {
@@ -2131,7 +2131,7 @@ impl<T: Send> ResizableRingBuffer<T> {
                 debug!(
                     "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
                     sequence,
-                    Sequence::unwrap_number(sequence, self.size())
+                    Sequence::unwrap_number(sequence, self.len())
                 );
                 self.d = self.d.get().next.as_mut().unwrap().clone();
                 return true;
@@ -2162,8 +2162,8 @@ impl<T: Send> Clone for ResizableRingBuffer<T> {
 impl<T: Send> RingBufferOps for ResizableRingBuffer<T> {
     type T = T;
 
-    fn size(&self) -> usize {
-        unsafe { self.d.get_immut().size() }
+    fn len(&self) -> usize {
+        unsafe { self.d.get_immut().len() }
     }
     unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
         unsafe {
@@ -2310,8 +2310,8 @@ impl<T: Send, W: ResizingWaitStrategy> SequenceBarrier
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
         self.sb.set_dependencies(dependencies);
     }
-    fn size(&self) -> usize {
-        self.sb.size()
+    fn len(&self) -> usize {
+        self.sb.len()
     }
     unsafe fn set(&mut self, value: T) {
         unsafe { self.sb.set(value) }
@@ -2331,7 +2331,7 @@ impl<T: Send, W: ResizingWaitStrategy> SequenceBarrier
         // NOTE: the returned availability value is always 1 less than the actual number of
         // available slots. The extra slot is reserved for use below with the reallocate
         // function.
-        let current_size = self.sb.ring_buffer.size();
+        let current_size = self.sb.ring_buffer.len();
         let mut available = self.sb.wait_strategy.try_wait_for_consumers(
             batch_size,
             self.get_current(),
@@ -2466,7 +2466,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
     /// adjust the cached availability value to compensate for that jump.
     unsafe fn try_switch_next(&mut self) {
         unsafe {
-            let old_buffer_size = self.size();
+            let old_buffer_size = self.len();
             let old_sequence = self.get_current();
             let switch_occurred = self.cb.sb.ring_buffer.try_switch_next(old_sequence);
             if switch_occurred {
@@ -2516,8 +2516,8 @@ impl<T: Send, W: ProcessingWaitStrategy> SequenceBarrier
     fn release_n_real(&mut self, batch_size: usize) {
         self.cb.release_n_real(batch_size)
     }
-    fn size(&self) -> usize {
-        self.cb.size()
+    fn len(&self) -> usize {
+        self.cb.len()
     }
     unsafe fn set(&mut self, value: T) {
         unsafe { self.cb.set(value) }
