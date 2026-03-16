@@ -163,11 +163,11 @@ impl<T: Send> UncheckedUnsafeArc<T> {
         UncheckedUnsafeArc { arc, data }
     }
 
-    unsafe fn get(&mut self) -> &mut T {
+    unsafe fn get_mut(&mut self) -> &mut T {
         unsafe { &mut *self.data }
     }
 
-    unsafe fn get_immut(&self) -> &T {
+    unsafe fn get(&self) -> &T {
         unsafe { &*self.data }
     }
 }
@@ -275,26 +275,26 @@ where
     type T = T;
 
     fn len(&self) -> usize {
-        unsafe { self.data.get_immut().len() }
+        unsafe { self.data.get().len() }
     }
 
     unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
         unsafe {
-            let d = self.data.get();
+            let d = self.data.get_mut();
             d.set(sequence, value);
         }
     }
 
     unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T {
         unsafe {
-            let d = self.data.get_immut();
+            let d = self.data.get();
             d.get(sequence)
         }
     }
 
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T {
         unsafe {
-            let d = self.data.get();
+            let d = self.data.get_mut();
             d.take(sequence)
         }
     }
@@ -441,7 +441,7 @@ impl Sequence {
 
     /// See SequenceReader's get method
     fn get(&self) -> SequenceNumber {
-        unsafe { SequenceNumber(self.value_arc.get_immut().value.load(Acquire)) }
+        unsafe { SequenceNumber(self.value_arc.get().value.load(Acquire)) }
     }
 
     /**
@@ -450,7 +450,7 @@ impl Sequence {
      * number)
      */
     fn get_owned(&self) -> SequenceNumber {
-        unsafe { SequenceNumber(self.value_arc.get_immut().private_value) }
+        unsafe { SequenceNumber(self.value_arc.get().private_value) }
     }
 
     /**
@@ -480,7 +480,7 @@ impl Sequence {
         // NOTE: Mutating the private value here, and in the unwrap function, is safe because this
         // type's API doesn't allow it to be cloned and accessed from multiple places concurrently.
         unsafe {
-            let d = self.value_arc.get();
+            let d = self.value_arc.get_mut();
             d.private_value = d.private_value.wrapping_add(n);
             // Given that buffer_size is a power of two, wrap by masking out the high bits. This
             // operation is a noop if the value is less than wrap_boundary(buffer_size), so it's
@@ -497,7 +497,7 @@ impl Sequence {
      */
     fn flush(&mut self) {
         unsafe {
-            let d = self.value_arc.get();
+            let d = self.value_arc.get_mut();
             d.value.store(d.private_value, Release);
         }
     }
@@ -515,7 +515,7 @@ impl Sequence {
      */
     fn unwrap(&mut self, buffer_size: usize) {
         unsafe {
-            let d = self.value_arc.get();
+            let d = self.value_arc.get_mut();
             let SequenceNumber(unwrapped) =
                 Sequence::unwrap_number(SequenceNumber(d.private_value), buffer_size);
             d.private_value = unwrapped;
@@ -1132,7 +1132,7 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
         // Transition to blocking on wait condition
         let d;
         unsafe {
-            d = self.d.get();
+            d = self.d.get_mut();
         }
 
         // Grab lock on wait condition
@@ -1185,7 +1185,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
     fn notify_all_waiters(&mut self) {
         let d;
         unsafe {
-            d = self.d.get();
+            d = self.d.get_mut();
         }
 
         // Check if there are any waiters, resetting the value to false
@@ -1995,14 +1995,14 @@ impl<T: Send> ResizableRingBuffer<T> {
     /// Returns true if a switch to a newly allocated buffer occurred.
     unsafe fn try_switch_next(&mut self, sequence: SequenceNumber) -> bool {
         unsafe {
-            if !self.d.get().is_set(sequence) {
+            if !self.d.get_mut().is_set(sequence) {
                 // Switch to newly allocated buffer
                 debug!(
                     "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
                     sequence,
                     Sequence::unwrap_number(sequence, self.len())
                 );
-                self.d = self.d.get().next.as_mut().unwrap().clone();
+                self.d = self.d.get_mut().next.as_mut().unwrap().clone();
                 return true;
             }
             false
@@ -2015,7 +2015,7 @@ impl<T: Send> ResizableRingBuffer<T> {
      */
     unsafe fn reallocate(&mut self, sequence: SequenceNumber, new_size: usize) {
         unsafe {
-            let new_rrbd = self.d.get().reallocate(sequence, new_size);
+            let new_rrbd = self.d.get_mut().reallocate(sequence, new_size);
             self.d = new_rrbd;
         }
     }
@@ -2032,23 +2032,23 @@ impl<T: Send> RingBufferOps for ResizableRingBuffer<T> {
     type T = T;
 
     fn len(&self) -> usize {
-        unsafe { self.d.get_immut().len() }
+        unsafe { self.d.get().len() }
     }
     unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
         unsafe {
-            let rrbd = self.d.get();
+            let rrbd = self.d.get_mut();
             rrbd.set(sequence, value);
         }
     }
     unsafe fn get(&mut self, sequence: SequenceNumber) -> &T {
         unsafe {
-            let rrbd = self.d.get();
+            let rrbd = self.d.get_mut();
             rrbd.get(sequence)
         }
     }
     unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
         unsafe {
-            let rrbd = self.d.get();
+            let rrbd = self.d.get_mut();
             rrbd.take(sequence)
         }
     }
