@@ -215,15 +215,15 @@ where
  * Allows for different ring buffer implementations to be used by the higher level types in this
  * module.
  */
-trait UnsafeRingBufferDeref: RingBufferOps + Clone {}
+trait UnsafeRingBufferDeref: UnsafeRingBufferOps + Clone {}
 // Automatically implement UnsafeRingBufferDeref for qualifying types
-impl<RB: RingBufferOps + Clone> UnsafeRingBufferDeref for RB {}
+impl<RB: UnsafeRingBufferOps + Clone> UnsafeRingBufferDeref for RB {}
 
 /**
  * Allows the actual operations a ring buffer exposes to be wrapped by other traits without also
  * bringing in the Send + Clone bounds.
  */
-trait RingBufferOps: Send {
+trait UnsafeRingBufferOps: Send {
     type T: Send;
 
     /// See `RingBufferData::len`
@@ -268,7 +268,7 @@ where
     }
 }
 
-impl<T: Send, const N: usize> RingBufferOps for RingBuffer<T, N>
+impl<T: Send, const N: usize> UnsafeRingBufferOps for RingBuffer<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
@@ -2028,7 +2028,7 @@ impl<T: Send> Clone for ResizableRingBuffer<T> {
     }
 }
 
-impl<T: Send> RingBufferOps for ResizableRingBuffer<T> {
+impl<T: Send> UnsafeRingBufferOps for ResizableRingBuffer<T> {
     type T = T;
 
     fn len(&self) -> usize {
