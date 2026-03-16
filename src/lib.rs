@@ -102,6 +102,16 @@ where
 #[derive(Clone, Copy)]
 pub struct SequenceNumber(usize);
 
+fn assert_power_of_two(buffer_size: usize) {
+    // This are redundant with other checks, and part of a potentially hot code
+    // path, so debug_assert is an appropriate choice here.
+    debug_assert!(
+        buffer_size.is_power_of_two(),
+        "Ring buffer size must be a power of two (received {})",
+        buffer_size
+    );
+}
+
 /**
  * Represents an initial state where no slots have been published or consumed.
  */
@@ -113,7 +123,7 @@ impl SequenceNumber {
      * power of two by using a masking operation instead of the modulo operator.
      */
     fn as_index(self, buffer_size: usize) -> usize {
-        // assert!(buffer_size.count_ones() == 1, "buffer_size must be a power of two (received {})", buffer_size);
+        assert_power_of_two(buffer_size);
         let index_mask = buffer_size - 1;
         let SequenceNumber(value) = self;
         value & index_mask
@@ -139,6 +149,7 @@ impl fmt::Debug for SequenceNumber {
  * The returned number will be a power of two, and a multiple of buffer_size.
  */
 fn wrap_boundary(buffer_size: usize) -> usize {
+    assert_power_of_two(buffer_size);
     buffer_size.wrapping_mul(4)
 }
 
@@ -256,11 +267,7 @@ where
     {
         let data = RingBufferData::default();
         let size = data.len();
-        debug_assert!(
-            size.is_power_of_two(),
-            "RingBuffer size must be a power of two (received {})",
-            size
-        );
+        assert_power_of_two(size);
         RingBuffer {
             data: UncheckedUnsafeArc::new(data),
         }
