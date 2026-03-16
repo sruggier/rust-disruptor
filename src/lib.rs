@@ -189,7 +189,7 @@ impl<T: Send> Clone for UncheckedUnsafeArc<T> {
  *
  * It is the caller's responsibility to avoid data races when reading and writing elements.
  */
-struct RingBuffer<T, const N: usize>
+struct UnsafeRingBufferArc<T, const N: usize>
 where
     T: Send,
     usize: PowerOfTwoUsize<N>,
@@ -197,15 +197,18 @@ where
     data: UncheckedUnsafeArc<RingBufferData<T, N>>,
 }
 
-unsafe impl<T: Send, const N: usize> Send for RingBuffer<T, N> where usize: PowerOfTwoUsize<N> {}
+unsafe impl<T: Send, const N: usize> Send for UnsafeRingBufferArc<T, N> where
+    usize: PowerOfTwoUsize<N>
+{
+}
 
-impl<T: Send, const N: usize> Clone for RingBuffer<T, N>
+impl<T: Send, const N: usize> Clone for UnsafeRingBufferArc<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
     /// Copy a reference to the original buffer.
-    fn clone(&self) -> RingBuffer<T, N> {
-        RingBuffer {
+    fn clone(&self) -> UnsafeRingBufferArc<T, N> {
+        UnsafeRingBufferArc {
             data: self.data.clone(),
         }
     }
@@ -249,26 +252,26 @@ trait UnsafeRingBufferOps: Send {
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
 }
 
-impl<T: Send, const N: usize> RingBuffer<T, N>
+impl<T: Send, const N: usize> UnsafeRingBufferArc<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
     /// Constructs a new RingBuffer with a capacity of `N` elements. The const
     /// parameter `N` must be a power of two.
-    fn new() -> RingBuffer<T, N>
+    fn new() -> UnsafeRingBufferArc<T, N>
     where
         usize: PowerOfTwoUsize<N>,
     {
         let data = RingBufferData::default();
         let size = data.len();
         assert_power_of_two(size);
-        RingBuffer {
+        UnsafeRingBufferArc {
             data: UncheckedUnsafeArc::new(data),
         }
     }
 }
 
-impl<T: Send, const N: usize> UnsafeRingBufferOps for RingBuffer<T, N>
+impl<T: Send, const N: usize> UnsafeRingBufferOps for UnsafeRingBufferArc<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
@@ -302,11 +305,11 @@ where
 
 #[test]
 fn ring_buffer_size_must_be_power_of_two_1() {
-    RingBuffer::<(), 1>::new();
+    UnsafeRingBufferArc::<(), 1>::new();
 }
 #[test]
 fn ring_buffer_size_must_be_power_of_two_8() {
-    RingBuffer::<(), 8>::new();
+    UnsafeRingBufferArc::<(), 8>::new();
 }
 
 /**
@@ -2643,21 +2646,21 @@ pub struct SinglePublisher<T: Send, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBuffer<T, N>>>,
+    p: GenericPublisher<SinglePublisherSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
 pub struct SingleConsumer<T: Send, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    c: GenericConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T, N>>>,
+    c: GenericConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
 pub struct SingleFinalConsumer<T: Send, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, RingBuffer<T, N>>>,
+    c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
 impl<T: Send, const N: usize, W: ProcessingWaitStrategy> SinglePublisher<T, N, W>
@@ -2669,7 +2672,7 @@ where
      * SinglePublisher object.
      */
     pub fn new(wait_strategy: W) -> SinglePublisher<T, N, W> {
-        let ring_buffer = RingBuffer::new();
+        let ring_buffer = UnsafeRingBufferArc::new();
         let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
         let gp = GenericPublisher::new_common(sb);
         SinglePublisher { p: gp }
