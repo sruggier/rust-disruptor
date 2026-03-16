@@ -215,9 +215,9 @@ where
  * Allows for different ring buffer implementations to be used by the higher level types in this
  * module.
  */
-trait RingBufferTrait: RingBufferOps + Clone {}
-// Automatically apply RingBufferTrait to qualifying types
-impl<RB: RingBufferOps + Clone> RingBufferTrait for RB {}
+trait UnsafeRingBufferDeref: RingBufferOps + Clone {}
+// Automatically implement UnsafeRingBufferDeref for qualifying types
+impl<RB: RingBufferOps + Clone> UnsafeRingBufferDeref for RB {}
 
 /**
  * Allows the actual operations a ring buffer exposes to be wrapped by other traits without also
@@ -1377,7 +1377,7 @@ struct SinglePublisherSequenceBarrier<W, RB> {
     cached_available: usize,
 }
 
-impl<W: PublishingWaitStrategy, RB: RingBufferTrait> SinglePublisherSequenceBarrier<W, RB> {
+impl<W: PublishingWaitStrategy, RB: UnsafeRingBufferDeref> SinglePublisherSequenceBarrier<W, RB> {
     fn new(
         ring_buffer: RB,
         dependencies: Vec<SequenceReader>,
@@ -1393,7 +1393,7 @@ impl<W: PublishingWaitStrategy, RB: RingBufferTrait> SinglePublisherSequenceBarr
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SequenceBarrier
     for SinglePublisherSequenceBarrier<W, RB>
 {
     type T = RB::T;
@@ -1461,7 +1461,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> PublisherSequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> PublisherSequenceBarrier
     for SinglePublisherSequenceBarrier<W, RB>
 {
     type CSB = SingleConsumerSequenceBarrier<W, RB>;
@@ -1493,7 +1493,7 @@ struct SingleConsumerSequenceBarrier<W, RB> {
     cursor: SequenceReader,
 }
 
-impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SingleConsumerSequenceBarrier<W, RB> {
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SingleConsumerSequenceBarrier<W, RB> {
     fn new(
         ring_buffer: RB,
         cursor: SequenceReader,
@@ -1507,7 +1507,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SingleConsumerSequenceBarri
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SequenceBarrier
     for SingleConsumerSequenceBarrier<W, RB>
 {
     type T = RB::T;
@@ -1571,7 +1571,7 @@ impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> SequenceBarrier
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: RingBufferTrait> ConsumerSequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> ConsumerSequenceBarrier
     for SingleConsumerSequenceBarrier<W, RB>
 {
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
@@ -1646,7 +1646,7 @@ struct GenericPublisher<SB: SequenceBarrier> {
 }
 
 impl<SB: SequenceBarrier> GenericPublisher<SB> {
-    /// Generic constructor that works with any RingBufferTrait-conforming type
+    /// Generic constructor that works with any UnsafeRingBufferDeref implemention
     fn new_common(sb: SB) -> GenericPublisher<SB> {
         GenericPublisher {
             sequence_barrier: UnsafeCell::new(sb),
