@@ -99,7 +99,7 @@ where
  * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
  * processing.
  */
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct SequenceNumber(usize);
 
 fn assert_power_of_two(buffer_size: usize) {
@@ -135,12 +135,6 @@ impl SequenceNumber {
     fn value(self) -> usize {
         let SequenceNumber(value) = self;
         value
-    }
-}
-
-impl fmt::Debug for SequenceNumber {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "disruptor::SequenceNumber{{{}}}", self.value())
     }
 }
 
@@ -712,7 +706,7 @@ fn calculate_available_list<F: AvailabilityFn>(
  * Using this strategy can result in livelock when used with tasks spawned using default scheduler
  * options. Ensure all publishers and consumers are on separate OS threads when using this.
  */
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct SpinWaitStrategy;
 
 impl ProcessingWaitStrategy for SpinWaitStrategy {
@@ -756,12 +750,6 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
     }
 
     fn notify_all_waiters(&mut self) {}
-}
-
-impl fmt::Debug for SpinWaitStrategy {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "disruptor::SpinWaitStrategy")
-    }
 }
 
 /**
