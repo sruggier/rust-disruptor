@@ -210,8 +210,8 @@ fn bench_disruptor_resizeable(g: &mut BenchmarkGroup<WallTime>) {
         (publisher, consumer)
     };
     let desc = format!(
-        "disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
-        resize_timeout, mstp, mstc
+        "TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
+        resize_timeout, mstp, mstc,
     );
     bench_disruptor(g, create_disruptor, desc);
 }

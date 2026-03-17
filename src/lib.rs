@@ -941,7 +941,7 @@ impl fmt::Debug for YieldWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "disruptor::YieldWaitStrategy{{p: {}, c: {}}}",
+            "YieldWaitStrategy{{p: {}, c: {}}}",
             self.max_spin_tries_publisher, self.max_spin_tries_consumer
         )
     }
@@ -1213,7 +1213,7 @@ impl fmt::Debug for BlockingWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "disruptor::BlockingWaitStrategy{{p: {}, c: {}}}",
+            "BlockingWaitStrategy{{p: {}, c: {}}}",
             self.max_spin_tries_publisher, self.max_spin_tries_consumer
         )
     }
@@ -2631,7 +2631,7 @@ impl fmt::Debug for TimeoutResizeWaitStrategy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "disruptor::TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
+            "TimeoutResizeWaitStrategy{{t: {}, p: {}, c: {}}}",
             self.timeout,
             self.wait_strategy.max_spin_tries_publisher,
             self.wait_strategy.max_spin_tries_consumer
