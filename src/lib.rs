@@ -26,7 +26,9 @@ use const_power_of_two::PowerOfTwoUsize;
 use crossbeam_utils::CachePadded;
 use quanta::Instant;
 
-/// A statically-sized buffer.
+// To start, define the data model for the ring buffer:
+
+/// A statically-sized buffer, with nullable entries and cache line padding.
 struct RingBufferData<T, const N: usize>
 where
     usize: PowerOfTwoUsize<N>,
@@ -44,6 +46,25 @@ where
         }
     }
 }
+
+// Now define a dynamic version of the same thing:
+
+/// A dynamically-sized buffer, with nullable entries and cache line padding
+struct BoxedRingBufferData<T> {
+    entries: Vec<CachePadded<Option<T>>>,
+}
+
+impl<T> BoxedRingBufferData<T> {
+    /// Given a size, initialize a new instance
+    fn new(size: usize) -> BoxedRingBufferData<T> {
+        BoxedRingBufferData {
+            entries: (0..size).map(|_| CachePadded::new(None)).collect(),
+        }
+    }
+}
+
+// Now define a distinct type, to index into the ring buffer, that assumes
+// power-of-two sizes and automatically wraps.
 
 /**
  * Values of this object are used as indices into the ring buffer (modulo the buffer size). The
@@ -1900,7 +1921,7 @@ impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
  * point, and the wrap boundary was changed to `4*buffer_size` to facilitate the third point.
  */
 struct ResizableRingBufferData<T: Send> {
-    rb_data: Vec<CachePadded<Option<T>>>,
+    rb_data: BoxedRingBufferData<T>,
     /**
      * When non-null, points to a larger buffer allocated by the publisher to replace this one.
      *
@@ -1919,7 +1940,7 @@ impl<T: Send> ResizableRingBufferData<T> {
     /// Constructs a new ring buffer with the given size.
     fn new(size: usize) -> ResizableRingBufferData<T> {
         ResizableRingBufferData {
-            rb_data: (0..size).map(|_| CachePadded::new(None)).collect(),
+            rb_data: BoxedRingBufferData::new(size),
             next: None,
         }
     }
@@ -1937,39 +1958,39 @@ impl<T: Send> ResizableRingBufferData<T> {
         let new_rrbd = ResizableRingBufferData::new(new_size);
         self.next = Some(UncheckedUnsafeArc::new(new_rrbd));
         let index = sequence.as_index(self.len());
-        self.rb_data[index].take();
+        self.rb_data.entries[index].take();
         self.next.as_mut().unwrap().clone()
     }
 
     // Functions "inherited" from RingBufferData
     /// See `RingBufferData::len`
     fn len(&self) -> usize {
-        self.rb_data.len()
+        self.rb_data.entries.len()
     }
     /// See `RingBufferData::set`
     fn set(&mut self, sequence: SequenceNumber, value: T) {
         let index = sequence.as_index(self.len());
-        self.rb_data[index].replace(value);
+        self.rb_data.entries[index].replace(value);
     }
     /// See `RingBufferData::get`
     fn get(&self, sequence: SequenceNumber) -> &T {
         let index = sequence.as_index(self.len());
-        self.rb_data[index].as_ref().unwrap()
+        self.rb_data.entries[index].as_ref().unwrap()
     }
     /// See `RingBufferData::take`
     unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.len());
         debug_assert!(
-            self.rb_data[index].is_some(),
+            self.rb_data.entries[index].is_some(),
             "Take of None at sequence: {}",
             sequence.value()
         );
-        self.rb_data[index].take().unwrap()
+        self.rb_data.entries[index].take().unwrap()
     }
     /// See `RingBufferData::is_set`
     unsafe fn is_set(&self, sequence: SequenceNumber) -> bool {
         let index = sequence.as_index(self.len());
-        self.rb_data[index].is_some()
+        self.rb_data.entries[index].is_some()
     }
 }
 
