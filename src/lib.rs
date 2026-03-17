@@ -45,52 +45,6 @@ where
     }
 }
 
-impl<T, const N: usize> RingBufferData<T, N>
-where
-    usize: PowerOfTwoUsize<N>,
-{
-    /**
-     * Write a value into the ring buffer. The given sequence number is converted into an index into
-     * the buffer, and the value is moved in into that element of the buffer.
-     */
-    fn set(&mut self, sequence: SequenceNumber, value: T) {
-        let index = sequence.as_index(self.entries.len());
-        self.entries[index].replace(value);
-    }
-
-    /// Get the size of the underlying buffer.
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Get an immutable reference to the value pointed to by `sequence`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the slot is unset
-    fn get(&self, sequence: SequenceNumber) -> &T {
-        let index = sequence.as_index(self.len());
-        self.entries[index].as_ref().unwrap()
-    }
-
-    /**
-     * Take the value pointed to by `sequence`, moving it out of the RingBuffer.
-     *
-     * # Failure
-     *
-     * This function should only be called once for a given sequence value.
-     */
-    fn take(&mut self, sequence: SequenceNumber) -> T {
-        let index = sequence.as_index(self.len());
-        debug_assert!(
-            self.entries[index].is_some(),
-            "Take of None at sequence: {}",
-            sequence.value()
-        );
-        self.entries[index].take().unwrap()
-    }
-}
-
 /**
  * Values of this object are used as indices into the ring buffer (modulo the buffer size). The
  * current value represents the latest slot that a publisher or consumer is still processing. In
@@ -145,6 +99,52 @@ impl SequenceNumber {
 fn wrap_boundary(buffer_size: usize) -> usize {
     assert_power_of_two(buffer_size);
     buffer_size.wrapping_mul(4)
+}
+
+impl<T, const N: usize> RingBufferData<T, N>
+where
+    usize: PowerOfTwoUsize<N>,
+{
+    /**
+     * Write a value into the ring buffer. The given sequence number is converted into an index into
+     * the buffer, and the value is moved in into that element of the buffer.
+     */
+    fn set(&mut self, sequence: SequenceNumber, value: T) {
+        let index = sequence.as_index(self.entries.len());
+        self.entries[index].replace(value);
+    }
+
+    /// Get the size of the underlying buffer.
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Get an immutable reference to the value pointed to by `sequence`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slot is unset
+    fn get(&self, sequence: SequenceNumber) -> &T {
+        let index = sequence.as_index(self.len());
+        self.entries[index].as_ref().unwrap()
+    }
+
+    /**
+     * Take the value pointed to by `sequence`, moving it out of the RingBuffer.
+     *
+     * # Failure
+     *
+     * This function should only be called once for a given sequence value.
+     */
+    fn take(&mut self, sequence: SequenceNumber) -> T {
+        let index = sequence.as_index(self.len());
+        debug_assert!(
+            self.entries[index].is_some(),
+            "Take of None at sequence: {}",
+            sequence.value()
+        );
+        self.entries[index].take().unwrap()
+    }
 }
 
 /// UnsafeArc, but with unchecked versions of the get and get_immut functions. The use of atomic
