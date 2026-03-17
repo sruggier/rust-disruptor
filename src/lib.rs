@@ -1976,18 +1976,18 @@ impl<T: Send> ResizableRingBufferData<T> {
  * flagged element left by the publisher, which signals to them that they should traverse the
  * pointer and retrieve items from the next buffer from now on.
  */
-struct ResizableRingBuffer<T: Send> {
+struct UnsafeResizableRingBufferArc<T: Send> {
     d: UncheckedUnsafeArc<ResizableRingBufferData<T>>,
 }
 
 unsafe impl<T: Send> Send for ResizableRingBufferData<T> {}
-unsafe impl<T: Send> Send for ResizableRingBuffer<T> {}
+unsafe impl<T: Send> Send for UnsafeResizableRingBufferArc<T> {}
 
-impl<T: Send> ResizableRingBuffer<T> {
+impl<T: Send> UnsafeResizableRingBufferArc<T> {
     /// Construct a new ResizableRingBuffer with a capacity for `size` elements. As with
     /// RingBuffer, `size` must be a power of two.
-    fn new(size: usize) -> ResizableRingBuffer<T> {
-        ResizableRingBuffer {
+    fn new(size: usize) -> UnsafeResizableRingBufferArc<T> {
+        UnsafeResizableRingBufferArc {
             d: UncheckedUnsafeArc::new(ResizableRingBufferData::new(size)),
         }
     }
@@ -2024,14 +2024,14 @@ impl<T: Send> ResizableRingBuffer<T> {
     }
 }
 
-impl<T: Send> Clone for ResizableRingBuffer<T> {
+impl<T: Send> Clone for UnsafeResizableRingBufferArc<T> {
     /// Copy a reference to the original buffer.
-    fn clone(&self) -> ResizableRingBuffer<T> {
-        ResizableRingBuffer { d: self.d.clone() }
+    fn clone(&self) -> UnsafeResizableRingBufferArc<T> {
+        UnsafeResizableRingBufferArc { d: self.d.clone() }
     }
 }
 
-impl<T: Send> UnsafeRingBufferOps for ResizableRingBuffer<T> {
+impl<T: Send> UnsafeRingBufferOps for UnsafeResizableRingBufferArc<T> {
     type T = T;
 
     fn len(&self) -> usize {
@@ -2060,7 +2060,7 @@ impl<T: Send> UnsafeRingBufferOps for ResizableRingBuffer<T> {
 #[test]
 fn test_resizeable_ring_buffer() {
     // General smoke test
-    let mut publisher_rb = ResizableRingBuffer::<usize>::new(2);
+    let mut publisher_rb = UnsafeResizableRingBufferArc::<usize>::new(2);
     let mut consumer_rb = publisher_rb.clone();
 
     // Dummy values
@@ -2140,12 +2140,12 @@ fn test_calculate_available_publisher_resizing() {
  */
 struct SingleResizingPublisherSequenceBarrier<T: Send, W> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
-    sb: SinglePublisherSequenceBarrier<W, ResizableRingBuffer<T>>,
+    sb: SinglePublisherSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
 }
 
 impl<T: Send, W: ResizingWaitStrategy> SingleResizingPublisherSequenceBarrier<T, W> {
     fn new(
-        ring_buffer: ResizableRingBuffer<T>,
+        ring_buffer: UnsafeResizableRingBufferArc<T>,
         dependencies: Vec<SequenceReader>,
         wait_strategy: W,
     ) -> SingleResizingPublisherSequenceBarrier<T, W> {
@@ -2276,12 +2276,12 @@ impl<T: Send, W: ProcessingWaitStrategy> PublisherSequenceBarrier
  */
 struct SingleResizingConsumerSequenceBarrier<T: Send, W> {
     /// Reuse data and constructor from SingleConsumerSequenceBarrier
-    cb: SingleConsumerSequenceBarrier<W, ResizableRingBuffer<T>>,
+    cb: SingleConsumerSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
 }
 
 impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T, W> {
     fn new(
-        cb: SingleConsumerSequenceBarrier<W, ResizableRingBuffer<T>>,
+        cb: SingleConsumerSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
     ) -> SingleResizingConsumerSequenceBarrier<T, W> {
         SingleResizingConsumerSequenceBarrier { cb }
     }
@@ -2768,7 +2768,7 @@ impl<T: Send> SingleResizingPublisher<T> {
         max_spin_tries_publisher: usize,
         max_spin_tries_consumer: usize,
     ) -> SingleResizingPublisher<T> {
-        let ring_buffer = ResizableRingBuffer::<T>::new(size);
+        let ring_buffer = UnsafeResizableRingBufferArc::<T>::new(size);
 
         let blocking_wait_strategy = BlockingWaitStrategy::new_with_retry_count(
             max_spin_tries_publisher,
