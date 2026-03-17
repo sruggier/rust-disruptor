@@ -1958,6 +1958,8 @@ impl<T: Send> ResizableRingBufferData<T> {
         let new_rrbd = ResizableRingBufferData::new(new_size);
         self.next = Some(UncheckedUnsafeArc::new(new_rrbd));
         let index = sequence.as_index(self.len());
+        // Call take on the option directly, not the RingBuffer, to ensure the
+        // slot is unset, regardless of whether it was previously set.
         self.rb_data.entries[index].take();
         self.next.as_mut().unwrap().clone()
     }
