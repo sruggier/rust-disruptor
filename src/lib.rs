@@ -197,6 +197,25 @@ where
     data: UncheckedUnsafeArc<RingBufferData<T, N>>,
 }
 
+impl<T: Send, const N: usize> UnsafeRingBufferArc<T, N>
+where
+    usize: PowerOfTwoUsize<N>,
+{
+    /// Constructs a new RingBuffer with a capacity of `N` elements. The const
+    /// parameter `N` must be a power of two.
+    fn new() -> UnsafeRingBufferArc<T, N>
+    where
+        usize: PowerOfTwoUsize<N>,
+    {
+        let data = RingBufferData::default();
+        let size = data.len();
+        assert_power_of_two(size);
+        UnsafeRingBufferArc {
+            data: UncheckedUnsafeArc::new(data),
+        }
+    }
+}
+
 unsafe impl<T: Send, const N: usize> Send for UnsafeRingBufferArc<T, N> where
     usize: PowerOfTwoUsize<N>
 {
@@ -250,25 +269,6 @@ trait UnsafeRingBufferOps: Send {
 
     /// See `RingBufferData::take`. Unsafe: allows data races.
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
-}
-
-impl<T: Send, const N: usize> UnsafeRingBufferArc<T, N>
-where
-    usize: PowerOfTwoUsize<N>,
-{
-    /// Constructs a new RingBuffer with a capacity of `N` elements. The const
-    /// parameter `N` must be a power of two.
-    fn new() -> UnsafeRingBufferArc<T, N>
-    where
-        usize: PowerOfTwoUsize<N>,
-    {
-        let data = RingBufferData::default();
-        let size = data.len();
-        assert_power_of_two(size);
-        UnsafeRingBufferArc {
-            data: UncheckedUnsafeArc::new(data),
-        }
-    }
 }
 
 impl<T: Send, const N: usize> UnsafeRingBufferOps for UnsafeRingBufferArc<T, N>
