@@ -105,21 +105,21 @@ impl<T, const N: usize> RingBufferData<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    /**
-     * Write a value into the ring buffer. The given sequence number is converted into an index into
-     * the buffer, and the value is moved in into that element of the buffer.
-     */
+    /// Writes a value into the ring buffer.
+    ///
+    /// The given sequence number is converted into an index into the buffer,
+    /// and the value is moved in into that element of the buffer.
     fn set(&mut self, sequence: SequenceNumber, value: T) {
         let index = sequence.as_index(self.entries.len());
         self.entries[index].replace(value);
     }
 
-    /// Get the size of the underlying buffer.
+    /// Returns the length of the underlying buffer.
     fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Get an immutable reference to the value pointed to by `sequence`.
+    /// Returns an immutable reference to the value pointed to by `sequence`.
     ///
     /// # Panics
     ///
@@ -129,13 +129,11 @@ where
         self.entries[index].as_ref().unwrap()
     }
 
-    /**
-     * Take the value pointed to by `sequence`, moving it out of the RingBuffer.
-     *
-     * # Failure
-     *
-     * This function should only be called once for a given sequence value.
-     */
+    /// Take the value pointed to by `sequence`, moving it out of the RingBuffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slot is unset
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(self.len());
         debug_assert!(
