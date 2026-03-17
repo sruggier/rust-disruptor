@@ -13,6 +13,8 @@ use std::cell::UnsafeCell;
 use std::clone::Clone;
 use std::cmp;
 use std::fmt;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::option::Option;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
@@ -122,49 +124,120 @@ fn wrap_boundary(buffer_size: usize) -> usize {
     buffer_size.wrapping_mul(4)
 }
 
-impl<T, const N: usize> RingBufferData<T, N>
+// Use Deref to abstract away the data model of the statically and dynamically
+// sized buffer structs. The types are private, so confusion among downstream
+// users isn't a concern.
+
+/// Enables the use of a blanket RingBufferOps implementation.
+impl<T, const N: usize> Deref for RingBufferData<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
+    type Target = [CachePadded<Option<T>>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+/// Enables the use of a blanket RingBufferOps implementation.
+impl<T, const N: usize> DerefMut for RingBufferData<T, N>
+where
+    usize: PowerOfTwoUsize<N>,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+
+/// Enables the use of a blanket RingBufferOps implementation.
+impl<T> Deref for BoxedRingBufferData<T> {
+    type Target = Vec<CachePadded<Option<T>>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+/// Enables the use of a blanket RingBufferOps implementation.
+impl<T> DerefMut for BoxedRingBufferData<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+
+// Now define some common operations that are indexed SequenceNumber.
+
+/// Operations that index via SequenceNumber, and automatically handle wrapping.
+trait RingBufferOps: Send {
+    type T;
+
     /// Writes a value into the ring buffer.
     ///
     /// The given sequence number is converted into an index into the buffer,
     /// and the value is moved in into that element of the buffer.
-    fn set(&mut self, sequence: SequenceNumber, value: T) {
-        let index = sequence.as_index(self.entries.len());
-        self.entries[index].replace(value);
-    }
+    fn set(&mut self, sequence: SequenceNumber, value: Self::T);
 
     /// Returns the length of the underlying buffer.
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
+    fn len(&self) -> usize;
 
     /// Returns an immutable reference to the value pointed to by `sequence`.
     ///
     /// # Panics
     ///
     /// Panics if the slot is unset
-    fn get(&self, sequence: SequenceNumber) -> &T {
-        let index = sequence.as_index(self.len());
-        self.entries[index].as_ref().unwrap()
-    }
+    fn get(&self, sequence: SequenceNumber) -> &Self::T;
 
     /// Take the value pointed to by `sequence`, moving it out of the RingBuffer.
     ///
     /// # Panics
     ///
     /// Panics if the slot is unset
+    fn take(&mut self, sequence: SequenceNumber) -> Self::T;
+}
+
+// Implement the operations for each of the defined types.
+
+/// Blanket implementation for anything that derefs to a slice of `Option<T>`.
+///
+/// The size is assumed to be a power of two, but that can't be enforced
+/// at compile time, in general, so it's enforced via a debug assertion in
+/// as_index.
+impl<I, S: Send, T> RingBufferOps for S
+where
+    S: DerefMut<Target = [I]>,
+    I: DerefMut<Target = Option<T>> + 'static,
+{
+    type T = T;
+
+    fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
+        let index = sequence.as_index(RingBufferOps::len(self));
+        (*self)[index].replace(value);
+    }
+
+    fn len(&self) -> usize {
+        self.deref().len()
+    }
+
+    fn get(&self, sequence: SequenceNumber) -> &Self::T {
+        let index = sequence.as_index(RingBufferOps::len(self));
+        (*self)[index].as_ref().unwrap()
+    }
+
     fn take(&mut self, sequence: SequenceNumber) -> T {
-        let index = sequence.as_index(self.len());
+        let index = sequence.as_index(RingBufferOps::len(self));
         debug_assert!(
-            self.entries[index].is_some(),
+            (*self)[index].is_some(),
             "Take of None at sequence: {}",
             sequence.value()
         );
-        self.entries[index].take().unwrap()
+        (*self)[index].take().unwrap()
     }
 }
+
+// Everything above has been safe. Now define unsafe wrappers that allow
+// mutable references to be shared across multiple owners, to implement a safe
+// abstraction above.
 
 /// UnsafeArc, but with unchecked versions of the get and get_immut functions. The use of atomic
 /// operations in those functions is a significant slowdown.
@@ -230,8 +303,9 @@ where
     data: UncheckedUnsafeArc<RingBufferData<T, N>>,
 }
 
-impl<T: Send, const N: usize> UnsafeRingBufferArc<T, N>
+impl<T, const N: usize> UnsafeRingBufferArc<T, N>
 where
+    T: Send + 'static,
     usize: PowerOfTwoUsize<N>,
 {
     /// Constructs a new RingBuffer with a capacity of `N` elements. The const
@@ -261,26 +335,95 @@ where
     }
 }
 
-/**
- * Allows for different ring buffer implementations to be used by the higher level types in this
- * module.
- */
-trait UnsafeRingBufferDeref: UnsafeRingBufferOps + Clone {}
-// Automatically implement UnsafeRingBufferDeref for qualifying types
-impl<RB: UnsafeRingBufferOps + Clone> UnsafeRingBufferDeref for RB {}
+/// Enables the use of a blanket UnsafeRingBufferDeref implementation.
+impl<T, const N: usize> Deref for UnsafeRingBufferArc<T, N>
+where
+    T: Send,
+    usize: PowerOfTwoUsize<N>,
+{
+    type Target = UncheckedUnsafeArc<RingBufferData<T, N>>;
 
-/**
- * Allows the actual operations a ring buffer exposes to be wrapped by other traits without also
- * bringing in the Send + Clone bounds.
- */
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+/// Enables the use of a blanket UnsafeRingBufferDeref implementation.
+impl<T, const N: usize> DerefMut for UnsafeRingBufferArc<T, N>
+where
+    T: Send,
+    usize: PowerOfTwoUsize<N>,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+/// Unsafe methods providing shared references to the underlying ring buffer.
+trait UnsafeRingBufferDeref: Clone + Send {
+    type T: Send;
+    type RB: RingBufferOps<T = Self::T>;
+
+    /// Get a reference to the underlying ring buffer
+    ///
+    /// # Safety notes
+    ///
+    /// It's the caller's responsibility to avoid data races when accessing
+    /// elements in the buffer.
+    unsafe fn get(&self) -> &Self::RB;
+    /// Get a mutable reference to the underlying ring buffer
+    unsafe fn get_mut(&mut self) -> &mut Self::RB;
+}
+
+/// Blanket impl for UncheckedUnsafeArc holding a RingBufferOps type.
+impl<T, RB> UnsafeRingBufferDeref for UncheckedUnsafeArc<RB>
+where
+    T: Send,
+    RB: RingBufferOps<T = T>,
+{
+    type T = T;
+    type RB = RB;
+
+    // The duplication here is intentional: the underlying UncheckedUnsafeArc
+    // type isn't specific to this use case, so the definition shouldn't be
+    // coupled to it.
+    unsafe fn get(&self) -> &Self::RB {
+        unsafe { UncheckedUnsafeArc::get(self) }
+    }
+    unsafe fn get_mut(&mut self) -> &mut Self::RB {
+        unsafe { UncheckedUnsafeArc::get_mut(self) }
+    }
+}
+
+/// Blanket impl for types that deref to UnsafeRingBufferDeref
+impl<T, RB, A, AD> UnsafeRingBufferDeref for AD
+where
+    T: Send,
+    RB: RingBufferOps<T = T>,
+    A: UnsafeRingBufferDeref<T = T, RB = RB> + 'static,
+    AD: DerefMut<Target = A> + Clone + Send,
+{
+    type T = T;
+    type RB = RB;
+
+    unsafe fn get(&self) -> &Self::RB {
+        unsafe { self.deref().get() }
+    }
+    unsafe fn get_mut(&mut self) -> &mut Self::RB {
+        unsafe { self.deref_mut().get_mut() }
+    }
+}
+
+/// An unsafe version of RingBufferOps. Defines the same abstraction, but
+/// without exposing it to safe code.
 trait UnsafeRingBufferOps: Send {
     type T: Send;
 
-    /// See `RingBufferData::len`
+    /// See `RingBufferOps::len`
     fn len(&self) -> usize;
 
     /**
-     * See `RingBufferData::set`
+     * See `RingBufferOps::set`
      *
      * # Safety notes
      *
@@ -289,45 +432,38 @@ trait UnsafeRingBufferOps: Send {
     unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T);
 
     /**
-     * See `RingBufferData::get`. Unsafe: allows data races.
+     * See `RingBufferOps::get`. Unsafe: allows data races.
      *
      * Mutable to facilitate transparent transitions to larger buffers.
      */
     unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T;
 
-    /// See `RingBufferData::take`. Unsafe: allows data races.
+    /// See `RingBufferOps::take`. Unsafe: allows data races.
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
 }
 
-impl<T: Send, const N: usize> UnsafeRingBufferOps for UnsafeRingBufferArc<T, N>
+/// Blanket impl for types that implement UnsafeRingBufferDeref.
+impl<T, SRB, URB> UnsafeRingBufferOps for URB
 where
-    usize: PowerOfTwoUsize<N>,
+    T: Send,
+    SRB: RingBufferOps<T = T> + 'static,
+    URB: UnsafeRingBufferDeref<RB = SRB, T = T>,
 {
     type T = T;
 
     fn len(&self) -> usize {
-        unsafe { self.data.get().len() }
+        unsafe { self.get().len() }
     }
-
     unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
         unsafe {
-            let d = self.data.get_mut();
-            d.set(sequence, value);
+            self.get_mut().set(sequence, value);
         }
     }
-
     unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T {
-        unsafe {
-            let d = self.data.get();
-            d.get(sequence)
-        }
+        unsafe { UnsafeRingBufferDeref::get(self).get(sequence) }
     }
-
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T {
-        unsafe {
-            let d = self.data.get_mut();
-            d.take(sequence)
-        }
+        unsafe { self.get_mut().take(sequence) }
     }
 }
 
@@ -1404,7 +1540,7 @@ struct SinglePublisherSequenceBarrier<W, RB> {
     cached_available: usize,
 }
 
-impl<W: PublishingWaitStrategy, RB: UnsafeRingBufferDeref> SinglePublisherSequenceBarrier<W, RB> {
+impl<W: PublishingWaitStrategy, RB: UnsafeRingBufferOps> SinglePublisherSequenceBarrier<W, RB> {
     fn new(
         ring_buffer: RB,
         dependencies: Vec<SequenceReader>,
@@ -1420,7 +1556,7 @@ impl<W: PublishingWaitStrategy, RB: UnsafeRingBufferDeref> SinglePublisherSequen
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps> SequenceBarrier
     for SinglePublisherSequenceBarrier<W, RB>
 {
     type T = RB::T;
@@ -1488,7 +1624,7 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SequenceBarrier
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> PublisherSequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone> PublisherSequenceBarrier
     for SinglePublisherSequenceBarrier<W, RB>
 {
     type CSB = SingleConsumerSequenceBarrier<W, RB>;
@@ -1520,7 +1656,9 @@ struct SingleConsumerSequenceBarrier<W, RB> {
     cursor: SequenceReader,
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SingleConsumerSequenceBarrier<W, RB> {
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone>
+    SingleConsumerSequenceBarrier<W, RB>
+{
     fn new(
         ring_buffer: RB,
         cursor: SequenceReader,
@@ -1534,7 +1672,7 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SingleConsumerSequenc
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps> SequenceBarrier
     for SingleConsumerSequenceBarrier<W, RB>
 {
     type T = RB::T;
@@ -1598,7 +1736,7 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> SequenceBarrier
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferDeref> ConsumerSequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone> ConsumerSequenceBarrier
     for SingleConsumerSequenceBarrier<W, RB>
 {
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
@@ -1673,7 +1811,7 @@ struct GenericPublisher<SB: SequenceBarrier> {
 }
 
 impl<SB: SequenceBarrier> GenericPublisher<SB> {
-    /// Generic constructor that works with any UnsafeRingBufferDeref implemention
+    /// Generic constructor that works with any UnsafeRingBufferOps implemention
     fn new_common(sb: SB) -> GenericPublisher<SB> {
         GenericPublisher {
             sequence_barrier: UnsafeCell::new(sb),
@@ -1936,7 +2074,10 @@ struct ResizableRingBufferData<T: Send> {
     next: Option<UncheckedUnsafeArc<ResizableRingBufferData<T>>>,
 }
 
-impl<T: Send> ResizableRingBufferData<T> {
+impl<T> ResizableRingBufferData<T>
+where
+    T: Send + 'static,
+{
     /// Constructs a new ring buffer with the given size.
     fn new(size: usize) -> ResizableRingBufferData<T> {
         ResizableRingBufferData {
@@ -1964,35 +2105,31 @@ impl<T: Send> ResizableRingBufferData<T> {
         self.next.as_mut().unwrap().clone()
     }
 
-    // Functions "inherited" from RingBufferData
-    /// See `RingBufferData::len`
-    fn len(&self) -> usize {
-        self.rb_data.entries.len()
-    }
-    /// See `RingBufferData::set`
-    fn set(&mut self, sequence: SequenceNumber, value: T) {
-        let index = sequence.as_index(self.len());
-        self.rb_data.entries[index].replace(value);
-    }
-    /// See `RingBufferData::get`
-    fn get(&self, sequence: SequenceNumber) -> &T {
-        let index = sequence.as_index(self.len());
-        self.rb_data.entries[index].as_ref().unwrap()
-    }
-    /// See `RingBufferData::take`
-    unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
-        let index = sequence.as_index(self.len());
-        debug_assert!(
-            self.rb_data.entries[index].is_some(),
-            "Take of None at sequence: {}",
-            sequence.value()
-        );
-        self.rb_data.entries[index].take().unwrap()
-    }
-    /// See `RingBufferData::is_set`
     unsafe fn is_set(&self, sequence: SequenceNumber) -> bool {
         let index = sequence.as_index(self.len());
-        self.rb_data.entries[index].is_some()
+        self.rb_data[index].is_some()
+    }
+}
+
+/// Enables the use of a blanket RingBufferOps implementation.
+impl<T> Deref for ResizableRingBufferData<T>
+where
+    T: Send,
+{
+    type Target = [CachePadded<Option<T>>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.rb_data
+    }
+}
+
+/// Enables the use of a blanket RingBufferOps implementation.
+impl<T> DerefMut for ResizableRingBufferData<T>
+where
+    T: Send,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rb_data
     }
 }
 
@@ -2006,7 +2143,29 @@ struct UnsafeResizableRingBufferArc<T: Send> {
     d: UncheckedUnsafeArc<ResizableRingBufferData<T>>,
 }
 
-impl<T: Send> UnsafeResizableRingBufferArc<T> {
+/// Enables the use of a blanket UnsafeRingBufferDeref implementation.
+impl<T> Deref for UnsafeResizableRingBufferArc<T>
+where
+    T: Send,
+{
+    type Target = UncheckedUnsafeArc<ResizableRingBufferData<T>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.d
+    }
+}
+
+/// Enables the use of a blanket UnsafeRingBufferDeref implementation.
+impl<T> DerefMut for UnsafeResizableRingBufferArc<T>
+where
+    T: Send,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.d
+    }
+}
+
+impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
     /// Construct a new ResizableRingBuffer with a capacity for `size` elements. As with
     /// RingBuffer, `size` must be a power of two.
     fn new(size: usize) -> UnsafeResizableRingBufferArc<T> {
@@ -2051,32 +2210,6 @@ impl<T: Send> Clone for UnsafeResizableRingBufferArc<T> {
     /// Copy a reference to the original buffer.
     fn clone(&self) -> UnsafeResizableRingBufferArc<T> {
         UnsafeResizableRingBufferArc { d: self.d.clone() }
-    }
-}
-
-impl<T: Send> UnsafeRingBufferOps for UnsafeResizableRingBufferArc<T> {
-    type T = T;
-
-    fn len(&self) -> usize {
-        unsafe { self.d.get().len() }
-    }
-    unsafe fn set(&mut self, sequence: SequenceNumber, value: T) {
-        unsafe {
-            let rrbd = self.d.get_mut();
-            rrbd.set(sequence, value);
-        }
-    }
-    unsafe fn get(&mut self, sequence: SequenceNumber) -> &T {
-        unsafe {
-            let rrbd = self.d.get_mut();
-            rrbd.get(sequence)
-        }
-    }
-    unsafe fn take(&mut self, sequence: SequenceNumber) -> T {
-        unsafe {
-            let rrbd = self.d.get_mut();
-            rrbd.take(sequence)
-        }
     }
 }
 
@@ -2166,7 +2299,7 @@ struct SingleResizingPublisherSequenceBarrier<T: Send, W> {
     sb: SinglePublisherSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
 }
 
-impl<T: Send, W: ResizingWaitStrategy> SingleResizingPublisherSequenceBarrier<T, W> {
+impl<T: Send + 'static, W: ResizingWaitStrategy> SingleResizingPublisherSequenceBarrier<T, W> {
     fn new(
         ring_buffer: UnsafeResizableRingBufferArc<T>,
         dependencies: Vec<SequenceReader>,
@@ -2178,7 +2311,7 @@ impl<T: Send, W: ResizingWaitStrategy> SingleResizingPublisherSequenceBarrier<T,
     }
 }
 
-impl<T: Send, W: ResizingWaitStrategy> SequenceBarrier
+impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrier
     for SingleResizingPublisherSequenceBarrier<T, W>
 {
     type T = T;
@@ -2284,7 +2417,7 @@ impl<T: Send, W: ResizingWaitStrategy> SequenceBarrier
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> PublisherSequenceBarrier
+impl<T: Send + 'static, W: ProcessingWaitStrategy> PublisherSequenceBarrier
     for SingleResizingPublisherSequenceBarrier<T, W>
 {
     type CSB = SingleResizingConsumerSequenceBarrier<T, W>;
@@ -2302,7 +2435,7 @@ struct SingleResizingConsumerSequenceBarrier<T: Send, W> {
     cb: SingleConsumerSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T, W> {
+impl<T: Send + 'static, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T, W> {
     fn new(
         cb: SingleConsumerSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
     ) -> SingleResizingConsumerSequenceBarrier<T, W> {
@@ -2373,7 +2506,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> SequenceBarrier
+impl<T: Send + 'static, W: ProcessingWaitStrategy> SequenceBarrier
     for SingleResizingConsumerSequenceBarrier<T, W>
 {
     type T = T;
@@ -2436,7 +2569,7 @@ impl<T: Send, W: ProcessingWaitStrategy> SequenceBarrier
     }
 }
 
-impl<T: Send, W: ProcessingWaitStrategy> ConsumerSequenceBarrier
+impl<T: Send + 'static, W: ProcessingWaitStrategy> ConsumerSequenceBarrier
     for SingleResizingConsumerSequenceBarrier<T, W>
 {
     fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T, W> {
@@ -2665,21 +2798,21 @@ impl fmt::Debug for TimeoutResizeWaitStrategy {
     }
 }
 
-pub struct SinglePublisher<T: Send, const N: usize, W: ProcessingWaitStrategy>
+pub struct SinglePublisher<T: Send + 'static, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
     p: GenericPublisher<SinglePublisherSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
-pub struct SingleConsumer<T: Send, const N: usize, W: ProcessingWaitStrategy>
+pub struct SingleConsumer<T: Send + 'static, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
     c: GenericConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
-pub struct SingleFinalConsumer<T: Send, const N: usize, W: ProcessingWaitStrategy>
+pub struct SingleFinalConsumer<T: Send + 'static, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
@@ -2759,22 +2892,22 @@ where
     }
 }
 
-pub struct SingleResizingPublisher<T: Send> {
+pub struct SingleResizingPublisher<T: Send + 'static> {
     p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
 }
 
-pub struct SingleResizingConsumer<T: Send> {
+pub struct SingleResizingConsumer<T: Send + 'static> {
     c: GenericConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
 }
 
-pub struct SingleResizingFinalConsumer<T: Send> {
+pub struct SingleResizingFinalConsumer<T: Send + 'static> {
     c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
 }
 
 /**
  * Specialization for resizable ring buffer.
  */
-impl<T: Send> SingleResizingPublisher<T> {
+impl<T: Send + 'static> SingleResizingPublisher<T> {
     /**
      * Create a new GenericPublisher using a resizable ring buffer, specifying the timeout after
      * which the publisher will allocate a larger buffer to publish items into.
@@ -2816,7 +2949,7 @@ impl<T: Send> SingleResizingPublisher<T> {
     }
 }
 
-impl<T: Send> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalConsumer<T>>
+impl<T: Send + 'static> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalConsumer<T>>
     for SingleResizingPublisher<T>
 {
     fn create_consumer_pipeline(
@@ -2836,7 +2969,7 @@ impl<T: Send> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalCons
     }
 }
 
-impl<T: Send> Publisher<T> for SingleResizingPublisher<T> {
+impl<T: Send + 'static> Publisher<T> for SingleResizingPublisher<T> {
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
     fn publish(&self, value: T) {
@@ -2844,19 +2977,19 @@ impl<T: Send> Publisher<T> for SingleResizingPublisher<T> {
     }
 }
 
-impl<T: Send> Consumer<T> for SingleResizingConsumer<T> {
+impl<T: Send + 'static> Consumer<T> for SingleResizingConsumer<T> {
     fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
         self.c.consume(consume_callback)
     }
 }
 
-impl<T: Send> Consumer<T> for SingleResizingFinalConsumer<T> {
+impl<T: Send + 'static> Consumer<T> for SingleResizingFinalConsumer<T> {
     fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
         self.c.consume(consume_callback)
     }
 }
 
-impl<T: Send> FinalConsumer<T> for SingleResizingFinalConsumer<T> {
+impl<T: Send + 'static> FinalConsumer<T> for SingleResizingFinalConsumer<T> {
     fn take(&self) -> T {
         self.c.take()
     }
