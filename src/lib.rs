@@ -161,10 +161,20 @@ impl<T: Send> UncheckedUnsafeArc<T> {
         UncheckedUnsafeArc { arc, data }
     }
 
+    /// Gets a mutable reference to the underlying value
+    ///
+    /// # Safety notes
+    ///
+    /// It's the caller's responsibility to protect against data races.
     unsafe fn get_mut(&mut self) -> &mut T {
         unsafe { &mut *self.data }
     }
 
+    /// Gets a reference to the underlying value
+    ///
+    /// # Safety notes
+    ///
+    /// It's the caller's responsibility to protect against data races.
     unsafe fn get(&self) -> &T {
         unsafe { &*self.data }
     }
@@ -178,6 +188,10 @@ impl<T: Send> Clone for UncheckedUnsafeArc<T> {
         }
     }
 }
+
+/// This is an implicit commitment that the thread-unsafe methods exposed from
+/// this type are correctly labelled as unsafe, and adequately documented.
+unsafe impl<T: Send> Send for UncheckedUnsafeArc<T> {}
 
 /**
  * A ring buffer that takes `SequenceNumber` values for get and set operations. Buffer lifetime is
@@ -212,11 +226,6 @@ where
             data: UncheckedUnsafeArc::new(data),
         }
     }
-}
-
-unsafe impl<T: Send, const N: usize> Send for UnsafeRingBufferArc<T, N> where
-    usize: PowerOfTwoUsize<N>
-{
 }
 
 impl<T: Send, const N: usize> Clone for UnsafeRingBufferArc<T, N>
@@ -422,8 +431,6 @@ impl SequenceData {
 struct Sequence {
     value_arc: UncheckedUnsafeArc<SequenceData>,
 }
-
-unsafe impl Send for Sequence {}
 
 impl Default for Sequence {
     /// Calls Self::new()
@@ -1052,8 +1059,6 @@ struct BlockingWaitStrategyData {
     wait_mutex: Mutex<bool>,
     wait_condvar: Condvar,
 }
-
-unsafe impl Send for BlockingWaitStrategy {}
 
 impl Default for BlockingWaitStrategy {
     /// Calls Self::new()
@@ -1977,9 +1982,6 @@ impl<T: Send> ResizableRingBufferData<T> {
 struct UnsafeResizableRingBufferArc<T: Send> {
     d: UncheckedUnsafeArc<ResizableRingBufferData<T>>,
 }
-
-unsafe impl<T: Send> Send for ResizableRingBufferData<T> {}
-unsafe impl<T: Send> Send for UnsafeResizableRingBufferArc<T> {}
 
 impl<T: Send> UnsafeResizableRingBufferArc<T> {
     /// Construct a new ResizableRingBuffer with a capacity for `size` elements. As with
