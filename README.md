@@ -55,20 +55,3 @@ errors, test results, and performance.
 To be compatible with Rust, this library is dual-licensed under the terms of the
 MIT and Apache 2 licenses.
 
-## Roadmap
-
-This is a list of things that may be implemented in the near future:
-
-* Tests for unicast pipelines with more than one consumer
-* Porting benchmarks to Rust's built-in benchmark framework
-* Modularized source tree
-* Batch publishing APIs (it's supported in the core code, but not in the public
-API yet)
-* Consumers that process events from the same stage of the pipeline in parallel
-(in other words, each event is shared by all consumers)
-* Unsafe API to allow parallel consumers to mutate the data they're processing
-(it becomes the caller's responsibility to avoid data races)
-* If possible, a safe API to allow parallel consumers mutable access to
-separate parts of the data, using reflection to verify safety at runtime before
-running the pipeline
-* More unit tests in general
