@@ -52,6 +52,5 @@ errors, test results, and performance.
 
 ## License
 
-To be compatible with Rust, this library is dual-licensed under the terms of the
-MIT and Apache 2 licenses.
-
+For compatibility with the Rust ecosystem, this library is dual-licensed under
+the terms of the MIT and Apache 2 licenses.
