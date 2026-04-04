@@ -35,12 +35,6 @@ sense.
 
 ## Building
 
-The build system requires the following items in the path:
-
-* cargo
-* rustc
-* Optional: inotifywait (for auto-rebuild.sh)
-
 You can build, run tests, and run benchmarks using `cargo build`, `cargo test`,
 and `cargo bench`, respectively.
 
@@ -48,7 +42,7 @@ and `cargo bench`, respectively.
 
 The auto-rebuild.sh script rebuilds whenever any source files change. Leave it
 open in a terminal as you hack on the code for convenient feedback about compile
-errors, test results, and performance.
+errors, test results, and performance. Requires the `inotifywait` command.
 
 ## License
 
