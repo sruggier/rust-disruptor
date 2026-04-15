@@ -235,24 +235,23 @@ where
     }
 }
 
-// Everything above has been safe. Now define unsafe wrappers that allow
-// mutable references to be shared across multiple owners, to implement a safe
-// abstraction above.
+// Everything above has been safe. Now define unsafe wrappers that allow mutable references to be
+// shared across multiple owners, potentially in different threads. These unsafe types will be used
+// to build a safe abstraction.
 
-/// UnsafeArc, but with unchecked versions of the get and get_immut functions. The use of atomic
-/// operations in those functions is a significant slowdown.
+/// An unsafe reference-counted pointer that can be shared amongst multiple threads.
 ///
-/// FIXME: remove this if/when UnsafeArc exposes similar functions.
+/// # Safety notes
+///
+/// It's the user's responsibility to synchronize access to the inner value.
 struct UncheckedUnsafeArc<T: Send> {
     arc: Arc<UnsafeCell<T>>,
-    data: *mut T,
 }
 
 impl<T: Send> UncheckedUnsafeArc<T> {
     fn new(data: T) -> UncheckedUnsafeArc<T> {
         let arc = Arc::new(UnsafeCell::new(data));
-        let data = arc.get();
-        UncheckedUnsafeArc { arc, data }
+        UncheckedUnsafeArc { arc }
     }
 
     /// Gets a mutable reference to the underlying value
@@ -261,7 +260,7 @@ impl<T: Send> UncheckedUnsafeArc<T> {
     ///
     /// It's the caller's responsibility to protect against data races.
     unsafe fn get_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.data }
+        unsafe { &mut *self.arc.get() }
     }
 
     /// Gets a reference to the underlying value
@@ -270,7 +269,7 @@ impl<T: Send> UncheckedUnsafeArc<T> {
     ///
     /// It's the caller's responsibility to protect against data races.
     unsafe fn get(&self) -> &T {
-        unsafe { &*self.data }
+        unsafe { &*self.arc.get() }
     }
 }
 
@@ -278,7 +277,6 @@ impl<T: Send> Clone for UncheckedUnsafeArc<T> {
     fn clone(&self) -> UncheckedUnsafeArc<T> {
         UncheckedUnsafeArc {
             arc: self.arc.clone(),
-            data: self.data,
         }
     }
 }
