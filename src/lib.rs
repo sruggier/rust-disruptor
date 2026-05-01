@@ -566,7 +566,8 @@ fn test_calculate_available_publisher() {
 struct SequenceData {
     /// The published value of the sequence, visible to waiting consumers.
     value: CachePadded<AtomicUsize>,
-    /// We can avoid atomic operations by using this cached value whenever possible.
+    /// A cached copy of the sequence for use by the owner, to minimize atomic operations and
+    /// contention.
     private_value: usize,
 }
 
