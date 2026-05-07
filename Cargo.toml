@@ -45,6 +45,7 @@ quanta = "0.12.6"
 
 [lints.clippy]
 let_and_return = "allow"
+missing_safety_doc = "deny"
 
 [dev-dependencies]
 criterion = "0.8.2"
