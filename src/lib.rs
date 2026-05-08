@@ -578,23 +578,24 @@ impl SequenceData {
     }
 }
 
-/// Mutable reference to an atomic usize. Returns values as SequenceNumber to disambiguate from
-/// indices and other usize values. Memory is managed via reference counting.
-struct Sequence {
+/// A reference to an atomic usize that allows the owner to mutate it, and can generate read-only
+/// references using [`clone_immut`](SequenceOwner::clone_immut). Returns values as SequenceNumber
+/// to disambiguate from indices and other usize values. Memory is managed via reference counting.
+struct SequenceOwner {
     value_arc: UncheckedUnsafeArc<SequenceData>,
 }
 
-impl Default for Sequence {
+impl Default for SequenceOwner {
     /// Calls Self::new()
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Sequence {
+impl SequenceOwner {
     /// Allocates a new sequence.
-    fn new() -> Sequence {
-        Sequence {
+    fn new() -> SequenceOwner {
+        SequenceOwner {
             value_arc: UncheckedUnsafeArc::new(SequenceData::new(SEQUENCE_INITIAL)),
         }
     }
@@ -614,7 +615,7 @@ impl Sequence {
     /// Return an immutable reference to the same underlying sequence number.
     fn clone_immut(&self) -> SequenceReader {
         SequenceReader {
-            sequence: Sequence {
+            sequence: SequenceOwner {
                 value_arc: self.value_arc.clone(),
             },
         }
@@ -665,7 +666,7 @@ impl Sequence {
         unsafe {
             let d = self.value_arc.get_mut();
             let SequenceNumber(unwrapped) =
-                Sequence::unwrap_number(SequenceNumber(d.private_value), buffer_size);
+                SequenceOwner::unwrap_number(SequenceNumber(d.private_value), buffer_size);
             d.private_value = unwrapped;
         }
     }
@@ -708,7 +709,7 @@ fn test_sequence_overflow() {
     let exp = log2(wrap_boundary(1));
     let max_buffer_size = 1 << (std::mem::size_of::<usize>() * 8 - exp);
 
-    let mut s = Sequence::new();
+    let mut s = SequenceOwner::new();
     assert_eq!(s.get().value(), SEQUENCE_INITIAL);
 
     // Add 1
@@ -728,7 +729,7 @@ fn test_sequence_overflow() {
 /// Immutable reference to a sequence. Can be safely given to other tasks. Reads with acquire
 /// semantics.
 pub struct SequenceReader {
-    sequence: Sequence,
+    sequence: SequenceOwner,
 }
 
 impl SequenceReader {
@@ -749,7 +750,7 @@ fn test_sequencereader() {
     // larger than the tested sequence numbers
     let buffer_size = 8192;
 
-    let mut sequence = Sequence::new();
+    let mut sequence = SequenceOwner::new();
     let reader = sequence.clone_immut();
     assert!(0 == reader.get().value());
     sequence.advance_and_flush(1, buffer_size);
@@ -1451,7 +1452,7 @@ trait ConsumerSequenceBarrier {
 /// publisher.
 struct SinglePublisherSequenceBarrier<W, RB> {
     ring_buffer: RB,
-    sequence: Sequence,
+    sequence: SequenceOwner,
     dependencies: Vec<SequenceReader>,
     wait_strategy: W,
     /// Contains the number of available items as of the last time the dependent sequence values were
@@ -1467,7 +1468,7 @@ impl<W: PublishingWaitStrategy, RB: UnsafeRingBufferOps> SinglePublisherSequence
     ) -> SinglePublisherSequenceBarrier<W, RB> {
         SinglePublisherSequenceBarrier {
             ring_buffer,
-            sequence: Sequence::new(),
+            sequence: SequenceOwner::new(),
             dependencies,
             wait_strategy,
             cached_available: 0,
@@ -2087,7 +2088,7 @@ impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
                 debug!(
                     "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
                     sequence,
-                    Sequence::unwrap_number(sequence, self.len())
+                    SequenceOwner::unwrap_number(sequence, self.len())
                 );
                 self.d = self.d.get_mut().next.as_mut().unwrap().clone();
                 return true;
