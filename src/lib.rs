@@ -1522,7 +1522,9 @@ trait SequenceBarrier: Send {
      * Mutable to facilitate transparent transitions to larger buffers.
      */
     unsafe fn get(&mut self) -> &Self::T;
+}
 
+trait SequenceBarrierTake: SequenceBarrier {
     /**
      * Takes the value stored in the sequnce barrier's current slot, moving it out of the ring
      * buffer. Unsafe: allows data races.
@@ -1580,7 +1582,7 @@ impl<W: PublishingWaitStrategy, RB: UnsafeRingBufferOps> SinglePublisherSequence
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps> SequenceBarrier
     for SinglePublisherSequenceBarrier<W, RB>
 {
     type T = RB::T;
@@ -1639,7 +1641,11 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrier
             self.ring_buffer.get(current_sequence)
         }
     }
+}
 
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrierTake
+    for SinglePublisherSequenceBarrier<W, RB>
+{
     unsafe fn take(&mut self) -> RB::T {
         unsafe {
             let current_sequence = self.get_current();
@@ -1648,7 +1654,7 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrier
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake + Clone> PublisherSequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone> PublisherSequenceBarrier
     for SinglePublisherSequenceBarrier<W, RB>
 {
     type CSB = SingleConsumerSequenceBarrier<W, RB>;
@@ -1696,7 +1702,7 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone>
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps> SequenceBarrier
     for SingleConsumerSequenceBarrier<W, RB>
 {
     type T = RB::T;
@@ -1755,6 +1761,11 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrier
     unsafe fn get(&mut self) -> &Self::T {
         unsafe { self.sb.get() }
     }
+}
+
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrierTake
+    for SingleConsumerSequenceBarrier<W, RB>
+{
     unsafe fn take(&mut self) -> Self::T {
         unsafe { self.sb.take() }
     }
@@ -1987,7 +1998,9 @@ impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
     fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) {
         self.sc.consume(consume_callback)
     }
+}
 
+impl<SB: SequenceBarrierTake> GenericFinalConsumer<SB> {
     fn take(&self) -> SB::T {
         unsafe {
             let sequence_barrier = &mut *self.sc.sequence_barrier.get();
@@ -2371,9 +2384,6 @@ impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrier
     unsafe fn get(&mut self) -> &T {
         unsafe { self.sb.get() }
     }
-    unsafe fn take(&mut self) -> T {
-        unsafe { self.sb.take() }
-    }
 
     /**
      * Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
@@ -2438,6 +2448,14 @@ impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrier
         }
 
         available
+    }
+}
+
+impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrierTake
+    for SingleResizingPublisherSequenceBarrier<T, W>
+{
+    unsafe fn take(&mut self) -> T {
+        unsafe { self.sb.take() }
     }
 }
 
@@ -2585,6 +2603,11 @@ impl<T: Send + 'static, W: ProcessingWaitStrategy> SequenceBarrier
             self.cb.get()
         }
     }
+}
+
+impl<T: Send + 'static, W: ProcessingWaitStrategy> SequenceBarrierTake
+    for SingleResizingConsumerSequenceBarrier<T, W>
+{
     unsafe fn take(&mut self) -> T {
         unsafe {
             self.try_switch_next();
