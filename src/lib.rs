@@ -35,16 +35,17 @@ struct RingBufferData<T, const N: usize>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    entries: [CachePadded<Option<T>>; N],
+    entries: [CachePadded<T>; N],
 }
 
 impl<T, const N: usize> Default for RingBufferData<T, N>
 where
+    T: Default,
     usize: PowerOfTwoUsize<N>,
 {
     fn default() -> Self {
         RingBufferData {
-            entries: from_fn(|_| CachePadded::new(None)),
+            entries: from_fn(|_| CachePadded::new(T::default())),
         }
     }
 }
@@ -53,14 +54,14 @@ where
 
 /// A dynamically-sized buffer, with nullable entries and cache line padding
 struct BoxedRingBufferData<T> {
-    entries: Vec<CachePadded<Option<T>>>,
+    entries: Vec<CachePadded<T>>,
 }
 
-impl<T> BoxedRingBufferData<T> {
+impl<T: Default> BoxedRingBufferData<T> {
     /// Given a size, initialize a new instance
     fn new(size: usize) -> BoxedRingBufferData<T> {
         BoxedRingBufferData {
-            entries: (0..size).map(|_| CachePadded::new(None)).collect(),
+            entries: (0..size).map(|_| CachePadded::new(T::default())).collect(),
         }
     }
 }
@@ -133,7 +134,7 @@ impl<T, const N: usize> Deref for RingBufferData<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    type Target = [CachePadded<Option<T>>];
+    type Target = [CachePadded<T>];
 
     fn deref(&self) -> &Self::Target {
         &self.entries
@@ -152,7 +153,7 @@ where
 
 /// Enables the use of a blanket RingBufferOps implementation.
 impl<T> Deref for BoxedRingBufferData<T> {
-    type Target = Vec<CachePadded<Option<T>>>;
+    type Target = Vec<CachePadded<T>>;
 
     fn deref(&self) -> &Self::Target {
         &self.entries
@@ -212,13 +213,13 @@ trait RingBufferOpsTake: RingBufferOps {
 impl<I, S: Send, T> RingBufferOps for S
 where
     S: DerefMut<Target = [I]>,
-    I: DerefMut<Target = Option<T>> + 'static,
+    I: DerefMut<Target = T> + 'static,
 {
     type T = T;
 
     fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
         let index = sequence.as_index(RingBufferOps::len(self));
-        (*self)[index].replace(value);
+        *((*self)[index]) = value;
     }
 
     fn len(&self) -> usize {
@@ -227,23 +228,19 @@ where
 
     fn get(&self, sequence: SequenceNumber) -> &Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
-        (*self)[index].as_ref().unwrap()
+        &(*self)[index]
     }
 }
 
 impl<I, S, T> RingBufferOpsTake for S
 where
     S: DerefMut<Target = [I]> + RingBufferOps<T = T>,
-    I: DerefMut<Target = Option<T>> + 'static,
+    I: DerefMut<Target = T> + 'static,
+    T: Default,
 {
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(RingBufferOps::len(self));
-        debug_assert!(
-            (*self)[index].is_some(),
-            "Take of None at sequence: {}",
-            sequence.value()
-        );
-        (*self)[index].take().unwrap()
+        std::mem::take(&mut *(*self)[index])
     }
 }
 
@@ -315,7 +312,7 @@ where
 
 impl<T, const N: usize> UnsafeRingBufferArc<T, N>
 where
-    T: Send + 'static,
+    T: Send + Default + 'static,
     usize: PowerOfTwoUsize<N>,
 {
     /// Constructs a new RingBuffer with a capacity of `N` elements. The const
@@ -1798,7 +1795,7 @@ pub trait Publisher<T: Send>: Send {
 /**
  * Functions used during the initial setup of the pipeline.
  */
-pub trait PipelineInit<T: Send, C: Consumer<T>, FC: FinalConsumer<T>> {
+pub trait PipelineInit<T: Send + Default, C: Consumer<T>, FC: FinalConsumer<T>> {
     /**
      * Creates and returns a single consumer, which will receive items sent through the publisher.
      * This should only be called once, during setup of the pipeline.
@@ -2096,7 +2093,7 @@ impl<SB: SequenceBarrierTake> GenericFinalConsumer<SB> {
  * point, and the wrap boundary was changed to `4*buffer_size` to facilitate the third point.
  */
 struct ResizableRingBufferData<T: Send> {
-    rb_data: BoxedRingBufferData<T>,
+    rb_data: BoxedRingBufferData<Option<T>>,
     /**
      * When non-null, points to a larger buffer allocated by the publisher to replace this one.
      *
@@ -2148,25 +2145,39 @@ where
     }
 }
 
-/// Enables the use of a blanket RingBufferOps implementation.
-impl<T> Deref for ResizableRingBufferData<T>
-where
-    T: Send,
-{
-    type Target = [CachePadded<Option<T>>];
+// Explicitly implement this, to adapt the type of the buffer
+impl<T: Send> RingBufferOps for ResizableRingBufferData<T> {
+    type T = T;
 
-    fn deref(&self) -> &Self::Target {
-        &self.rb_data
+    fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
+        let index = sequence.as_index(RingBufferOps::len(self));
+        *(self.rb_data[index]) = Some(value);
+    }
+
+    fn len(&self) -> usize {
+        self.rb_data.len()
+    }
+
+    /**
+     * # Panics
+     *
+     * Will panic if the slot referenced by sequence is currently None.
+     */
+    fn get(&self, sequence: SequenceNumber) -> &Self::T {
+        let index = sequence.as_index(RingBufferOps::len(self));
+        self.rb_data[index].as_ref().unwrap()
     }
 }
 
-/// Enables the use of a blanket RingBufferOps implementation.
-impl<T> DerefMut for ResizableRingBufferData<T>
-where
-    T: Send,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.rb_data
+impl<T: Send> RingBufferOpsTake for ResizableRingBufferData<T> {
+    fn take(&mut self, sequence: SequenceNumber) -> T {
+        let index = sequence.as_index(RingBufferOps::len(self));
+        debug_assert!(
+            self.rb_data[index].is_some(),
+            "Take of None at sequence: {}",
+            sequence.value()
+        );
+        self.rb_data[index].take().unwrap()
     }
 }
 
@@ -2866,8 +2877,9 @@ where
     c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
-impl<T: Send, const N: usize, W: ProcessingWaitStrategy> SinglePublisher<T, N, W>
+impl<T, const N: usize, W: ProcessingWaitStrategy> SinglePublisher<T, N, W>
 where
+    T: Send + Default,
     usize: PowerOfTwoUsize<N>,
 {
     /**
@@ -2882,10 +2894,11 @@ where
     }
 }
 
-impl<T: Send, const N: usize, W: ProcessingWaitStrategy>
+impl<T, const N: usize, W: ProcessingWaitStrategy>
     PipelineInit<T, SingleConsumer<T, N, W>, SingleFinalConsumer<T, N, W>>
     for SinglePublisher<T, N, W>
 where
+    T: Send + Default,
     usize: PowerOfTwoUsize<N>,
 {
     fn create_consumer_pipeline(
@@ -2929,9 +2942,9 @@ where
     }
 }
 
-impl<T: Send, const N: usize, W: ProcessingWaitStrategy> FinalConsumer<T>
-    for SingleFinalConsumer<T, N, W>
+impl<T, const N: usize, W: ProcessingWaitStrategy> FinalConsumer<T> for SingleFinalConsumer<T, N, W>
 where
+    T: Send + Default,
     usize: PowerOfTwoUsize<N>,
 {
     fn take(&self) -> T {
@@ -2996,8 +3009,10 @@ impl<T: Send + 'static> SingleResizingPublisher<T> {
     }
 }
 
-impl<T: Send + 'static> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalConsumer<T>>
+impl<T> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalConsumer<T>>
     for SingleResizingPublisher<T>
+where
+    T: Send + 'static + Default,
 {
     fn create_consumer_pipeline(
         &mut self,
