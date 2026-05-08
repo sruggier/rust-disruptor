@@ -447,16 +447,13 @@ trait UnsafeRingBufferOps: Send {
      * Mutable to facilitate transparent transitions to larger buffers.
      */
     unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T;
-
-    /// See `RingBufferOpsTake::take`. Unsafe: allows data races.
-    unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
 }
 
 /// Blanket impl for types that implement UnsafeRingBufferDeref.
 impl<T, SRB, URB> UnsafeRingBufferOps for URB
 where
     T: Send,
-    SRB: RingBufferOpsTake<T = T> + 'static,
+    SRB: RingBufferOps<T = T> + 'static,
     URB: UnsafeRingBufferDeref<RB = SRB, T = T>,
 {
     type T = T;
@@ -472,6 +469,22 @@ where
     unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T {
         unsafe { UnsafeRingBufferDeref::get(self).get(sequence) }
     }
+}
+
+/// Extends UnsafeRingBufferOps with a take function
+trait UnsafeRingBufferOpsTake: UnsafeRingBufferOps {
+    /// See `RingBufferOpsTake::take`. Unsafe: allows data races.
+    unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
+}
+
+/// Blanket impl for UnsafeRingBufferDeref types, where the underlying RingBuffer implements
+/// RingBufferOpsTake.
+impl<T, SRB, URB> UnsafeRingBufferOpsTake for URB
+where
+    T: Send,
+    SRB: RingBufferOpsTake<T = T> + 'static,
+    URB: UnsafeRingBufferDeref<RB = SRB, T = T>,
+{
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T {
         unsafe { self.get_mut().take(sequence) }
     }
@@ -1567,7 +1580,7 @@ impl<W: PublishingWaitStrategy, RB: UnsafeRingBufferOps> SinglePublisherSequence
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps> SequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrier
     for SinglePublisherSequenceBarrier<W, RB>
 {
     type T = RB::T;
@@ -1635,7 +1648,7 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps> SequenceBarrier
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone> PublisherSequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake + Clone> PublisherSequenceBarrier
     for SinglePublisherSequenceBarrier<W, RB>
 {
     type CSB = SingleConsumerSequenceBarrier<W, RB>;
@@ -1683,7 +1696,7 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone>
     }
 }
 
-impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps> SequenceBarrier
+impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOpsTake> SequenceBarrier
     for SingleConsumerSequenceBarrier<W, RB>
 {
     type T = RB::T;
