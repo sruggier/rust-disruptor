@@ -27,11 +27,9 @@ use disruptor::{
 };
 use quanta::Instant;
 
-/**
- * Calculates the nth triangle number by summing the numbers from 1 to n in a
- * loop. Note that the compiler appears to evaluate this at compile time at opt
- * levels 2 and above.
- */
+/// Calculates the nth triangle number by summing the numbers from 1 to n in a
+/// loop. Note that the compiler appears to evaluate this at compile time at opt
+/// levels 2 and above.
 fn triangle_number(n: u64) -> u64 {
     let mut sum: u64 = 0;
     for num in 1..n + 1 {
@@ -40,12 +38,10 @@ fn triangle_number(n: u64) -> u64 {
     sum
 }
 
-/**
-* A slower version of triangle_number, where black_box has been used to deoptimize the loop.
-*
-* This ensures the CPU is executing every iteration of the loop, producing a more reasonable
-* comparison for microbenchmarking purposes.
-*/
+/// A slower version of triangle_number, where black_box has been used to deoptimize the loop.
+///
+/// This ensures the CPU is executing every iteration of the loop, producing a more reasonable
+/// comparison for microbenchmarking purposes.
 fn triangle_number_slow(n: u64) -> u64 {
     let mut sum: u64 = 0;
     for num in 1..n + 1 {
@@ -55,10 +51,8 @@ fn triangle_number_slow(n: u64) -> u64 {
     sum
 }
 
-/**
- * Single threaded version of the benchmark. Returns the calculated value, for
- * use in other tests.
- */
+/// Single threaded version of the benchmark. Returns the calculated value, for
+/// use in other tests.
 fn bench_serial(g: &mut BenchmarkGroup<WallTime>) {
     g.bench_function("serial loop", |b| {
         b.iter_custom(|iterations| {

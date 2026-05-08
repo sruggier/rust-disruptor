@@ -69,14 +69,12 @@ impl<T: Default> BoxedRingBufferData<T> {
 // Now define a distinct type, to index into the ring buffer, that assumes
 // power-of-two sizes and automatically wraps.
 
-/**
- * Values of this object are used as indices into the ring buffer (modulo the buffer size). The
- * current value represents the latest slot that a publisher or consumer is still processing. In
- * other words, a value of 0 means that no slots have been published or consumed, and that 0 is the
- * current slot being processed. A value of 1 means that slot 0 has been released for processing by
- * downstream consumers, while a value of 18 would mean that slots 0-17 are available for
- * processing.
- */
+/// Values of this object are used as indices into the ring buffer (modulo the buffer size). The
+/// current value represents the latest slot that a publisher or consumer is still processing. In
+/// other words, a value of 0 means that no slots have been published or consumed, and that 0 is the
+/// current slot being processed. A value of 1 means that slot 0 has been released for processing by
+/// downstream consumers, while a value of 18 would mean that slots 0-17 are available for
+/// processing.
 #[derive(Debug, Clone, Copy)]
 pub struct SequenceNumber(usize);
 
@@ -90,16 +88,12 @@ fn assert_power_of_two(buffer_size: usize) {
     );
 }
 
-/**
- * Represents an initial state where no slots have been published or consumed.
- */
+/// Represents an initial state where no slots have been published or consumed.
 const SEQUENCE_INITIAL: usize = 0;
 
 impl SequenceNumber {
-    /**
-     * Returns self modulo `buffer_size`, exploiting the assumption that the size will always be a
-     * power of two by using a masking operation instead of the modulo operator.
-     */
+    /// Returns self modulo `buffer_size`, exploiting the assumption that the size will always be a
+    /// power of two by using a masking operation instead of the modulo operator.
     fn as_index(self, buffer_size: usize) -> usize {
         assert_power_of_two(buffer_size);
         let index_mask = buffer_size - 1;
@@ -107,19 +101,15 @@ impl SequenceNumber {
         value & index_mask
     }
 
-    /**
-     * Return the SequenceNumber's usize value. For when a destructuring let isn't concise enough.
-     */
+    /// Return the SequenceNumber's usize value. For when a destructuring let isn't concise enough.
     fn value(self) -> usize {
         let SequenceNumber(value) = self;
         value
     }
 }
 
-/**
- * Returns the number at which sequence values will be wrapped back to 0 using a mod operation.
- * The returned number will be a power of two, and a multiple of buffer_size.
- */
+/// Returns the number at which sequence values will be wrapped back to 0 using a mod operation.
+/// The returned number will be a power of two, and a multiple of buffer_size.
 fn wrap_boundary(buffer_size: usize) -> usize {
     assert_power_of_two(buffer_size);
     buffer_size.wrapping_mul(4)
@@ -190,10 +180,8 @@ trait RingBufferOps: Send {
     fn get(&self, sequence: SequenceNumber) -> &Self::T;
 }
 
-/**
-* Extends [`RingBufferOps`] with a take function, which depends on being able to replace T with a
-* default or unset value.
-*/
+/// Extends [`RingBufferOps`] with a take function, which depends on being able to replace T with a
+/// default or unset value.
 trait RingBufferOpsTake: RingBufferOps {
     /// Take the value pointed to by `sequence`, moving it out of the RingBuffer.
     ///
@@ -294,14 +282,12 @@ impl<T: Send> Clone for UncheckedUnsafeArc<T> {
 /// this type are correctly labelled as unsafe, and adequately documented.
 unsafe impl<T: Send> Send for UncheckedUnsafeArc<T> {}
 
-/**
- * A ring buffer that takes `SequenceNumber` values for get and set operations. Buffer lifetime is
- * managed using reference counting.
- *
- * # Safety notes
- *
- * It is the caller's responsibility to avoid data races when reading and writing elements.
- */
+/// A ring buffer that takes `SequenceNumber` values for get and set operations. Buffer lifetime is
+/// managed using reference counting.
+///
+/// # Safety notes
+///
+/// It is the caller's responsibility to avoid data races when reading and writing elements.
 struct UnsafeRingBufferArc<T, const N: usize>
 where
     T: Send,
@@ -429,20 +415,16 @@ trait UnsafeRingBufferOps: Send {
     /// See `RingBufferOps::len`
     fn len(&self) -> usize;
 
-    /**
-     * See `RingBufferOps::set`
-     *
-     * # Safety notes
-     *
-     * It's the caller's responsibility to avoid data races, so this function is unsafe.
-     */
+    /// See `RingBufferOps::set`
+    ///
+    /// # Safety notes
+    ///
+    /// It's the caller's responsibility to avoid data races, so this function is unsafe.
     unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T);
 
-    /**
-     * See `RingBufferOps::get`. Unsafe: allows data races.
-     *
-     * Mutable to facilitate transparent transitions to larger buffers.
-     */
+    /// See `RingBufferOps::get`. Unsafe: allows data races.
+    ///
+    /// Mutable to facilitate transparent transitions to larger buffers.
     unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T;
 }
 
@@ -496,13 +478,11 @@ fn ring_buffer_size_must_be_power_of_two_8() {
     UnsafeRingBufferArc::<(), 8>::new();
 }
 
-/**
- * Returns how many slots are open between the publisher's sequence and the consumer's sequence,
- * taking into account the effects of wrapping. In this case, the waiting task is a consumer, and
- * the gating task is either a consumer or a publisher. If the gating sequence (in other words, the
- * publisher or upstream consumer) has the same value as the waiting sequence (the consumer), then
- * no slots are available for consumption.
- */
+/// Returns how many slots are open between the publisher's sequence and the consumer's sequence,
+/// taking into account the effects of wrapping. In this case, the waiting task is a consumer, and
+/// the gating task is either a consumer or a publisher. If the gating sequence (in other words, the
+/// publisher or upstream consumer) has the same value as the waiting sequence (the consumer), then
+/// no slots are available for consumption.
 fn calculate_available_consumer(
     gating_sequence: SequenceNumber,
     waiting_sequence: SequenceNumber,
@@ -541,10 +521,8 @@ fn test_calculate_available_consumer() {
     assert!(7 == calculate_available_consumer(SequenceNumber(0), SequenceNumber(25), 8));
 }
 
-/**
- * Returns how many slots are open between the publisher's sequence and the consumer's sequence,
- * taking into account the effects of wrapping.
- */
+/// Returns how many slots are open between the publisher's sequence and the consumer's sequence,
+/// taking into account the effects of wrapping.
 fn calculate_available_publisher(
     gating_sequence: SequenceNumber,
     waiting_sequence: SequenceNumber,
@@ -582,9 +560,7 @@ fn test_calculate_available_publisher() {
     assert!(2 == calculate_available_publisher(SequenceNumber(3), SequenceNumber(3), 2));
 }
 
-/**
- * The underlying data referenced by Sequence.
- */
+/// The underlying data referenced by Sequence.
 struct SequenceData {
     /// The published value of the sequence, visible to waiting consumers.
     value: CachePadded<AtomicUsize>,
@@ -602,10 +578,8 @@ impl SequenceData {
     }
 }
 
-/**
- * Mutable reference to an atomic usize. Returns values as SequenceNumber to disambiguate from
- * indices and other usize values. Memory is managed via reference counting.
- */
+/// Mutable reference to an atomic usize. Returns values as SequenceNumber to disambiguate from
+/// indices and other usize values. Memory is managed via reference counting.
 struct Sequence {
     value_arc: UncheckedUnsafeArc<SequenceData>,
 }
@@ -630,18 +604,14 @@ impl Sequence {
         unsafe { SequenceNumber(self.value_arc.get().value.load(Acquire)) }
     }
 
-    /**
-     * Gets the internally cached value of the Sequence. This should only be called from the task
-     * that owns the sequence number (in other words, the only task that writes to the sequence
-     * number)
-     */
+    /// Gets the internally cached value of the Sequence. This should only be called from the task
+    /// that owns the sequence number (in other words, the only task that writes to the sequence
+    /// number)
     fn get_owned(&self) -> SequenceNumber {
         unsafe { SequenceNumber(self.value_arc.get().private_value) }
     }
 
-    /**
-     * Return an immutable reference to the same underlying sequence number.
-     */
+    /// Return an immutable reference to the same underlying sequence number.
     fn clone_immut(&self) -> SequenceReader {
         SequenceReader {
             sequence: Sequence {
@@ -650,18 +620,16 @@ impl Sequence {
         }
     }
 
-    /**
-     * Add n to the cached, private version of the sequence, without making the new value visible to
-     * other threads.
-     *
-     * To avoid overflow when usize is 32 bits wide, this function also wraps the sequence number
-     * around when it reaches wrap_boundary(buffer_size). This results in two easily distinguishable
-     * states for the availability calculations to handle. Consumer sequences are normally behind
-     * gating sequences, whether they are owned by other consumers or the publisher. However, the
-     * gating sequence will wrap first, and remain behind until consumers reach the wrapping
-     * boundary, at which point they will also wrap. The publisher is normally ahead of the sequence
-     * it depends on, but after wrapping, it will be temporarily behind the gating sequence.
-     */
+    /// Add n to the cached, private version of the sequence, without making the new value visible to
+    /// other threads.
+    ///
+    /// To avoid overflow when usize is 32 bits wide, this function also wraps the sequence number
+    /// around when it reaches wrap_boundary(buffer_size). This results in two easily distinguishable
+    /// states for the availability calculations to handle. Consumer sequences are normally behind
+    /// gating sequences, whether they are owned by other consumers or the publisher. However, the
+    /// gating sequence will wrap first, and remain behind until consumers reach the wrapping
+    /// boundary, at which point they will also wrap. The publisher is normally ahead of the sequence
+    /// it depends on, but after wrapping, it will be temporarily behind the gating sequence.
     fn advance(&mut self, n: usize, buffer_size: usize) {
         // NOTE: Mutating the private value here, and in the unwrap function, is safe because this
         // type's API doesn't allow it to be cloned and accessed from multiple places concurrently.
@@ -676,11 +644,9 @@ impl Sequence {
         }
     }
 
-    /**
-     *  Publishes the private sequence value to other threads, along with any other writes (for
-     *  example, to the corresponding item in the ring buffer) that have taken place before the
-     *  call.
-     */
+    ///  Publishes the private sequence value to other threads, along with any other writes (for
+    ///  example, to the corresponding item in the ring buffer) that have taken place before the
+    ///  call.
     fn flush(&mut self) {
         unsafe {
             let d = self.value_arc.get_mut();
@@ -688,17 +654,13 @@ impl Sequence {
         }
     }
 
-    /**
-     * Advance, then immediately make the change visible to other threads.
-     */
+    /// Advance, then immediately make the change visible to other threads.
     fn advance_and_flush(&mut self, n: usize, buffer_size: usize) {
         self.advance(n, buffer_size);
         self.flush();
     }
 
-    /**
-     * Reverses the effects of wrapping that occur in the advance function.
-     */
+    /// Reverses the effects of wrapping that occur in the advance function.
     fn unwrap(&mut self, buffer_size: usize) {
         unsafe {
             let d = self.value_arc.get_mut();
@@ -708,9 +670,7 @@ impl Sequence {
         }
     }
 
-    /**
-     * Like unwrap, but for standalone SequenceNumber values.
-     */
+    /// Like unwrap, but for standalone SequenceNumber values.
     fn unwrap_number(sn: SequenceNumber, buffer_size: usize) -> SequenceNumber {
         let SequenceNumber(value) = sn;
         assert!(value < wrap_boundary(buffer_size));
@@ -765,19 +725,15 @@ fn test_sequence_overflow() {
     assert_eq!(s.get().value(), 1);
 }
 
-/**
- * Immutable reference to a sequence. Can be safely given to other tasks. Reads with acquire
- * semantics.
- */
+/// Immutable reference to a sequence. Can be safely given to other tasks. Reads with acquire
+/// semantics.
 pub struct SequenceReader {
     sequence: Sequence,
 }
 
 impl SequenceReader {
-    /**
-     * Gets the value of the sequence, using acquire semantics. For use by publishers/consumers to
-     * confirm that slots have been released by the task(s) ahead of them in the pipeline.
-     */
+    /// Gets the value of the sequence, using acquire semantics. For use by publishers/consumers to
+    /// confirm that slots have been released by the task(s) ahead of them in the pipeline.
     pub fn get(&self) -> SequenceNumber {
         self.sequence.get()
     }
@@ -804,24 +760,22 @@ fn test_sequencereader() {
 
 /// Helps consumers wait on upstream dependencies.
 pub trait ProcessingWaitStrategy: PublishingWaitStrategy {
-    /**
-     * Wait for `cursor` to release the next `n` slots, then return the actual number of available
-     * slots, which may be greater than `n`.
-     *
-     * For strategies that block, only the publisher will attempt to wake the task. Therefore, the
-     * publisher's `cursor` is needed so that once the publisher has advanced sufficiently, the task
-     * will stop blocking and busy-wait on its immediate dependencies for the event to become
-     * available for processing. Once the publisher has released the necessary slots, the rest of
-     * the pipeline should release them in a relatively bounded amount of time, so it's probably
-     * worth wasting some CPU time to achieve lower latency.
-     *
-     * # TODO
-     *
-     * Wait strategies for oversubscribed situations in which there are more tasks publishing
-     * and consuming than the number of available CPU cores. It would be good to try to design a
-     * solution where we work with the task scheduler to switch to another task without involving
-     * the kernel, if possible.
-     */
+    /// Wait for `cursor` to release the next `n` slots, then return the actual number of available
+    /// slots, which may be greater than `n`.
+    ///
+    /// For strategies that block, only the publisher will attempt to wake the task. Therefore, the
+    /// publisher's `cursor` is needed so that once the publisher has advanced sufficiently, the task
+    /// will stop blocking and busy-wait on its immediate dependencies for the event to become
+    /// available for processing. Once the publisher has released the necessary slots, the rest of
+    /// the pipeline should release them in a relatively bounded amount of time, so it's probably
+    /// worth wasting some CPU time to achieve lower latency.
+    ///
+    /// # TODO
+    ///
+    /// Wait strategies for oversubscribed situations in which there are more tasks publishing
+    /// and consuming than the number of available CPU cores. It would be good to try to design a
+    /// solution where we work with the task scheduler to switch to another task without involving
+    /// the kernel, if possible.
     fn wait_for_publisher(
         &mut self,
         n: usize,
@@ -836,15 +790,11 @@ pub trait ProcessingWaitStrategy: PublishingWaitStrategy {
 pub trait AvailabilityFn: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
 impl<F: Fn(SequenceNumber, SequenceNumber, usize) -> usize> AvailabilityFn for F {}
 
-/**
- * Helps the publisher wait to avoid overwriting values that are still being consumed.
- */
+/// Helps the publisher wait to avoid overwriting values that are still being consumed.
 pub trait PublishingWaitStrategy: Clone + Send {
-    /**
-     * Wait for upstream consumers to finish processing items that have already been published, then
-     * returns the actual number of available items, which may be greater than n. Returns
-     * `usize::MAX` if there are no dependencies.
-     */
+    /// Wait for upstream consumers to finish processing items that have already been published, then
+    /// returns the actual number of available items, which may be greater than n. Returns
+    /// `usize::MAX` if there are no dependencies.
     fn wait_for_consumers<F: AvailabilityFn>(
         &self,
         n: usize,
@@ -854,22 +804,18 @@ pub trait PublishingWaitStrategy: Clone + Send {
         calculate_available: &F,
     ) -> usize;
 
-    /**
-     * Wakes up any consumers that have blocked waiting for new items to be published.
-     *
-     * # Safety notes
-     *
-     * This must be called only after signalling that the slot is published, or it will not always
-     * work, and consumers waiting using a blocking wait strategy may sleep indefinitely (until a
-     * second item is published).
-     */
+    /// Wakes up any consumers that have blocked waiting for new items to be published.
+    ///
+    /// # Safety notes
+    ///
+    /// This must be called only after signalling that the slot is published, or it will not always
+    /// work, and consumers waiting using a blocking wait strategy may sleep indefinitely (until a
+    /// second item is published).
     fn notify_all_waiters(&mut self);
 }
 
-/**
- * Given a list of dependencies, retrieves the current value of each and returns the minimum number
- * of available items out of all the dependencies.
- */
+/// Given a list of dependencies, retrieves the current value of each and returns the minimum number
+/// of available items out of all the dependencies.
 fn calculate_available_list<F: AvailabilityFn>(
     waiting_sequence: SequenceNumber,
     dependencies: &[SequenceReader],
@@ -884,14 +830,12 @@ fn calculate_available_list<F: AvailabilityFn>(
     available
 }
 
-/**
- * Waits using simple busy waiting.
- *
- * # Safety notes
- *
- * Using this strategy can result in livelock when used with tasks spawned using default scheduler
- * options. Ensure all publishers and consumers are on separate OS threads when using this.
- */
+/// Waits using simple busy waiting.
+///
+/// # Safety notes
+///
+/// Using this strategy can result in livelock when used with tasks spawned using default scheduler
+/// options. Ensure all publishers and consumers are on separate OS threads when using this.
 #[derive(Clone, Copy, Debug)]
 pub struct SpinWaitStrategy;
 
@@ -938,15 +882,13 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
     fn notify_all_waiters(&mut self) {}
 }
 
-/**
- * Spin on a consumer gating sequence until either the desired number of elements becomes available,
- * or a maximum number of retries is reached.
- *
- * # Return value
- *
- * The number of available items, which may be less than `n` if the maximum amount of tries was
- * reached.
- */
+/// Spin on a consumer gating sequence until either the desired number of elements becomes available,
+/// or a maximum number of retries is reached.
+///
+/// # Return value
+///
+/// The number of available items, which may be less than `n` if the maximum amount of tries was
+/// reached.
 fn spin_for_consumer_retries<F: AvailabilityFn>(
     n: usize,
     waiting_sequence: SequenceNumber,
@@ -970,15 +912,13 @@ fn spin_for_consumer_retries<F: AvailabilityFn>(
     available
 }
 
-/**
- * Spin on a publisher gating sequence until either the desired number of elements becomes available,
- * or a maximum number of retries is reached.
- *
- * # Return value
- *
- * The number of available items, which may be less than `n` if the maximum amount of tries was
- * reached.
- */
+/// Spin on a publisher gating sequence until either the desired number of elements becomes available,
+/// or a maximum number of retries is reached.
+///
+/// # Return value
+///
+/// The number of available items, which may be less than `n` if the maximum amount of tries was
+/// reached.
 fn spin_for_publisher_retries(
     n: usize,
     waiting_sequence: SequenceNumber,
@@ -999,14 +939,12 @@ fn spin_for_publisher_retries(
 pub const DEFAULT_MAX_SPIN_TRIES_PUBLISHER: usize = 2500;
 pub const DEFAULT_MAX_SPIN_TRIES_CONSUMER: usize = 2500;
 
-/**
- * A wait strategy for use cases where high throughput and low latency are a priority, but it is
- * also desirable to avoid starving other tasks, such as when there are more tasks than CPU cores.
- * Spins for a small number of retries, then yields to other tasks repeatedly until enough items are
- * released. This will almost always be a better choice than SpinWaitStrategy, except in cases where
- * latency is paramount, and the caller has taken steps to pin the publisher and consumers to their
- * own threads, or even cores.
- */
+/// A wait strategy for use cases where high throughput and low latency are a priority, but it is
+/// also desirable to avoid starving other tasks, such as when there are more tasks than CPU cores.
+/// Spins for a small number of retries, then yields to other tasks repeatedly until enough items are
+/// released. This will almost always be a better choice than SpinWaitStrategy, except in cases where
+/// latency is paramount, and the caller has taken steps to pin the publisher and consumers to their
+/// own threads, or even cores.
 #[derive(Clone, Copy)]
 pub struct YieldWaitStrategy {
     max_spin_tries_publisher: usize,
@@ -1021,9 +959,7 @@ impl Default for YieldWaitStrategy {
 }
 
 impl YieldWaitStrategy {
-    /**
-     * Create a YieldWaitStrategy that will spin for the default number of times before yielding.
-     */
+    /// Create a YieldWaitStrategy that will spin for the default number of times before yielding.
     pub fn new() -> YieldWaitStrategy {
         YieldWaitStrategy::new_with_retry_count(
             DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
@@ -1031,20 +967,18 @@ impl YieldWaitStrategy {
         )
     }
 
-    /**
-     * Create a YieldWaitStrategy, explicitly specifying how many times to spin before
-     * transitioning to a yielding strategy.
-     *
-     * # Arguments
-     *
-     * The two arguments represent the maximum number of times to spin while waiting for the
-     * publisher or other consumers. This is a tradeoff: one gains lower latency and increased
-     * throughput, at the expense of wasted CPU cycles.  When the CPU is oversubscribed, though,
-     * more retries could actually reduce throughput. The increased power usage is also undesirable
-     * in general. The ideal value depends on how important reduced latency and/or increased
-     * throughput are to a given use case, how frequently items are published, and how quickly
-     * consumers process new items.
-     */
+    /// Create a YieldWaitStrategy, explicitly specifying how many times to spin before
+    /// transitioning to a yielding strategy.
+    ///
+    /// # Arguments
+    ///
+    /// The two arguments represent the maximum number of times to spin while waiting for the
+    /// publisher or other consumers. This is a tradeoff: one gains lower latency and increased
+    /// throughput, at the expense of wasted CPU cycles.  When the CPU is oversubscribed, though,
+    /// more retries could actually reduce throughput. The increased power usage is also undesirable
+    /// in general. The ideal value depends on how important reduced latency and/or increased
+    /// throughput are to a given use case, how frequently items are published, and how quickly
+    /// consumers process new items.
     pub fn new_with_retry_count(
         max_spin_tries_publisher: usize,
         max_spin_tries_consumer: usize,
@@ -1133,93 +1067,91 @@ impl fmt::Debug for YieldWaitStrategy {
     }
 }
 
-/**
- * Spins for a short time, then sleeps on a wait condition until the publisher signals. This comes
- * at a cost, however: the publisher has to perform an extra read-modify-write operation on a shared
- * atomic variable every time it publishes new items. The operation should be uncontended, unless it
- * happens at the same time that a waiter is about to fall asleep. See below for details and a proof
- * of correctness.
- *
- * # Design issues
- *
- * When a waiting task goes to sleep, it cannot sleep without a timeout unless it is certain that
- * the publisher will wake it up when the next slot is published. The conventional solution to this
- * problem would be to have the publisher acquire a lock after every publish, to guarantee that
- * waiting consumers are woken up immediately. This would impose a prohibitive performance penalty
- * if it happened here. In the common case, where the publisher does not need to signal, it would be
- * good to avoid using locks altogether. However, any alternative solutions need to make the
- * following guarantees:
- *  - If a consumer decides to wait, the publisher must signal when it releases the slot that the
- *    consumer was waiting for
- *  - The publisher must signal _after_ the consumer has fallen asleep, or the consumer will not be
- *    woken up
- *
- * # Approach
- *
- * We need a way for the publisher to synchronize with potential waiters at the point where it
- * checks if it needs to signal or not. If it finds that it does not need to signal, we need to be
- * able to prove that the consumer will not sleep. If it does see a need to signal, then it must be
- * assured that it will do so after the consumer has fallen asleep.
- *
- * # Algorithm
- *
- * The publisher executes the following steps whenever releasing items:
- *  - Release items via an atomic operation with release semantics (before calling notify_all_waiters)
- *  - Check if there are any waiters using a read-modify-write operation on a shared variable (with
- *    rel-acq semantics)
- *  - If so, acquire the lock and signal on the wait condition
- *
- * The consumer executes the following steps before going to sleep:
- *  - Acquire the lock
- *  - Express an intent to sleep using a read-modify-write operation (with rel-acq semantics) on the
- *    shared variable
- *  - Check for any newly released items
- *  - If none, go to sleep, otherwise release the lock and finish waiting
- *
- * # Proof of correctness
- *
- * Two things need to be proven to show correctness:
- *  - the publisher will signal when necessary
- *  - the signal happens only after the waiter(s) have gone to sleep.
- *
- * Due to the use of read-modify-write operations, the race between publisher and consumer to access
- * the shared variable has two simple outcomes: either the publisher checks first and refrains from
- * signalling, or the consumer signals intent to sleep first, which the publisher will then see and
- * act upon.
- *
- * If the publisher accesses the shared variable before consumer has signalled intent to sleep: as
- * long as the item has been released before the access, we can say that:
- *  - the item release happens before the publisher's shared variable access
- *  - which happens before the consumer's shared variable access
- *  - which happens before the consumer's final check for a newly released item before sleeping
- *
- * Therefore, if the publisher concludes that it doesn't need to signal, it is certain that the
- * consumer will see the newly released item and refrain from sleeping. In other words, a consumer
- * cannot go to sleep without the publisher seeing its intent to do so.
- *
- * An alternate proof based on the consumer deciding to sleep: due to acquire semantics on the
- * shared variable access, we know that the consumer accesses the shared variable before checking
- * for available items.  If the consumer, after taking the lock but before going to sleep, doesn't
- * see a newly released item, the following happens-before ordering is implied: consumer shared
- * variable access -> consumer check for new item -> publisher release of new item -> publisher
- * access of shared variable. Therefore, if the waiter decides to sleep after seeing no progress
- * from the publisher, we can say for sure that the publisher will see the signalled intent to
- * sleep, acquire the lock, and signal on the wait condition.
- *
- * Regarding the second issue of whether the waiter goes to sleep before the signal wakes it up,
- * observe that the consumer only expresses intent to sleep (through the shared variable) after
- * acquiring the lock. Thus, the producer cannot see the signal until after the consumer acquires
- * the lock, and cannot acquire the lock and signal until after the consumer has atomically released
- * the lock and slept.
- *
- * Unfortunately, this proof depends on having release semantics on the publisher side, and acquire
- * semantics on the waiting side. Release semantics require a store operation, while Acquire
- * semantics require a load operation. Therefore, the publisher needs to load the shared variable to
- * see if it needs to signal or not, while simultaneously storing to it in order to gain release
- * semantics.  Likewise, in addition to modifying the shared variable to signal intent, the waiters
- * need to also perform a load in order to have acquire semantics. This is why read-modify-write
- * operations are needed, and not just the cheaper load/store operations.
- */
+/// Spins for a short time, then sleeps on a wait condition until the publisher signals. This comes
+/// at a cost, however: the publisher has to perform an extra read-modify-write operation on a shared
+/// atomic variable every time it publishes new items. The operation should be uncontended, unless it
+/// happens at the same time that a waiter is about to fall asleep. See below for details and a proof
+/// of correctness.
+///
+/// # Design issues
+///
+/// When a waiting task goes to sleep, it cannot sleep without a timeout unless it is certain that
+/// the publisher will wake it up when the next slot is published. The conventional solution to this
+/// problem would be to have the publisher acquire a lock after every publish, to guarantee that
+/// waiting consumers are woken up immediately. This would impose a prohibitive performance penalty
+/// if it happened here. In the common case, where the publisher does not need to signal, it would be
+/// good to avoid using locks altogether. However, any alternative solutions need to make the
+/// following guarantees:
+///  - If a consumer decides to wait, the publisher must signal when it releases the slot that the
+///    consumer was waiting for
+///  - The publisher must signal _after_ the consumer has fallen asleep, or the consumer will not be
+///    woken up
+///
+/// # Approach
+///
+/// We need a way for the publisher to synchronize with potential waiters at the point where it
+/// checks if it needs to signal or not. If it finds that it does not need to signal, we need to be
+/// able to prove that the consumer will not sleep. If it does see a need to signal, then it must be
+/// assured that it will do so after the consumer has fallen asleep.
+///
+/// # Algorithm
+///
+/// The publisher executes the following steps whenever releasing items:
+///  - Release items via an atomic operation with release semantics (before calling notify_all_waiters)
+///  - Check if there are any waiters using a read-modify-write operation on a shared variable (with
+///    rel-acq semantics)
+///  - If so, acquire the lock and signal on the wait condition
+///
+/// The consumer executes the following steps before going to sleep:
+///  - Acquire the lock
+///  - Express an intent to sleep using a read-modify-write operation (with rel-acq semantics) on the
+///    shared variable
+///  - Check for any newly released items
+///  - If none, go to sleep, otherwise release the lock and finish waiting
+///
+/// # Proof of correctness
+///
+/// Two things need to be proven to show correctness:
+///  - the publisher will signal when necessary
+///  - the signal happens only after the waiter(s) have gone to sleep.
+///
+/// Due to the use of read-modify-write operations, the race between publisher and consumer to access
+/// the shared variable has two simple outcomes: either the publisher checks first and refrains from
+/// signalling, or the consumer signals intent to sleep first, which the publisher will then see and
+/// act upon.
+///
+/// If the publisher accesses the shared variable before consumer has signalled intent to sleep: as
+/// long as the item has been released before the access, we can say that:
+///  - the item release happens before the publisher's shared variable access
+///  - which happens before the consumer's shared variable access
+///  - which happens before the consumer's final check for a newly released item before sleeping
+///
+/// Therefore, if the publisher concludes that it doesn't need to signal, it is certain that the
+/// consumer will see the newly released item and refrain from sleeping. In other words, a consumer
+/// cannot go to sleep without the publisher seeing its intent to do so.
+///
+/// An alternate proof based on the consumer deciding to sleep: due to acquire semantics on the
+/// shared variable access, we know that the consumer accesses the shared variable before checking
+/// for available items.  If the consumer, after taking the lock but before going to sleep, doesn't
+/// see a newly released item, the following happens-before ordering is implied: consumer shared
+/// variable access -> consumer check for new item -> publisher release of new item -> publisher
+/// access of shared variable. Therefore, if the waiter decides to sleep after seeing no progress
+/// from the publisher, we can say for sure that the publisher will see the signalled intent to
+/// sleep, acquire the lock, and signal on the wait condition.
+///
+/// Regarding the second issue of whether the waiter goes to sleep before the signal wakes it up,
+/// observe that the consumer only expresses intent to sleep (through the shared variable) after
+/// acquiring the lock. Thus, the producer cannot see the signal until after the consumer acquires
+/// the lock, and cannot acquire the lock and signal until after the consumer has atomically released
+/// the lock and slept.
+///
+/// Unfortunately, this proof depends on having release semantics on the publisher side, and acquire
+/// semantics on the waiting side. Release semantics require a store operation, while Acquire
+/// semantics require a load operation. Therefore, the publisher needs to load the shared variable to
+/// see if it needs to signal or not, while simultaneously storing to it in order to gain release
+/// semantics.  Likewise, in addition to modifying the shared variable to signal intent, the waiters
+/// need to also perform a load in order to have acquire semantics. This is why read-modify-write
+/// operations are needed, and not just the cheaper load/store operations.
 pub struct BlockingWaitStrategy {
     d: UncheckedUnsafeArc<BlockingWaitStrategyData>,
     // Deep copyable fields that don't need to be shared
@@ -1253,16 +1185,14 @@ impl BlockingWaitStrategy {
         )
     }
 
-    /**
-     * Create a `BlockingWaitStrategy`, explicitly specifying how many times to spin before
-     * transitioning to a yielding strategy.
-     *
-     * # Arguments
-     *
-     * See `YieldWaitStrategy::new_with_retry_count` for a more detailed description of what the
-     * arguments mean. This wait strategy will block instead of yielding when the maximum number of
-     * retries is reached while waiting for the publisher.
-     */
+    /// Create a `BlockingWaitStrategy`, explicitly specifying how many times to spin before
+    /// transitioning to a yielding strategy.
+    ///
+    /// # Arguments
+    ///
+    /// See `YieldWaitStrategy::new_with_retry_count` for a more detailed description of what the
+    /// arguments mean. This wait strategy will block instead of yielding when the maximum number of
+    /// retries is reached while waiting for the publisher.
     pub fn new_with_retry_count(
         max_spin_tries_publisher: usize,
         max_spin_tries_consumer: usize,
@@ -1281,9 +1211,7 @@ impl BlockingWaitStrategy {
 }
 
 impl Clone for BlockingWaitStrategy {
-    /**
-     * Returns a shallow copy, that waits and signals on the same wait condition.
-     */
+    /// Returns a shallow copy, that waits and signals on the same wait condition.
     fn clone(&self) -> BlockingWaitStrategy {
         BlockingWaitStrategy {
             d: self.d.clone(),
@@ -1403,16 +1331,12 @@ impl fmt::Debug for BlockingWaitStrategy {
     }
 }
 
-/**
- * Responsible for ensuring that the caller does not proceed until one or more dependent sequences
- * have finished working with the subsequent slots.
- */
+/// Responsible for ensuring that the caller does not proceed until one or more dependent sequences
+/// have finished working with the subsequent slots.
 trait SequenceBarrier: Send {
     type T: Send;
 
-    /**
-     * Get the current value of the sequence associated with this SequenceBarrier.
-     */
+    /// Get the current value of the sequence associated with this SequenceBarrier.
     fn get_current(&self) -> SequenceNumber;
 
     // Facilitate the default implementations of next_n and release_n
@@ -1422,27 +1346,23 @@ trait SequenceBarrier: Send {
     /// gating sequence.
     fn get_cached_available(&self) -> usize;
 
-    /**
-     * Wait for a single slot to be available.
-     */
+    /// Wait for a single slot to be available.
     fn next(&mut self) {
         self.next_n(1)
     }
 
-    /**
-     * Wait for N slots to be available.
-     *
-     * # Arguments
-     *
-     * * batch_size - How many slots should be available before returning.
-     *
-     * # Safety notes
-     *
-     * Note that if N is greater than the size of the RingBuffer minus the total number of slots the
-     * rest of the pipeline is waiting for, then this function may deadlock. A size of 1 should
-     * always be safe. Alternatively, increase the size of the buffer to support the desired amount
-     * of batching.
-     */
+    /// Wait for N slots to be available.
+    ///
+    /// # Arguments
+    ///
+    /// * batch_size - How many slots should be available before returning.
+    ///
+    /// # Safety notes
+    ///
+    /// Note that if N is greater than the size of the RingBuffer minus the total number of slots the
+    /// rest of the pipeline is waiting for, then this function may deadlock. A size of 1 should
+    /// always be safe. Alternatively, increase the size of the buffer to support the desired amount
+    /// of batching.
     fn next_n(&mut self, batch_size: usize) {
         // Avoid waiting if the necessary slots were already available as of the last read. Calls
         // next_n_real if the slots are not available.
@@ -1452,23 +1372,17 @@ trait SequenceBarrier: Send {
         }
     }
 
-    /**
-     * Wait for `batch_size` slots to become available, then return the actual number of available
-     * slots, which may be greater than `batch_size`. This is called only as a last resort. If extra
-     * slots were available as of the last wait, this function will not be called.
-     */
+    /// Wait for `batch_size` slots to become available, then return the actual number of available
+    /// slots, which may be greater than `batch_size`. This is called only as a last resort. If extra
+    /// slots were available as of the last wait, this function will not be called.
     fn next_n_real(&mut self, batch_size: usize) -> usize;
 
-    /**
-     * Release a single slot for downstream consumers.
-     */
+    /// Release a single slot for downstream consumers.
     fn release(&mut self) {
         self.release_n(1);
     }
 
-    /**
-     * Release n slots for downstream consumers.
-     */
+    /// Release n slots for downstream consumers.
     fn release_n(&mut self, batch_size: usize) {
         // Update the cached value to reflect the newly used up slots, then call release_n_real.
 
@@ -1483,17 +1397,13 @@ trait SequenceBarrier: Send {
     /// Same as `release_n`,but without caching. This is called every time release_n is called.
     fn release_n_real(&mut self, batch_size: usize);
 
-    /**
-     * Returns a read-only reference to this barrier's sequence number.
-     */
+    /// Returns a read-only reference to this barrier's sequence number.
     fn get_sequence(&self) -> SequenceReader;
 
     /// Returns a borrowed pointer to the dependency list.
     fn get_dependencies(&self) -> &[SequenceReader];
 
-    /**
-     * Assign a new set of dependencies to this barrier.
-     */
+    /// Assign a new set of dependencies to this barrier.
     fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>);
 
     // Ring buffer related operations
@@ -1501,45 +1411,35 @@ trait SequenceBarrier: Send {
     /// Returns the size of the underlying ring buffer.
     fn len(&self) -> usize;
 
-    /**
-     * Stores a value in the sequence barrier's current slot.
-     *
-     * # Safety notes
-     *
-     * It's the caller's responsibility to avoid data races, so this function is unsafe. Races could
-     * occur in cases where multiple barriers are waiting on the same dependency and accessing slots
-     * in parallel.
-     */
+    /// Stores a value in the sequence barrier's current slot.
+    ///
+    /// # Safety notes
+    ///
+    /// It's the caller's responsibility to avoid data races, so this function is unsafe. Races could
+    /// occur in cases where multiple barriers are waiting on the same dependency and accessing slots
+    /// in parallel.
     unsafe fn set(&mut self, value: Self::T);
 
-    /**
-     * Gets the value stored in the sequence barrier's current slot, which would have been stored
-     * there by a different task, in most cases). Unsafe: allows data races.
-     *
-     * Mutable to facilitate transparent transitions to larger buffers.
-     */
+    /// Gets the value stored in the sequence barrier's current slot, which would have been stored
+    /// there by a different task, in most cases). Unsafe: allows data races.
+    ///
+    /// Mutable to facilitate transparent transitions to larger buffers.
     unsafe fn get(&mut self) -> &Self::T;
 }
 
 trait SequenceBarrierTake: SequenceBarrier {
-    /**
-     * Takes the value stored in the sequnce barrier's current slot, moving it out of the ring
-     * buffer. Unsafe: allows data races.
-     */
+    /// Takes the value stored in the sequnce barrier's current slot, moving it out of the ring
+    /// buffer. Unsafe: allows data races.
     unsafe fn take(&mut self) -> Self::T;
 }
 
-/**
- * Split off from SequenceBarrier to reduce unnecessary type parameter requirements for general
- * users of the SequenceBarrier type, and users of the GenericPublisher type.
- */
+/// Split off from SequenceBarrier to reduce unnecessary type parameter requirements for general
+/// users of the SequenceBarrier type, and users of the GenericPublisher type.
 trait PublisherSequenceBarrier {
     type CSB: SequenceBarrier + ConsumerSequenceBarrier;
 
-    /**
-     * Constructs a consumer barrier that is set up to wait on this SequenceBarrier's sequence
-     * before it attempts to process items.
-     */
+    /// Constructs a consumer barrier that is set up to wait on this SequenceBarrier's sequence
+    /// before it attempts to process items.
     fn new_consumer_barrier(&self) -> Self::CSB;
 }
 
@@ -1547,19 +1447,15 @@ trait ConsumerSequenceBarrier {
     fn new_consumer_barrier(&self) -> Self;
 }
 
-/**
- * Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
- * publisher.
- */
+/// Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
+/// publisher.
 struct SinglePublisherSequenceBarrier<W, RB> {
     ring_buffer: RB,
     sequence: Sequence,
     dependencies: Vec<SequenceReader>,
     wait_strategy: W,
-    /**
-     * Contains the number of available items as of the last time the dependent sequence values were
-     * retrieved.
-     */
+    /// Contains the number of available items as of the last time the dependent sequence values were
+    /// retrieved.
     cached_available: usize,
 }
 
@@ -1670,16 +1566,12 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone> PublisherSequen
     }
 }
 
-/**
- * Implements `SequenceBarrier` for consumers. This implementation supports multiple concurrent
- * consumers, but all consumers will process all events. This is unsuitable for when a
- * load-balancing arrangement is desired.
- */
+/// Implements `SequenceBarrier` for consumers. This implementation supports multiple concurrent
+/// consumers, but all consumers will process all events. This is unsuitable for when a
+/// load-balancing arrangement is desired.
 struct SingleConsumerSequenceBarrier<W, RB> {
     sb: SinglePublisherSequenceBarrier<W, RB>,
-    /**
-     * A reference to the publisher's sequence.
-     */
+    /// A reference to the publisher's sequence.
     cursor: SequenceReader,
 }
 
@@ -1781,63 +1673,43 @@ impl<W: ProcessingWaitStrategy, RB: UnsafeRingBufferOps + Clone> ConsumerSequenc
     }
 }
 
-/**
- * Allows callers to send items through a disruptor pipeline.
- */
+/// Allows callers to send items through a disruptor pipeline.
 pub trait Publisher<T: Send>: Send {
-    /**
-     * Sends a single item into the pipeline. The value will be exposed to each consumer downstream
-     * in the pipeline.
-     */
+    /// Sends a single item into the pipeline. The value will be exposed to each consumer downstream
+    /// in the pipeline.
     fn publish(&self, value: T);
 }
 
-/**
- * Functions used during the initial setup of the pipeline.
- */
+/// Functions used during the initial setup of the pipeline.
 pub trait PipelineInit<T: Send + Default, C: Consumer<T>, FC: FinalConsumer<T>> {
-    /**
-     * Creates and returns a single consumer, which will receive items sent through the publisher.
-     * This should only be called once, during setup of the pipeline.
-     */
+    /// Creates and returns a single consumer, which will receive items sent through the publisher.
+    /// This should only be called once, during setup of the pipeline.
     fn create_single_consumer_pipeline(&mut self) -> FC {
         let (_, c) = self.create_consumer_pipeline(1);
         c
     }
 
-    /**
-     * Creates a chain of dependent consumers, and then adds the final
-     * consumer(s) in the chain as a dependency of the publisher.
-     */
+    /// Creates a chain of dependent consumers, and then adds the final
+    /// consumer(s) in the chain as a dependency of the publisher.
     fn create_consumer_pipeline(&mut self, count_consumers: usize) -> (Vec<C>, FC);
 }
 
-/**
- * Provides access Exposes values that are passing through the the pipeline
- */
+/// Provides access Exposes values that are passing through the the pipeline
 pub trait Consumer<T: Send>: Send {
-    /**
-     * Waits for a single item to become available, then calls the given function to process the
-     * value.
-     */
+    /// Waits for a single item to become available, then calls the given function to process the
+    /// value.
     fn consume<C: FnMut(&T)>(&self, consume_callback: C);
 }
 
-/**
- * The last consumer in the pipeline is able to take ownership of items, if they aren't operating
- * concurrently with another consumer.
- */
+/// The last consumer in the pipeline is able to take ownership of items, if they aren't operating
+/// concurrently with another consumer.
 pub trait FinalConsumer<T: Send>: Consumer<T> {
-    /**
-     * Waits for the next value to be available, moves it out of the ring buffer, and returns it.
-     */
+    /// Waits for the next value to be available, moves it out of the ring buffer, and returns it.
     fn take(&self) -> T;
 }
 
-/**
- * Allows callers to wire up dependencies, then send values down the pipeline
- * of dependent consumers.
- */
+/// Allows callers to wire up dependencies, then send values down the pipeline
+/// of dependent consumers.
 struct GenericPublisher<SB: SequenceBarrier> {
     sequence_barrier: UnsafeCell<SB>,
 }
@@ -1867,13 +1739,11 @@ impl<SB: SequenceBarrier> GenericPublisher<SB> {
 }
 
 impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
-    /*
-     * TODO: take a list of usize to support parallel consumers. Need to pick a convenient return
-     * type. Possible candidates:
-     *  - List of lists
-     *  - List of enum (single or parallel)
-     *  - ?
-     */
+    // TODO: take a list of usize to support parallel consumers. Need to pick a convenient return
+    // type. Possible candidates:
+    //  - List of lists
+    //  - List of enum (single or parallel)
+    //  - ?
     fn create_consumer_pipeline(
         &mut self,
         count_consumers: usize,
@@ -1915,9 +1785,7 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
     }
 }
 
-/**
- * Allows callers to retrieve values from upstream tasks in the pipeline.
- */
+/// Allows callers to retrieve values from upstream tasks in the pipeline.
 struct GenericConsumer<SB: SequenceBarrier> {
     sequence_barrier: UnsafeCell<SB>,
 }
@@ -1972,21 +1840,17 @@ mod generic_publisher_tests {
     // foolproof, but better than nothing.
 }
 
-/**
- * The last consumer in a disruptor pipeline. Being the last consumer in the pipeline makes it
- * possible to move values out of the ring buffer, in addition to the functionality available from a
- * normal GenericConsumer.
- */
+/// The last consumer in a disruptor pipeline. Being the last consumer in the pipeline makes it
+/// possible to move values out of the ring buffer, in addition to the functionality available from a
+/// normal GenericConsumer.
 struct GenericFinalConsumer<SB: SequenceBarrier> {
     sc: GenericConsumer<SB>,
 }
 
 impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
-    /**
-     * Return a new GenericFinalConsumer instance wrapped around a given GenericConsumer instance. In
-     * addition to existing GenericConsumer features, this object also allows the caller to take
-     * ownership of the items that it accesses.
-     */
+    /// Return a new GenericFinalConsumer instance wrapped around a given GenericConsumer instance. In
+    /// addition to existing GenericConsumer features, this object also allows the caller to take
+    /// ownership of the items that it accesses.
     fn new(sc: GenericConsumer<SB>) -> GenericFinalConsumer<SB> {
         GenericFinalConsumer { sc }
     }
@@ -2012,99 +1876,95 @@ impl<SB: SequenceBarrierTake> GenericFinalConsumer<SB> {
     }
 }
 
-/**
- * Now, implement a resizable version of the disruptor. After waiting sufficiently long enough for
- * the consumer pipeline to release slots, the publisher will instead allocate a new, larger, ring
- * buffer, write a special value to the corresponding slot in the old ring buffer, and store the
- * actual value in the new ring buffer. A pointer from the old buffer to the new one is also
- * written. The publisher then makes these changes visible to the downstream pipeline by
- * incrementing its sequence value. If the value has wrapped recently, the publisher bumps it back
- * above the consumers' sequence values, to avoid ambiguity resulting from the larger buffer size.
- * Finally, the last consumer in the pipeline deallocates the old buffer before moving on to the
- * larger buffer. Currently, the lifetime of old buffers is managed via reference counting.
- *
- * NOTE: Latency sensitive applications should not use this mode: the unbounded queue buildup will
- * increase latency outside of acceptable levels. Instead, they should gracefully handle excess
- * demand by providing whatever feedback is needed to reduce upstream demand to levels that the
- * application can handle. For example, this may involve dropping packets, queueing users that try
- * to open new sessions (to avoid degrading service for existing sessions), skipping frames, or any
- * other mechanism that reduces demand as early as possible to avoid wasted effort.
- *
- * # Availability calculation following reallocation
- *
- * Although it's not strictly necessary, things are most efficient if the publisher immediately uses
- * all of the slots in the newly allocated buffer without waiting for the consumer. After resizing
- * the buffer, the publisher will start using the increased buffer size in availability
- * calculations. This allows the publisher to use (new_size - old_size) extra slots, but it leaves
- * old_size slots unused.
- *
- * To fix this, the publisher manipulates its cached availability value to reflect the extra
- * available slots. This avoids the need to add extra code and state just to solve this problem.
- *
- * # Example
- *
- * Imagine a ring buffer of size 4. All stages in the pipeline start with a sequence of 0. The
- * publisher publishes 15 items, which leaves its sequence number at 15. For this to be possible,
- * the consumer(s) must have processed some of the items, since the buffer size, 4, is less than 15.
- * Actually, only 3 elements are available in the buffer, the 4th is reserved as a way for the
- * publisher to communicate that it has allocated another buffer. The publisher then publishes its
- * 16th item into the slot corresponding to sequence 15. When it increments its sequence number, it
- * wraps back down to 0, because the wrap boundary is 16 (four times the buffer size).
- *
- * Now, let's imagine the application is somehow written to contain a deadlock. For example, the
- * consumer is receiving from the publisher via two different communication channels, and it waits
- * for the publisher to send something on the second, while the publisher is waiting for the
- * consumer to process items from the first. When the resizing support is in use, the publisher will
- * eventually decide to reallocate a larger buffer of size 8.
- *
- * During the reallocation, the final consumer's sequence number is at least 13
- * (`16 - (buffer_size - 1)`), since the publisher has been taking care to leave an extra slot free
- * in case a reallocation is needed. The consumer's sequence will never exceed the publisher's,
- * except through wrapping, so we can also say that it is logically at most 16, where 16 would be
- * wrapped to 0. Therefore, the consumer's sequence value could be any of {13, 14, 15, 0}.  The
- * publisher's sequence value is 0 until reallocation is complete, at which point it will be
- * unwrapped back to 16, and incremented to 17. One important thing to note is that regardless of
- * whether the publisher's sequence value was 0, 4, 8, or 12, it will be unwrapped to 16.
- *
- * If the consumer's sequence value was 13 prior to the reallocation, then there were 0 slots
- * available for the publisher to use: with a buffer size of 4, the last slot available to the
- * publisher would have been at sequence value 16, minus the one slot that was reserved for
- * signalling reallocations. In other words, 15 was the last available slot, and the publisher has
- * already used it.
- *
- * After the reallocation, though, the availability calculation would be using the larger buffer
- * size of 8, and as a result would conclude that the last available slot is 20 (subtracting one
- * leaves 19), so the publisher is now able to publish 4 more times into slots 16-19. However, there
- * are actually 7 more slots available (8 minus the one reserved slot). To use the extra slots, the
- * publisher modifies its cached availability value to indicate that 7 slots are available.  This
- * allows it to immediately publish into slots 20, 21, and 22 as well, leaving its sequence value at
- * 23 instead of 20.
- *
- * This results in several new special cases to handle versus the usual non-resizing variant:
- * - From the consumer's perspective, there may be more than `buffer_size` slots available, because
- *   the publisher has started publishing into the new buffer.
- * - When calculating availability from the publisher's perspective, the consumer sequence that
- *   gates its publishing may be more than `buffer_size` slots behind. The availability calculation
- *   needs to return 0 in this case.
- * - It becomes important to ensure that the publisher does not wrap until the consumer pipeline has
- *   transitioned to the new buffer, to avoid breaking the consumer's availability calculations.
- *
- * The publisher's availability calculation function was rewritten to correctly handle the second
- * point, and the wrap boundary was changed to `4*buffer_size` to facilitate the third point.
- */
+/// Now, implement a resizable version of the disruptor. After waiting sufficiently long enough for
+/// the consumer pipeline to release slots, the publisher will instead allocate a new, larger, ring
+/// buffer, write a special value to the corresponding slot in the old ring buffer, and store the
+/// actual value in the new ring buffer. A pointer from the old buffer to the new one is also
+/// written. The publisher then makes these changes visible to the downstream pipeline by
+/// incrementing its sequence value. If the value has wrapped recently, the publisher bumps it back
+/// above the consumers' sequence values, to avoid ambiguity resulting from the larger buffer size.
+/// Finally, the last consumer in the pipeline deallocates the old buffer before moving on to the
+/// larger buffer. Currently, the lifetime of old buffers is managed via reference counting.
+///
+/// NOTE: Latency sensitive applications should not use this mode: the unbounded queue buildup will
+/// increase latency outside of acceptable levels. Instead, they should gracefully handle excess
+/// demand by providing whatever feedback is needed to reduce upstream demand to levels that the
+/// application can handle. For example, this may involve dropping packets, queueing users that try
+/// to open new sessions (to avoid degrading service for existing sessions), skipping frames, or any
+/// other mechanism that reduces demand as early as possible to avoid wasted effort.
+///
+/// # Availability calculation following reallocation
+///
+/// Although it's not strictly necessary, things are most efficient if the publisher immediately uses
+/// all of the slots in the newly allocated buffer without waiting for the consumer. After resizing
+/// the buffer, the publisher will start using the increased buffer size in availability
+/// calculations. This allows the publisher to use (new_size - old_size) extra slots, but it leaves
+/// old_size slots unused.
+///
+/// To fix this, the publisher manipulates its cached availability value to reflect the extra
+/// available slots. This avoids the need to add extra code and state just to solve this problem.
+///
+/// # Example
+///
+/// Imagine a ring buffer of size 4. All stages in the pipeline start with a sequence of 0. The
+/// publisher publishes 15 items, which leaves its sequence number at 15. For this to be possible,
+/// the consumer(s) must have processed some of the items, since the buffer size, 4, is less than 15.
+/// Actually, only 3 elements are available in the buffer, the 4th is reserved as a way for the
+/// publisher to communicate that it has allocated another buffer. The publisher then publishes its
+/// 16th item into the slot corresponding to sequence 15. When it increments its sequence number, it
+/// wraps back down to 0, because the wrap boundary is 16 (four times the buffer size).
+///
+/// Now, let's imagine the application is somehow written to contain a deadlock. For example, the
+/// consumer is receiving from the publisher via two different communication channels, and it waits
+/// for the publisher to send something on the second, while the publisher is waiting for the
+/// consumer to process items from the first. When the resizing support is in use, the publisher will
+/// eventually decide to reallocate a larger buffer of size 8.
+///
+/// During the reallocation, the final consumer's sequence number is at least 13
+/// (`16 - (buffer_size - 1)`), since the publisher has been taking care to leave an extra slot free
+/// in case a reallocation is needed. The consumer's sequence will never exceed the publisher's,
+/// except through wrapping, so we can also say that it is logically at most 16, where 16 would be
+/// wrapped to 0. Therefore, the consumer's sequence value could be any of {13, 14, 15, 0}.  The
+/// publisher's sequence value is 0 until reallocation is complete, at which point it will be
+/// unwrapped back to 16, and incremented to 17. One important thing to note is that regardless of
+/// whether the publisher's sequence value was 0, 4, 8, or 12, it will be unwrapped to 16.
+///
+/// If the consumer's sequence value was 13 prior to the reallocation, then there were 0 slots
+/// available for the publisher to use: with a buffer size of 4, the last slot available to the
+/// publisher would have been at sequence value 16, minus the one slot that was reserved for
+/// signalling reallocations. In other words, 15 was the last available slot, and the publisher has
+/// already used it.
+///
+/// After the reallocation, though, the availability calculation would be using the larger buffer
+/// size of 8, and as a result would conclude that the last available slot is 20 (subtracting one
+/// leaves 19), so the publisher is now able to publish 4 more times into slots 16-19. However, there
+/// are actually 7 more slots available (8 minus the one reserved slot). To use the extra slots, the
+/// publisher modifies its cached availability value to indicate that 7 slots are available.  This
+/// allows it to immediately publish into slots 20, 21, and 22 as well, leaving its sequence value at
+/// 23 instead of 20.
+///
+/// This results in several new special cases to handle versus the usual non-resizing variant:
+/// - From the consumer's perspective, there may be more than `buffer_size` slots available, because
+///   the publisher has started publishing into the new buffer.
+/// - When calculating availability from the publisher's perspective, the consumer sequence that
+///   gates its publishing may be more than `buffer_size` slots behind. The availability calculation
+///   needs to return 0 in this case.
+/// - It becomes important to ensure that the publisher does not wrap until the consumer pipeline has
+///   transitioned to the new buffer, to avoid breaking the consumer's availability calculations.
+///
+/// The publisher's availability calculation function was rewritten to correctly handle the second
+/// point, and the wrap boundary was changed to `4*buffer_size` to facilitate the third point.
 struct ResizableRingBufferData<T: Send> {
     rb_data: BoxedRingBufferData<Option<T>>,
-    /**
-     * When non-null, points to a larger buffer allocated by the publisher to replace this one.
-     *
-     * NOTE: The lifecycle of old ring buffers is well defined: it should be deallocated either
-     * when the last consumer(s) in the pipeline have finished retrieving items from it, or when the
-     * publisher and all consumers have been destroyed. It is therefore possible to manage this
-     * allocation without using reference counting. However, the reference count is only modified
-     * when a reallocation occurs, so this suboptimal choice shouldn't have a strong effect on
-     * performance. Implementing a more efficient solution is possible, but may not be worth the
-     * extra code.
-     */
+    /// When non-null, points to a larger buffer allocated by the publisher to replace this one.
+    ///
+    /// NOTE: The lifecycle of old ring buffers is well defined: it should be deallocated either
+    /// when the last consumer(s) in the pipeline have finished retrieving items from it, or when the
+    /// publisher and all consumers have been destroyed. It is therefore possible to manage this
+    /// allocation without using reference counting. However, the reference count is only modified
+    /// when a reallocation occurs, so this suboptimal choice shouldn't have a strong effect on
+    /// performance. Implementing a more efficient solution is possible, but may not be worth the
+    /// extra code.
     next: Option<UncheckedUnsafeArc<ResizableRingBufferData<T>>>,
 }
 
@@ -2120,11 +1980,9 @@ where
         }
     }
 
-    /**
-     * Reallocates a larger ring buffer, stores a pointer to the new buffer in `next`, and marks the
-     * corresponding slot in the old buffer to signal to consumers that there is a larger buffer.  A
-     * reference to the new buffer is returned.
-     */
+    /// Reallocates a larger ring buffer, stores a pointer to the new buffer in `next`, and marks the
+    /// corresponding slot in the old buffer to signal to consumers that there is a larger buffer.  A
+    /// reference to the new buffer is returned.
     unsafe fn reallocate(
         &mut self,
         sequence: SequenceNumber,
@@ -2158,11 +2016,9 @@ impl<T: Send> RingBufferOps for ResizableRingBufferData<T> {
         self.rb_data.len()
     }
 
-    /**
-     * # Panics
-     *
-     * Will panic if the slot referenced by sequence is currently None.
-     */
+    /// # Panics
+    ///
+    /// Will panic if the slot referenced by sequence is currently None.
     fn get(&self, sequence: SequenceNumber) -> &Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
         self.rb_data[index].as_ref().unwrap()
@@ -2181,12 +2037,10 @@ impl<T: Send> RingBufferOpsTake for ResizableRingBufferData<T> {
     }
 }
 
-/**
- * Like RingBuffer, but can also allow publishers to reallocate a larger buffer and expose it to
- * consumers. The consumers retrieve the remaining items from the old buffer until they reach a
- * flagged element left by the publisher, which signals to them that they should traverse the
- * pointer and retrieve items from the next buffer from now on.
- */
+/// Like RingBuffer, but can also allow publishers to reallocate a larger buffer and expose it to
+/// consumers. The consumers retrieve the remaining items from the old buffer until they reach a
+/// flagged element left by the publisher, which signals to them that they should traverse the
+/// pointer and retrieve items from the next buffer from now on.
 struct UnsafeResizableRingBufferArc<T: Send> {
     d: UncheckedUnsafeArc<ResizableRingBufferData<T>>,
 }
@@ -2242,10 +2096,8 @@ impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
         }
     }
 
-    /**
-     * Allocates a new ring buffer of the given size, then replaces self with a reference to the
-     * newly allocated buffer.
-     */
+    /// Allocates a new ring buffer of the given size, then replaces self with a reference to the
+    /// newly allocated buffer.
     unsafe fn reallocate(&mut self, sequence: SequenceNumber, new_size: usize) {
         unsafe {
             let new_rrbd = self.d.get_mut().reallocate(sequence, new_size);
@@ -2295,10 +2147,8 @@ fn test_resizeable_ring_buffer() {
     }
 }
 
-/**
- * Returns how many slots are open between the publisher's sequence and the consumer's sequence,
- * taking into account the effects of wrapping, and also resizing.
- */
+/// Returns how many slots are open between the publisher's sequence and the consumer's sequence,
+/// taking into account the effects of wrapping, and also resizing.
 fn calculate_available_publisher_resizing(
     gating_sequence: SequenceNumber,
     waiting_sequence: SequenceNumber,
@@ -2339,9 +2189,7 @@ fn test_calculate_available_publisher_resizing() {
     assert_eq!(test(3, 19, new_buffer_size), 0);
 }
 
-/**
- * Resizing variant of SinglePublisherSequenceBarrier.
- */
+/// Resizing variant of SinglePublisherSequenceBarrier.
 struct SingleResizingPublisherSequenceBarrier<T: Send, W> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
     sb: SinglePublisherSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
@@ -2396,10 +2244,8 @@ impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrier
         unsafe { self.sb.get() }
     }
 
-    /**
-     * Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
-     * policy requests that.
-     */
+    /// Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
+    /// policy requests that.
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         // NOTE: the returned availability value is always 1 less than the actual number of
         // available slots. The extra slot is reserved for use below with the reallocate
@@ -2480,9 +2326,7 @@ impl<T: Send + 'static, W: ProcessingWaitStrategy> PublisherSequenceBarrier
     }
 }
 
-/**
- * Resizing-aware consumer barrier.
- */
+/// Resizing-aware consumer barrier.
 struct SingleResizingConsumerSequenceBarrier<T: Send, W> {
     /// Reuse data and constructor from SingleConsumerSequenceBarrier
     cb: SingleConsumerSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
@@ -2495,16 +2339,14 @@ impl<T: Send + 'static, W: ProcessingWaitStrategy> SingleResizingConsumerSequenc
         SingleResizingConsumerSequenceBarrier { cb }
     }
 
-    /**
-     * Alters this barrier's sequence to follow the same path that the publisher's took when it
-     * allocated a new buffer. This is necessary when following buffer reallocations to ensure
-     * that downstream consumers take from the same slots that the publisher has written to.
-     *
-     * # Arguments
-     *
-     * * old_buffer_size - The ring buffer's size before the reallocation occurred.
-     *
-     */
+    /// Alters this barrier's sequence to follow the same path that the publisher's took when it
+    /// allocated a new buffer. This is necessary when following buffer reallocations to ensure
+    /// that downstream consumers take from the same slots that the publisher has written to.
+    ///
+    /// # Arguments
+    ///
+    /// * old_buffer_size - The ring buffer's size before the reallocation occurred.
+    ///
     fn unwrap_sequence(&mut self, old_buffer_size: usize) {
         let original_sequence = self.get_current().value();
 
@@ -2643,19 +2485,15 @@ impl<T: Send + 'static, W: ProcessingWaitStrategy> ConsumerSequenceBarrier
 /// deadlock.
 pub const DEFAULT_RESIZE_TIMEOUT: u64 = 500;
 
-/**
- * This trait provides policy decisions regarding how long to wait before reallocating a larger
- * buffer.
- */
+/// This trait provides policy decisions regarding how long to wait before reallocating a larger
+/// buffer.
 trait ResizingWaitStrategy: ProcessingWaitStrategy {
-    /**
-     * See `PublishingWaitStrategy::wait_for_consumers`. This function has identical semantics, except
-     * that it may finish before the requested number of slots are available, returning a value that
-     * is less than `n`. If this happens, the caller should reallocate a larger buffer and start
-     * publishing items into that buffer instead of waiting. It also always keeps a single extra
-     * slot free in the background, for use in communicating to consumers that a reallocation has
-     * occurred.
-     */
+    /// See `PublishingWaitStrategy::wait_for_consumers`. This function has identical semantics, except
+    /// that it may finish before the requested number of slots are available, returning a value that
+    /// is less than `n`. If this happens, the caller should reallocate a larger buffer and start
+    /// publishing items into that buffer instead of waiting. It also always keeps a single extra
+    /// slot free in the background, for use in communicating to consumers that a reallocation has
+    /// occurred.
     fn try_wait_for_consumers<F: AvailabilityFn>(
         &self,
         n: usize,
@@ -2666,33 +2504,25 @@ trait ResizingWaitStrategy: ProcessingWaitStrategy {
     ) -> usize;
 }
 
-/**
- * A wait strategy that acts like BlockingWaitStrategy, except that the publisher gives up after a
- * specified length of time and instead allocates a larger buffer to publish items into.
- *
- * Wait strategies other than BlockingWaitStrategy are meant for performance-critical applications,
- * where using automatic resizing would not have made sense. As such, there would have been little
- * value in designing this type to work with other wait strategies.
- */
+/// A wait strategy that acts like BlockingWaitStrategy, except that the publisher gives up after a
+/// specified length of time and instead allocates a larger buffer to publish items into.
+///
+/// Wait strategies other than BlockingWaitStrategy are meant for performance-critical applications,
+/// where using automatic resizing would not have made sense. As such, there would have been little
+/// value in designing this type to work with other wait strategies.
 struct TimeoutResizeWaitStrategy {
-    /**
-     * Time (in milliseconds) that the publisher should wait for the pipeline to start moving before
-     * assuming that there is a deadlock and allocating a larger buffer.
-     */
+    /// Time (in milliseconds) that the publisher should wait for the pipeline to start moving before
+    /// assuming that there is a deadlock and allocating a larger buffer.
     timeout: u64,
-    /**
-     * Fallback wait strategy. See the constructor documentation for details about how it's used.
-     */
+    /// Fallback wait strategy. See the constructor documentation for details about how it's used.
     wait_strategy: BlockingWaitStrategy,
 }
 
 impl TimeoutResizeWaitStrategy {
-    /**
-     * Construct a new TimeoutResizeWaitStrategy, using `timeout_msecs` to decide when to resize, and
-     * `wait_strategy` to implement the consumer waiting. The wait strategy is also used to
-     * configure how long the publisher's task should spin when waiting for consumers, before
-     * backing off to yielding.
-     */
+    /// Construct a new TimeoutResizeWaitStrategy, using `timeout_msecs` to decide when to resize, and
+    /// `wait_strategy` to implement the consumer waiting. The wait strategy is also used to
+    /// configure how long the publisher's task should spin when waiting for consumers, before
+    /// backing off to yielding.
     fn new_with_timeout(
         timeout_msecs: u64,
         wait_strategy: BlockingWaitStrategy,
@@ -2714,11 +2544,9 @@ impl Clone for TimeoutResizeWaitStrategy {
 }
 
 impl TimeoutResizeWaitStrategy {
-    /**
-     * Perform the actual waiting and policy decision for
-     * `ResizingWaitStrategy::try_wait_for_consumers`, but leave the issue of reserving an extra
-     * slot for the caller.
-     */
+    /// Perform the actual waiting and policy decision for
+    /// `ResizingWaitStrategy::try_wait_for_consumers`, but leave the issue of reserving an extra
+    /// slot for the caller.
     fn try_wait_for_consumers_real<F: AvailabilityFn>(
         &self,
         n: usize,
@@ -2882,10 +2710,8 @@ where
     T: Send + Default,
     usize: PowerOfTwoUsize<N>,
 {
-    /**
-     * Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
-     * SinglePublisher object.
-     */
+    /// Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
+    /// SinglePublisher object.
     pub fn new(wait_strategy: W) -> SinglePublisher<T, N, W> {
         let ring_buffer = UnsafeRingBufferArc::new();
         let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
@@ -2964,20 +2790,16 @@ pub struct SingleResizingFinalConsumer<T: Send + 'static> {
     c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
 }
 
-/**
- * Specialization for resizable ring buffer.
- */
+/// Specialization for resizable ring buffer.
 impl<T: Send + 'static> SingleResizingPublisher<T> {
-    /**
-     * Create a new GenericPublisher using a resizable ring buffer, specifying the timeout after
-     * which the publisher will allocate a larger buffer to publish items into.
-     *
-     * # Arguments
-     *
-     * * resize_timeout - How long to wait, in milliseconds, before reallocating a larger buffer
-     * * max_spin_tries_publisher - See `YieldWaitStrategy::new_with_retry_count`
-     * * max_spin_tries_consumer - See `YieldWaitStrategy::new_with_retry_count`
-     */
+    /// Create a new GenericPublisher using a resizable ring buffer, specifying the timeout after
+    /// which the publisher will allocate a larger buffer to publish items into.
+    ///
+    /// # Arguments
+    ///
+    /// * resize_timeout - How long to wait, in milliseconds, before reallocating a larger buffer
+    /// * max_spin_tries_publisher - See `YieldWaitStrategy::new_with_retry_count`
+    /// * max_spin_tries_consumer - See `YieldWaitStrategy::new_with_retry_count`
     pub fn new_resize_after_timeout_with_params(
         size: usize,
         resize_timeout: u64,

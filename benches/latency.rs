@@ -37,14 +37,12 @@ where
     });
 }
 
-/**
- * Run a two-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
- *
- * # Arguments
- *
- * * c - the benchmark manager
- * * w - The wait strategy to use
- */
+/// Run a two-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
+///
+/// # Arguments
+///
+/// * c - the benchmark manager
+/// * w - The wait strategy to use
 fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy + 'static>(
     flavour: &str,
     g: &mut BenchmarkGroup<WallTime>,
@@ -81,16 +79,14 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy +
     ping_publisher.publish(u64::MAX);
 }
 
-/**
- * Run a one-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
- * In this version, a single disruptor is used to synchronize the two tasks, which avoids some
- * redundancy.
- *
- * # Arguments
- *
- * * b - the Bencher
- * * w - The wait strategy to use
- */
+/// Run a one-disruptor ping-pong latency benchmark with the given wait strategy and spawn function.
+/// In this version, a single disruptor is used to synchronize the two tasks, which avoids some
+/// redundancy.
+///
+/// # Arguments
+///
+/// * b - the Bencher
+/// * w - The wait strategy to use
 fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 'static>(
     flavour: &str,
     g: &mut BenchmarkGroup<WallTime>,
