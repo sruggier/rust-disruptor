@@ -187,7 +187,13 @@ trait RingBufferOps: Send {
     ///
     /// Panics if the slot is unset
     fn get(&self, sequence: SequenceNumber) -> &Self::T;
+}
 
+/**
+* Extends [`RingBufferOps`] with a take function, which depends on being able to replace T with a
+* default or unset value.
+*/
+trait RingBufferOpsTake: RingBufferOps {
     /// Take the value pointed to by `sequence`, moving it out of the RingBuffer.
     ///
     /// # Panics
@@ -223,7 +229,13 @@ where
         let index = sequence.as_index(RingBufferOps::len(self));
         (*self)[index].as_ref().unwrap()
     }
+}
 
+impl<I, S, T> RingBufferOpsTake for S
+where
+    S: DerefMut<Target = [I]> + RingBufferOps<T = T>,
+    I: DerefMut<Target = Option<T>> + 'static,
+{
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(RingBufferOps::len(self));
         debug_assert!(
@@ -436,7 +448,7 @@ trait UnsafeRingBufferOps: Send {
      */
     unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T;
 
-    /// See `RingBufferOps::take`. Unsafe: allows data races.
+    /// See `RingBufferOpsTake::take`. Unsafe: allows data races.
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
 }
 
@@ -444,7 +456,7 @@ trait UnsafeRingBufferOps: Send {
 impl<T, SRB, URB> UnsafeRingBufferOps for URB
 where
     T: Send,
-    SRB: RingBufferOps<T = T> + 'static,
+    SRB: RingBufferOpsTake<T = T> + 'static,
     URB: UnsafeRingBufferDeref<RB = SRB, T = T>,
 {
     type T = T;
