@@ -4,21 +4,22 @@ This is a library crate that facilitates high-performance communication between
 Rust threads, inspired by the [LMAX
 Disruptor](http://lmax-exchange.github.io/disruptor/) project.
 
-## Features
+## Status
 
-This is a basic proof-of-concept, currently, so most functionality is missing.
-However, current users can enjoy the following features:
+Pending some refactoring to take advantage of modern Rust idioms, the current
+interfaces should be considered unstable. However, the following features are
+implemented:
 
 * Unicast pipelines consisting of a single publisher and one or more stages of
 consumer.
 * Various wait strategies:
-  - SpinWaitStrategy: spins indefinitely. Useful, along with thread pinning,
+  * SpinWaitStrategy: spins indefinitely. Useful, along with thread pinning,
   when minimizing latency is more important than efficient hardware
   utilization.
-  - YieldWaitStrategy: spins briefly, then yields in between each check. This
+  * YieldWaitStrategy: spins briefly, then yields in between each check. This
   results in somewhat better hardware utilization, at the cost of higher
   latency.
-  - BlockingWaitStrategy: like YieldWaitStrategy, except that consumers
+  * BlockingWaitStrategy: like YieldWaitStrategy, except that consumers
   eventually sleep on a wait condition if a timeout is reached. This is much
   more efficient if there are long periods of time where no items are
   published, but it comes with higher latency, and imposes a performance cost
@@ -29,9 +30,8 @@ consumer.
   is waiting.
 * Optional support for dynamic reallocation/resizing of the ring buffer during
 publishing, if a timeout is reached. This has the potential to do more harm
-than good, by almost entirely eliminating back-pressure on the publisher. It is
-left as an exercise for the reader to try to find a use case where this makes
-sense.
+than good, by removing a source of back-pressure from the publisher, so users
+should carefully consider other sources of back-pressure.
 
 ## Building
 
