@@ -2191,26 +2191,24 @@ fn test_calculate_available_publisher_resizing() {
 }
 
 /// Resizing variant of SinglePublisherSequenceBarrier.
-struct SingleResizingPublisherSequenceBarrier<T: Send, W> {
+struct SingleResizingPublisherSequenceBarrier<T: Send> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
-    sb: SinglePublisherSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
+    sb: SinglePublisherSequenceBarrier<TimeoutResizeWaitStrategy, UnsafeResizableRingBufferArc<T>>,
 }
 
-impl<T: Send + 'static, W: ResizingWaitStrategy> SingleResizingPublisherSequenceBarrier<T, W> {
+impl<T: Send + 'static> SingleResizingPublisherSequenceBarrier<T> {
     fn new(
         ring_buffer: UnsafeResizableRingBufferArc<T>,
         dependencies: Vec<SequenceReader>,
-        wait_strategy: W,
-    ) -> SingleResizingPublisherSequenceBarrier<T, W> {
+        wait_strategy: TimeoutResizeWaitStrategy,
+    ) -> SingleResizingPublisherSequenceBarrier<T> {
         SingleResizingPublisherSequenceBarrier {
             sb: SinglePublisherSequenceBarrier::new(ring_buffer, dependencies, wait_strategy),
         }
     }
 }
 
-impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrier
-    for SingleResizingPublisherSequenceBarrier<T, W>
-{
+impl<T: Send + 'static> SequenceBarrier for SingleResizingPublisherSequenceBarrier<T> {
     type T = T;
 
     // Inherited functions
@@ -2261,8 +2259,7 @@ impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrier
         );
 
         if available < batch_size {
-            // The ResizingWaitStrategy decided that we should allocate a new buffer instead of
-            // waiting long enough, so we reallocate here.
+            // The wait strategy timed out, so allocate a new buffer here.
 
             // Make the new buffer twice as large
             let new_size = 2 * current_size;
@@ -2309,34 +2306,33 @@ impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrier
     }
 }
 
-impl<T: Send + 'static, W: ResizingWaitStrategy> SequenceBarrierTake
-    for SingleResizingPublisherSequenceBarrier<T, W>
-{
+impl<T: Send + 'static> SequenceBarrierTake for SingleResizingPublisherSequenceBarrier<T> {
     unsafe fn take(&mut self) -> T {
         unsafe { self.sb.take() }
     }
 }
 
-impl<T: Send + 'static, W: ProcessingWaitStrategy> PublisherSequenceBarrier
-    for SingleResizingPublisherSequenceBarrier<T, W>
-{
-    type CSB = SingleResizingConsumerSequenceBarrier<T, W>;
+impl<T: Send + 'static> PublisherSequenceBarrier for SingleResizingPublisherSequenceBarrier<T> {
+    type CSB = SingleResizingConsumerSequenceBarrier<T>;
 
-    fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T, W> {
+    fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T> {
         SingleResizingConsumerSequenceBarrier::new(self.sb.new_consumer_barrier())
     }
 }
 
 /// Resizing-aware consumer barrier.
-struct SingleResizingConsumerSequenceBarrier<T: Send, W> {
+struct SingleResizingConsumerSequenceBarrier<T: Send> {
     /// Reuse data and constructor from SingleConsumerSequenceBarrier
-    cb: SingleConsumerSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
+    cb: SingleConsumerSequenceBarrier<TimeoutResizeWaitStrategy, UnsafeResizableRingBufferArc<T>>,
 }
 
-impl<T: Send + 'static, W: ProcessingWaitStrategy> SingleResizingConsumerSequenceBarrier<T, W> {
+impl<T: Send + 'static> SingleResizingConsumerSequenceBarrier<T> {
     fn new(
-        cb: SingleConsumerSequenceBarrier<W, UnsafeResizableRingBufferArc<T>>,
-    ) -> SingleResizingConsumerSequenceBarrier<T, W> {
+        cb: SingleConsumerSequenceBarrier<
+            TimeoutResizeWaitStrategy,
+            UnsafeResizableRingBufferArc<T>,
+        >,
+    ) -> SingleResizingConsumerSequenceBarrier<T> {
         SingleResizingConsumerSequenceBarrier { cb }
     }
 
@@ -2402,9 +2398,7 @@ impl<T: Send + 'static, W: ProcessingWaitStrategy> SingleResizingConsumerSequenc
     }
 }
 
-impl<T: Send + 'static, W: ProcessingWaitStrategy> SequenceBarrier
-    for SingleResizingConsumerSequenceBarrier<T, W>
-{
+impl<T: Send + 'static> SequenceBarrier for SingleResizingConsumerSequenceBarrier<T> {
     type T = T;
 
     fn get_current(&self) -> SequenceNumber {
@@ -2459,9 +2453,7 @@ impl<T: Send + 'static, W: ProcessingWaitStrategy> SequenceBarrier
     }
 }
 
-impl<T: Send + 'static, W: ProcessingWaitStrategy> SequenceBarrierTake
-    for SingleResizingConsumerSequenceBarrier<T, W>
-{
+impl<T: Send + 'static> SequenceBarrierTake for SingleResizingConsumerSequenceBarrier<T> {
     unsafe fn take(&mut self) -> T {
         unsafe {
             self.try_switch_next();
@@ -2470,10 +2462,8 @@ impl<T: Send + 'static, W: ProcessingWaitStrategy> SequenceBarrierTake
     }
 }
 
-impl<T: Send + 'static, W: ProcessingWaitStrategy> ConsumerSequenceBarrier
-    for SingleResizingConsumerSequenceBarrier<T, W>
-{
-    fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T, W> {
+impl<T: Send + 'static> ConsumerSequenceBarrier for SingleResizingConsumerSequenceBarrier<T> {
+    fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T> {
         SingleResizingConsumerSequenceBarrier {
             cb: self.cb.new_consumer_barrier(),
         }
@@ -2485,25 +2475,6 @@ impl<T: Send + 'static, W: ProcessingWaitStrategy> ConsumerSequenceBarrier
 /// positives, even if it means waiting a bit longer in cases where the caller has created a
 /// deadlock.
 pub const DEFAULT_RESIZE_TIMEOUT: u64 = 500;
-
-/// This trait provides policy decisions regarding how long to wait before reallocating a larger
-/// buffer.
-trait ResizingWaitStrategy: ProcessingWaitStrategy {
-    /// See `PublishingWaitStrategy::wait_for_consumers`. This function has identical semantics, except
-    /// that it may finish before the requested number of slots are available, returning a value that
-    /// is less than `n`. If this happens, the caller should reallocate a larger buffer and start
-    /// publishing items into that buffer instead of waiting. It also always keeps a single extra
-    /// slot free in the background, for use in communicating to consumers that a reallocation has
-    /// occurred.
-    fn try_wait_for_consumers<F: AvailabilityFn>(
-        &self,
-        n: usize,
-        waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
-        buffer_size: usize,
-        calculate_available: &F,
-    ) -> usize;
-}
 
 /// A wait strategy that acts like BlockingWaitStrategy, except that the publisher gives up after a
 /// specified length of time and instead allocates a larger buffer to publish items into.
@@ -2545,9 +2516,9 @@ impl Clone for TimeoutResizeWaitStrategy {
 }
 
 impl TimeoutResizeWaitStrategy {
-    /// Perform the actual waiting and policy decision for
-    /// `ResizingWaitStrategy::try_wait_for_consumers`, but leave the issue of reserving an extra
-    /// slot for the caller.
+    /// Private helper function that handles waiting and timing out, so
+    /// [`try_wait_for_consumers`](TimeoutResizeWaitStrategy::try_wait_for_consumers), can focus on
+    /// reserving an extra slot.
     fn try_wait_for_consumers_real<F: AvailabilityFn>(
         &self,
         n: usize,
@@ -2608,9 +2579,13 @@ impl TimeoutResizeWaitStrategy {
         // If the timeout was reached, this will be less than n
         available
     }
-}
 
-impl ResizingWaitStrategy for TimeoutResizeWaitStrategy {
+    /// This function is similar to
+    /// [`wait_for_consumers`](PublishingWaitStrategy::wait_for_consumers), except that it may
+    /// finish before the requested number of slots are available, returning a value that is less
+    /// than `n`. If this happens, the caller can reallocate a larger buffer and start publishing
+    /// items into that buffer instead of waiting. It also maintains a single extra slot in reserve,
+    /// for use in communicating to consumers that a reallocation has occurred.
     fn try_wait_for_consumers<F: AvailabilityFn>(
         &self,
         mut n: usize,
@@ -2780,15 +2755,15 @@ where
 }
 
 pub struct SingleResizingPublisher<T: Send + 'static> {
-    p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
+    p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T>>,
 }
 
 pub struct SingleResizingConsumer<T: Send + 'static> {
-    c: GenericConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
+    c: GenericConsumer<SingleResizingConsumerSequenceBarrier<T>>,
 }
 
 pub struct SingleResizingFinalConsumer<T: Send + 'static> {
-    c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T, TimeoutResizeWaitStrategy>>,
+    c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T>>,
 }
 
 /// Specialization for resizable ring buffer.
