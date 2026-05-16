@@ -1958,14 +1958,6 @@ impl<SB: SequenceBarrierTake> GenericFinalConsumer<SB> {
 struct ResizableRingBufferData<T: Send> {
     rb_data: BoxedRingBufferData<Option<T>>,
     /// When non-null, points to a larger buffer allocated by the publisher to replace this one.
-    ///
-    /// NOTE: The lifecycle of old ring buffers is well defined: it should be deallocated either
-    /// when the last consumer(s) in the pipeline have finished retrieving items from it, or when the
-    /// publisher and all consumers have been destroyed. It is therefore possible to manage this
-    /// allocation without using reference counting. However, the reference count is only modified
-    /// when a reallocation occurs, so this suboptimal choice shouldn't have a strong effect on
-    /// performance. Implementing a more efficient solution is possible, but may not be worth the
-    /// extra code.
     next: Option<UncheckedUnsafeArc<ResizableRingBufferData<T>>>,
 }
 
