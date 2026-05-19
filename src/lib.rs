@@ -1746,7 +1746,7 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
         &mut self,
         count_consumers: usize,
     ) -> (
-        Vec<GenericConsumer<SB::CSB>>,
+        Vec<GenericSharedConsumer<SB::CSB>>,
         GenericSingleConsumer<SB::CSB>,
     ) {
         let sequence_barrier;
@@ -1764,12 +1764,12 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
 
         let count_nonfinal_consumers = count_consumers - 1;
         let mut nonfinal_consumers =
-            Vec::<GenericConsumer<SB::CSB>>::with_capacity(count_nonfinal_consumers);
+            Vec::<GenericSharedConsumer<SB::CSB>>::with_capacity(count_nonfinal_consumers);
         let final_consumer;
 
         for _ in 0..count_nonfinal_consumers {
             let sb_next = sb.new_consumer_barrier();
-            let c = GenericConsumer::new(sb);
+            let c = GenericSharedConsumer::new(sb);
             sb = sb_next;
 
             nonfinal_consumers.push(c);
@@ -1777,7 +1777,7 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
 
         // Last consumer gets the ability to take ownership
         let dependencies = vec![sb.get_sequence()];
-        let c = GenericConsumer::new(sb);
+        let c = GenericSharedConsumer::new(sb);
         final_consumer = GenericSingleConsumer::new(c);
 
         sequence_barrier.set_dependencies(dependencies);
@@ -1787,13 +1787,13 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
 }
 
 /// Allows callers to retrieve values from upstream tasks in the pipeline.
-struct GenericConsumer<SB: SequenceBarrier> {
+struct GenericSharedConsumer<SB: SequenceBarrier> {
     sequence_barrier: UnsafeCell<SB>,
 }
 
-impl<SB: SequenceBarrier> GenericConsumer<SB> {
-    fn new(sb: SB) -> GenericConsumer<SB> {
-        GenericConsumer {
+impl<SB: SequenceBarrier> GenericSharedConsumer<SB> {
+    fn new(sb: SB) -> GenericSharedConsumer<SB> {
+        GenericSharedConsumer {
             sequence_barrier: UnsafeCell::new(sb),
         }
     }
@@ -1844,14 +1844,13 @@ mod generic_publisher_tests {
 /// A consumer in the pipeline that doesn't share its stage with any concurrent consumers, allowing
 /// it to have mutable access to the elements it processes.
 struct GenericSingleConsumer<SB: SequenceBarrier> {
-    sc: GenericConsumer<SB>,
+    sc: GenericSharedConsumer<SB>,
 }
 
 impl<SB: SequenceBarrier> GenericSingleConsumer<SB> {
-    /// Return a new instance wrapped around a given GenericConsumer instance. In addition to
-    /// existing GenericConsumer features, this object also allows the caller to take ownership of
-    /// the items that it accesses.
-    fn new(sc: GenericConsumer<SB>) -> GenericSingleConsumer<SB> {
+    /// Return a new instance wrapped around a given GenericSharedConsumer instance. In addition to
+    /// existing features, it also allows the caller to take ownership of the items it accesses.
+    fn new(sc: GenericSharedConsumer<SB>) -> GenericSingleConsumer<SB> {
         GenericSingleConsumer { sc }
     }
 
@@ -2662,7 +2661,7 @@ pub struct SingleConsumer<T: Send + 'static, const N: usize, W: ProcessingWaitSt
 where
     usize: PowerOfTwoUsize<N>,
 {
-    c: GenericConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
+    c: GenericSharedConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
 pub struct SingleFinalConsumer<T: Send + 'static, const N: usize, W: ProcessingWaitStrategy>
@@ -2750,7 +2749,7 @@ pub struct SingleResizingPublisher<T: Send + 'static> {
 }
 
 pub struct SingleResizingConsumer<T: Send + 'static> {
-    c: GenericConsumer<SingleResizingConsumerSequenceBarrier<T>>,
+    c: GenericSharedConsumer<SingleResizingConsumerSequenceBarrier<T>>,
 }
 
 pub struct SingleResizingFinalConsumer<T: Send + 'static> {
