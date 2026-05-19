@@ -2657,7 +2657,7 @@ where
     p: GenericPublisher<SinglePublisherSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
-pub struct SingleConsumer<T: Send + 'static, const N: usize, W: ProcessingWaitStrategy>
+pub struct SharedConsumer<T: Send + 'static, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
@@ -2687,7 +2687,7 @@ where
 }
 
 impl<T, const N: usize, W: ProcessingWaitStrategy>
-    PipelineInit<T, SingleConsumer<T, N, W>, SingleFinalConsumer<T, N, W>>
+    PipelineInit<T, SharedConsumer<T, N, W>, SingleFinalConsumer<T, N, W>>
     for SinglePublisher<T, N, W>
 where
     T: Send + Default,
@@ -2696,9 +2696,9 @@ where
     fn create_consumer_pipeline(
         &mut self,
         count_consumers: usize,
-    ) -> (Vec<SingleConsumer<T, N, W>>, SingleFinalConsumer<T, N, W>) {
+    ) -> (Vec<SharedConsumer<T, N, W>>, SingleFinalConsumer<T, N, W>) {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc.into_iter().map(|x| SingleConsumer { c: x }).collect();
+        let c = gc.into_iter().map(|x| SharedConsumer { c: x }).collect();
         let fc = SingleFinalConsumer { c: gfc };
         (c, fc)
     }
@@ -2715,7 +2715,7 @@ where
     }
 }
 
-impl<T: Send, const N: usize, W: ProcessingWaitStrategy> Consumer<T> for SingleConsumer<T, N, W>
+impl<T: Send, const N: usize, W: ProcessingWaitStrategy> Consumer<T> for SharedConsumer<T, N, W>
 where
     usize: PowerOfTwoUsize<N>,
 {
