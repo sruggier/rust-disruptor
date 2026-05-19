@@ -22,7 +22,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::measurement::WallTime;
 use disruptor::{
-    BlockingWaitStrategy, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
+    BlockingWaitStrategy, ConsumerMut, PipelineInit, ProcessingWaitStrategy, Publisher,
     SinglePublisher, SingleResizingPublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
 use quanta::Instant;
@@ -111,7 +111,7 @@ fn bench_disruptor<P, FC, DisruptorFactory>(
     desc: string::String,
 ) where
     P: Publisher<u64>,
-    FC: FinalConsumer<u64> + 'static,
+    FC: ConsumerMut<u64> + 'static,
     DisruptorFactory: Fn() -> (P, FC),
 {
     g.bench_function(BenchmarkId::new("disruptor", desc), |b| {

@@ -1680,7 +1680,7 @@ pub trait Publisher<T: Send>: Send {
 }
 
 /// Functions used during the initial setup of the pipeline.
-pub trait PipelineInit<T: Send + Default, C: Consumer<T>, FC: FinalConsumer<T>> {
+pub trait PipelineInit<T: Send + Default, C: Consumer<T>, FC: ConsumerMut<T>> {
     /// Creates and returns a single consumer, which will receive items sent through the publisher.
     /// This should only be called once, during setup of the pipeline.
     fn create_single_consumer_pipeline(&mut self) -> FC {
@@ -1700,9 +1700,8 @@ pub trait Consumer<T: Send>: Send {
     fn consume<C: FnMut(&T)>(&self, consume_callback: C);
 }
 
-/// The last consumer in the pipeline is able to take ownership of items, if they aren't operating
-/// concurrently with another consumer.
-pub trait FinalConsumer<T: Send>: Consumer<T> {
+/// Consumers that aren't sharing a pipeline stage with other consumers can mutate items.
+pub trait ConsumerMut<T: Send>: Consumer<T> {
     /// Waits for the next value to be available, moves it out of the ring buffer, and returns it.
     fn take(&self) -> T;
 }
@@ -1812,7 +1811,7 @@ impl<SB: SequenceBarrier> GenericConsumer<SB> {
 #[cfg(test)]
 mod generic_publisher_tests {
     use super::{
-        Consumer, FinalConsumer, PipelineInit, Publisher, SinglePublisher, SpinWaitStrategy,
+        Consumer, ConsumerMut, PipelineInit, Publisher, SinglePublisher, SpinWaitStrategy,
     };
 
     #[test]
@@ -2734,7 +2733,7 @@ where
     }
 }
 
-impl<T, const N: usize, W: ProcessingWaitStrategy> FinalConsumer<T> for SingleFinalConsumer<T, N, W>
+impl<T, const N: usize, W: ProcessingWaitStrategy> ConsumerMut<T> for SingleFinalConsumer<T, N, W>
 where
     T: Send + Default,
     usize: PowerOfTwoUsize<N>,
@@ -2839,7 +2838,7 @@ impl<T: Send + 'static> Consumer<T> for SingleResizingFinalConsumer<T> {
     }
 }
 
-impl<T: Send + 'static> FinalConsumer<T> for SingleResizingFinalConsumer<T> {
+impl<T: Send + 'static> ConsumerMut<T> for SingleResizingFinalConsumer<T> {
     fn take(&self) -> T {
         self.c.take()
     }

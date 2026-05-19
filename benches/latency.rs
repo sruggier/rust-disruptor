@@ -3,7 +3,7 @@ use criterion::{
     measurement::WallTime,
 };
 use disruptor::{
-    BlockingWaitStrategy, Consumer, FinalConsumer, PipelineInit, ProcessingWaitStrategy, Publisher,
+    BlockingWaitStrategy, Consumer, ConsumerMut, PipelineInit, ProcessingWaitStrategy, Publisher,
     SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
 use quanta::Instant;
