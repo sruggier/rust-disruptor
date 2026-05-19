@@ -2746,7 +2746,7 @@ pub struct SingleResizingPublisher<T: Send + 'static> {
     p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T>>,
 }
 
-pub struct SingleResizingConsumer<T: Send + 'static> {
+pub struct SharedResizingConsumer<T: Send + 'static> {
     c: GenericSharedConsumer<SingleResizingConsumerSequenceBarrier<T>>,
 }
 
@@ -2795,7 +2795,7 @@ impl<T: Send + 'static> SingleResizingPublisher<T> {
     }
 }
 
-impl<T> PipelineInit<T, SingleResizingConsumer<T>, SingleResizingFinalConsumer<T>>
+impl<T> PipelineInit<T, SharedResizingConsumer<T>, SingleResizingFinalConsumer<T>>
     for SingleResizingPublisher<T>
 where
     T: Send + 'static + Default,
@@ -2804,13 +2804,13 @@ where
         &mut self,
         count_consumers: usize,
     ) -> (
-        Vec<SingleResizingConsumer<T>>,
+        Vec<SharedResizingConsumer<T>>,
         SingleResizingFinalConsumer<T>,
     ) {
         let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
         let c = gc
             .into_iter()
-            .map(|x| SingleResizingConsumer { c: x })
+            .map(|x| SharedResizingConsumer { c: x })
             .collect();
         let fc = SingleResizingFinalConsumer { c: gfc };
         (c, fc)
@@ -2825,7 +2825,7 @@ impl<T: Send + 'static> Publisher<T> for SingleResizingPublisher<T> {
     }
 }
 
-impl<T: Send + 'static> Consumer<T> for SingleResizingConsumer<T> {
+impl<T: Send + 'static> Consumer<T> for SharedResizingConsumer<T> {
     fn consume<C: FnMut(&T)>(&self, consume_callback: C) {
         self.c.consume(consume_callback)
     }
