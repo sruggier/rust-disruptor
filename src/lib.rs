@@ -1745,7 +1745,10 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
     fn create_consumer_pipeline(
         &mut self,
         count_consumers: usize,
-    ) -> (Vec<GenericConsumer<SB::CSB>>, GenericFinalConsumer<SB::CSB>) {
+    ) -> (
+        Vec<GenericConsumer<SB::CSB>>,
+        GenericSingleConsumer<SB::CSB>,
+    ) {
         let sequence_barrier;
         unsafe {
             sequence_barrier = &mut *self.sequence_barrier.get();
@@ -1775,7 +1778,7 @@ impl<SB: SequenceBarrier + PublisherSequenceBarrier> GenericPublisher<SB> {
         // Last consumer gets the ability to take ownership
         let dependencies = vec![sb.get_sequence()];
         let c = GenericConsumer::new(sb);
-        final_consumer = GenericFinalConsumer::new(c);
+        final_consumer = GenericSingleConsumer::new(c);
 
         sequence_barrier.set_dependencies(dependencies);
 
@@ -1838,19 +1841,18 @@ mod generic_publisher_tests {
     // foolproof, but better than nothing.
 }
 
-/// The last consumer in a disruptor pipeline. Being the last consumer in the pipeline makes it
-/// possible to move values out of the ring buffer, in addition to the functionality available from a
-/// normal GenericConsumer.
-struct GenericFinalConsumer<SB: SequenceBarrier> {
+/// A consumer in the pipeline that doesn't share its stage with any concurrent consumers, allowing
+/// it to have mutable access to the elements it processes.
+struct GenericSingleConsumer<SB: SequenceBarrier> {
     sc: GenericConsumer<SB>,
 }
 
-impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
-    /// Return a new GenericFinalConsumer instance wrapped around a given GenericConsumer instance. In
-    /// addition to existing GenericConsumer features, this object also allows the caller to take
-    /// ownership of the items that it accesses.
-    fn new(sc: GenericConsumer<SB>) -> GenericFinalConsumer<SB> {
-        GenericFinalConsumer { sc }
+impl<SB: SequenceBarrier> GenericSingleConsumer<SB> {
+    /// Return a new instance wrapped around a given GenericConsumer instance. In addition to
+    /// existing GenericConsumer features, this object also allows the caller to take ownership of
+    /// the items that it accesses.
+    fn new(sc: GenericConsumer<SB>) -> GenericSingleConsumer<SB> {
+        GenericSingleConsumer { sc }
     }
 
     /// See the GenericConsumer.consume method.
@@ -1859,7 +1861,7 @@ impl<SB: SequenceBarrier> GenericFinalConsumer<SB> {
     }
 }
 
-impl<SB: SequenceBarrierTake> GenericFinalConsumer<SB> {
+impl<SB: SequenceBarrierTake> GenericSingleConsumer<SB> {
     fn take(&self) -> SB::T {
         unsafe {
             let sequence_barrier = &mut *self.sc.sequence_barrier.get();
@@ -2667,7 +2669,7 @@ pub struct SingleFinalConsumer<T: Send + 'static, const N: usize, W: ProcessingW
 where
     usize: PowerOfTwoUsize<N>,
 {
-    c: GenericFinalConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
+    c: GenericSingleConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
 }
 
 impl<T, const N: usize, W: ProcessingWaitStrategy> SinglePublisher<T, N, W>
@@ -2752,7 +2754,7 @@ pub struct SingleResizingConsumer<T: Send + 'static> {
 }
 
 pub struct SingleResizingFinalConsumer<T: Send + 'static> {
-    c: GenericFinalConsumer<SingleResizingConsumerSequenceBarrier<T>>,
+    c: GenericSingleConsumer<SingleResizingConsumerSequenceBarrier<T>>,
 }
 
 /// Specialization for resizable ring buffer.
