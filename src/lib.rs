@@ -423,9 +423,7 @@ trait UnsafeRingBufferOps: Send {
     unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T);
 
     /// See `RingBufferOps::get`. Unsafe: allows data races.
-    ///
-    /// Mutable to facilitate transparent transitions to larger buffers.
-    unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T;
+    unsafe fn get(&self, sequence: SequenceNumber) -> &Self::T;
 }
 
 /// Blanket impl for types that implement UnsafeRingBufferDeref.
@@ -445,7 +443,7 @@ where
             self.get_mut().set(sequence, value);
         }
     }
-    unsafe fn get(&mut self, sequence: SequenceNumber) -> &Self::T {
+    unsafe fn get(&self, sequence: SequenceNumber) -> &Self::T {
         unsafe { UnsafeRingBufferDeref::get(self).get(sequence) }
     }
 }
