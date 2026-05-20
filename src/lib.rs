@@ -167,13 +167,13 @@ trait RingBufferOps: Send {
     ///
     /// The given sequence number is converted into an index into the buffer,
     /// and the value is moved in into that element of the buffer.
-    fn set(&mut self, sequence: SequenceNumber, value: Self::T);
+    fn set_sequence(&mut self, sequence: SequenceNumber, value: Self::T);
 
     /// Returns the length of the underlying buffer.
     fn len(&self) -> usize;
 
     /// Returns an immutable reference to the value pointed to by `sequence`.
-    fn get(&self, sequence: SequenceNumber) -> &Self::T;
+    fn get_sequence(&self, sequence: SequenceNumber) -> &Self::T;
 }
 
 /// Extends [`RingBufferOps`] with a take function, which depends on being able to replace T with a
@@ -201,7 +201,7 @@ where
 {
     type T = T;
 
-    fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
+    fn set_sequence(&mut self, sequence: SequenceNumber, value: Self::T) {
         let index = sequence.as_index(RingBufferOps::len(self));
         *((*self)[index]) = value;
     }
@@ -210,7 +210,7 @@ where
         self.deref().len()
     }
 
-    fn get(&self, sequence: SequenceNumber) -> &Self::T {
+    fn get_sequence(&self, sequence: SequenceNumber) -> &Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
         &(*self)[index]
     }
@@ -436,11 +436,11 @@ where
     }
     unsafe fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
         unsafe {
-            self.get_mut().set(sequence, value);
+            self.get_mut().set_sequence(sequence, value);
         }
     }
     unsafe fn get(&self, sequence: SequenceNumber) -> &Self::T {
-        unsafe { UnsafeRingBufferDeref::get(self).get(sequence) }
+        unsafe { UnsafeRingBufferDeref::get(self).get_sequence(sequence) }
     }
 }
 
@@ -2050,7 +2050,7 @@ where
 impl<T: Send> RingBufferOps for ResizableRingBufferData<T> {
     type T = T;
 
-    fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
+    fn set_sequence(&mut self, sequence: SequenceNumber, value: Self::T) {
         let index = sequence.as_index(RingBufferOps::len(self));
         *(self.rb_data[index]) = ReallocationFlag::Item(value);
     }
@@ -2063,7 +2063,7 @@ impl<T: Send> RingBufferOps for ResizableRingBufferData<T> {
     ///
     /// Will panic if the slot referenced by sequence contains a ReallocationFlag. The caller should
     /// check [`is_reallocation_event`](Self::is_reallocation_event) first.
-    fn get(&self, sequence: SequenceNumber) -> &Self::T {
+    fn get_sequence(&self, sequence: SequenceNumber) -> &Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
         self.rb_data[index].as_ref().unwrap()
     }
