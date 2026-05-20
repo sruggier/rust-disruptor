@@ -173,10 +173,6 @@ trait RingBufferOps: Send {
     fn len(&self) -> usize;
 
     /// Returns an immutable reference to the value pointed to by `sequence`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the slot is unset
     fn get(&self, sequence: SequenceNumber) -> &Self::T;
 }
 
@@ -1875,6 +1871,54 @@ impl<SB: SequenceBarrierTake> GenericSingleConsumer<SB> {
     }
 }
 
+/// Used to implement in-band signalling about buffer reallocations. Will nearly always contain an
+/// [`Item`](Self::Item), but during buffer reallocation, the last slot in the old buffer will contain
+/// [`BufferReallocated`](Self::BufferReallocated) instead.
+#[derive(Debug, Copy, Clone)]
+enum ReallocationFlag<T> {
+    BufferReallocated,
+    Item(T),
+}
+
+impl<T> ReallocationFlag<T> {
+    /// Returns `true` if this flag contains an [`Item`](Self::Item), like [`Option::is_some`].
+    fn is_item(&self) -> bool {
+        matches!(self, Self::Item(_))
+    }
+
+    /// Converts from `&ReallocationFlag<T>` to `ReallocationFlag<&T>`, like [`Option::as_ref`].
+    fn as_ref(&self) -> ReallocationFlag<&T> {
+        match *self {
+            Self::BufferReallocated => ReallocationFlag::BufferReallocated,
+            Self::Item(ref x) => ReallocationFlag::Item(x),
+        }
+    }
+
+    /// Similar to [`Option::unwrap`].
+    fn unwrap(self) -> T {
+        match self {
+            Self::BufferReallocated => {
+                panic!("Called ReallocationFlag::unwrap on a `BufferReallocated` value")
+            }
+            Self::Item(x) => x,
+        }
+    }
+}
+
+impl<T: Default> ReallocationFlag<T> {
+    /// Similar to [`Option::take`], except for this type's different default value.
+    fn take(&mut self) -> Self {
+        std::mem::take(self)
+    }
+}
+
+impl<T: Default> Default for ReallocationFlag<T> {
+    /// Returns an [`Item(T)`](Self::Item) containing `T`'s default value.
+    fn default() -> Self {
+        Self::Item(T::default())
+    }
+}
+
 /// Now, implement a resizable version of the disruptor. After waiting sufficiently long enough for
 /// the consumer pipeline to release slots, the publisher will instead allocate a new, larger, ring
 /// buffer, write a special value to the corresponding slot in the old ring buffer, and store the
@@ -1954,14 +1998,14 @@ impl<SB: SequenceBarrierTake> GenericSingleConsumer<SB> {
 /// The publisher's availability calculation function was rewritten to correctly handle the second
 /// point, and the wrap boundary was changed to `4*buffer_size` to facilitate the third point.
 struct ResizableRingBufferData<T: Send> {
-    rb_data: BoxedRingBufferData<Option<T>>,
+    rb_data: BoxedRingBufferData<ReallocationFlag<T>>,
     /// When non-null, points to a larger buffer allocated by the publisher to replace this one.
     next: Option<UncheckedUnsafeArc<ResizableRingBufferData<T>>>,
 }
 
 impl<T> ResizableRingBufferData<T>
 where
-    T: Send + 'static,
+    T: Default + Send + 'static,
 {
     /// Constructs a new ring buffer with the given size.
     fn new(size: usize) -> ResizableRingBufferData<T> {
@@ -1982,15 +2026,23 @@ where
         let new_rrbd = ResizableRingBufferData::new(new_size);
         self.next = Some(UncheckedUnsafeArc::new(new_rrbd));
         let index = sequence.as_index(self.len());
-        // Call take on the option directly, not the RingBuffer, to ensure the
-        // slot is unset, regardless of whether it was previously set.
-        self.rb_data.entries[index].take();
+        *self.rb_data.entries[index] = ReallocationFlag::BufferReallocated;
         self.next.as_mut().unwrap().clone()
     }
+}
 
-    unsafe fn is_set(&self, sequence: SequenceNumber) -> bool {
+impl<T> ResizableRingBufferData<T>
+where
+    T: Send + 'static,
+{
+    /// Checks for a reallocation event in the slot pointed at by `sequence`.
+    ///
+    /// # Safety
+    ///
+    /// Caller is responsible for synchronizing access to each slot.
+    unsafe fn is_reallocation_event(&self, sequence: SequenceNumber) -> bool {
         let index = sequence.as_index(self.len());
-        self.rb_data[index].is_some()
+        !self.rb_data[index].is_item()
     }
 }
 
@@ -2000,7 +2052,7 @@ impl<T: Send> RingBufferOps for ResizableRingBufferData<T> {
 
     fn set(&mut self, sequence: SequenceNumber, value: Self::T) {
         let index = sequence.as_index(RingBufferOps::len(self));
-        *(self.rb_data[index]) = Some(value);
+        *(self.rb_data[index]) = ReallocationFlag::Item(value);
     }
 
     fn len(&self) -> usize {
@@ -2009,19 +2061,20 @@ impl<T: Send> RingBufferOps for ResizableRingBufferData<T> {
 
     /// # Panics
     ///
-    /// Will panic if the slot referenced by sequence is currently None.
+    /// Will panic if the slot referenced by sequence contains a ReallocationFlag. The caller should
+    /// check [`is_reallocation_event`](Self::is_reallocation_event) first.
     fn get(&self, sequence: SequenceNumber) -> &Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
         self.rb_data[index].as_ref().unwrap()
     }
 }
 
-impl<T: Send> RingBufferOpsTake for ResizableRingBufferData<T> {
+impl<T: Send + Default> RingBufferOpsTake for ResizableRingBufferData<T> {
     fn take(&mut self, sequence: SequenceNumber) -> T {
         let index = sequence.as_index(RingBufferOps::len(self));
         debug_assert!(
-            self.rb_data[index].is_some(),
-            "Take of None at sequence: {}",
+            self.rb_data[index].is_item(),
+            "Take of `ReallocationFlag::BufferReallocated` at sequence: {}",
             sequence.value()
         );
         self.rb_data[index].take().unwrap()
@@ -2058,7 +2111,7 @@ where
     }
 }
 
-impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
+impl<T: Default + Send + 'static> UnsafeResizableRingBufferArc<T> {
     /// Construct a new ResizableRingBuffer with a capacity for `size` elements. As with
     /// RingBuffer, `size` must be a power of two.
     fn new(size: usize) -> UnsafeResizableRingBufferArc<T> {
@@ -2067,13 +2120,24 @@ impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
         }
     }
 
+    /// Allocates a new ring buffer of the given size, then replaces self with a reference to the
+    /// newly allocated buffer.
+    unsafe fn reallocate(&mut self, sequence: SequenceNumber, new_size: usize) {
+        unsafe {
+            let new_rrbd = self.d.get_mut().reallocate(sequence, new_size);
+            self.d = new_rrbd;
+        }
+    }
+}
+
+impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
     /// Check for the reallocation flag in a given slot. If it is set, then access the next
     /// reference on the ResizableRingBufferData and switch to it.
     ///
     /// Returns true if a switch to a newly allocated buffer occurred.
     unsafe fn try_switch_next(&mut self, sequence: SequenceNumber) -> bool {
         unsafe {
-            if !self.d.get_mut().is_set(sequence) {
+            if self.d.get_mut().is_reallocation_event(sequence) {
                 // Switch to newly allocated buffer
                 debug!(
                     "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
@@ -2084,15 +2148,6 @@ impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
                 return true;
             }
             false
-        }
-    }
-
-    /// Allocates a new ring buffer of the given size, then replaces self with a reference to the
-    /// newly allocated buffer.
-    unsafe fn reallocate(&mut self, sequence: SequenceNumber, new_size: usize) {
-        unsafe {
-            let new_rrbd = self.d.get_mut().reallocate(sequence, new_size);
-            self.d = new_rrbd;
         }
     }
 }
@@ -2198,7 +2253,7 @@ impl<T: Send + 'static> SingleResizingPublisherSequenceBarrier<T> {
     }
 }
 
-impl<T: Send + 'static> SequenceBarrier for SingleResizingPublisherSequenceBarrier<T> {
+impl<T: Default + Send + 'static> SequenceBarrier for SingleResizingPublisherSequenceBarrier<T> {
     type T = T;
 
     // Inherited functions
@@ -2296,7 +2351,9 @@ impl<T: Send + 'static> SequenceBarrier for SingleResizingPublisherSequenceBarri
     }
 }
 
-impl<T: Send + 'static> SequenceBarrierTake for SingleResizingPublisherSequenceBarrier<T> {
+impl<T: Default + Send + 'static> SequenceBarrierTake
+    for SingleResizingPublisherSequenceBarrier<T>
+{
     unsafe fn take(&mut self) -> T {
         unsafe { self.sb.take() }
     }
@@ -2443,7 +2500,7 @@ impl<T: Send + 'static> SequenceBarrier for SingleResizingConsumerSequenceBarrie
     }
 }
 
-impl<T: Send + 'static> SequenceBarrierTake for SingleResizingConsumerSequenceBarrier<T> {
+impl<T: Default + Send + 'static> SequenceBarrierTake for SingleResizingConsumerSequenceBarrier<T> {
     unsafe fn take(&mut self) -> T {
         unsafe {
             self.try_switch_next();
@@ -2742,7 +2799,7 @@ where
     }
 }
 
-pub struct SingleResizingPublisher<T: Send + 'static> {
+pub struct SingleResizingPublisher<T: Default + Send + 'static> {
     p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T>>,
 }
 
@@ -2755,7 +2812,7 @@ pub struct SingleResizingConsumer<T: Send + 'static> {
 }
 
 /// Specialization for resizable ring buffer.
-impl<T: Send + 'static> SingleResizingPublisher<T> {
+impl<T: Default + Send + 'static> SingleResizingPublisher<T> {
     /// Create a new GenericPublisher using a resizable ring buffer, specifying the timeout after
     /// which the publisher will allocate a larger buffer to publish items into.
     ///
@@ -2814,7 +2871,7 @@ where
     }
 }
 
-impl<T: Send + 'static> Publisher<T> for SingleResizingPublisher<T> {
+impl<T: Default + Send + 'static> Publisher<T> for SingleResizingPublisher<T> {
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
     fn publish(&self, value: T) {
@@ -2834,7 +2891,7 @@ impl<T: Send + 'static> Consumer<T> for SingleResizingConsumer<T> {
     }
 }
 
-impl<T: Send + 'static> ConsumerMut<T> for SingleResizingConsumer<T> {
+impl<T: Default + Send + 'static> ConsumerMut<T> for SingleResizingConsumer<T> {
     fn take(&self) -> T {
         self.c.take()
     }
