@@ -764,13 +764,6 @@ pub trait ProcessingWaitStrategy: PublishingWaitStrategy {
     /// available for processing. Once the publisher has released the necessary slots, the rest of
     /// the pipeline should release them in a relatively bounded amount of time, so it's probably
     /// worth wasting some CPU time to achieve lower latency.
-    ///
-    /// # TODO
-    ///
-    /// Wait strategies for oversubscribed situations in which there are more tasks publishing
-    /// and consuming than the number of available CPU cores. It would be good to try to design a
-    /// solution where we work with the task scheduler to switch to another task without involving
-    /// the kernel, if possible.
     fn wait_for_publisher(
         &mut self,
         n: usize,
