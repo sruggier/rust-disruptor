@@ -278,13 +278,9 @@ impl<T: Send> Clone for UncheckedUnsafeArc<T> {
 /// this type are correctly labelled as unsafe, and adequately documented.
 unsafe impl<T: Send> Send for UncheckedUnsafeArc<T> {}
 
-/// A ring buffer that takes `SequenceNumber` values for get and set operations. Buffer lifetime is
-/// managed using reference counting.
-///
-/// # Safety notes
-///
-/// It is the caller's responsibility to avoid data races when reading and writing elements.
-struct UnsafeRingBufferArc<T, const N: usize>
+/// A reference-counted pointer to a statically-sized circular buffer, implementing
+/// [`UnsafeRingBufferDeref`].
+struct RingBufferArc<T, const N: usize>
 where
     T: Send,
     usize: PowerOfTwoUsize<N>,
@@ -292,40 +288,40 @@ where
     data: UncheckedUnsafeArc<RingBufferData<T, N>>,
 }
 
-impl<T, const N: usize> UnsafeRingBufferArc<T, N>
+impl<T, const N: usize> RingBufferArc<T, N>
 where
     T: Send + Default + 'static,
     usize: PowerOfTwoUsize<N>,
 {
     /// Constructs a new RingBuffer with a capacity of `N` elements. The const
     /// parameter `N` must be a power of two.
-    fn new() -> UnsafeRingBufferArc<T, N>
+    fn new() -> RingBufferArc<T, N>
     where
         usize: PowerOfTwoUsize<N>,
     {
         let data = RingBufferData::default();
         let size = data.len();
         assert_power_of_two(size);
-        UnsafeRingBufferArc {
+        RingBufferArc {
             data: UncheckedUnsafeArc::new(data),
         }
     }
 }
 
-impl<T: Send, const N: usize> Clone for UnsafeRingBufferArc<T, N>
+impl<T: Send, const N: usize> Clone for RingBufferArc<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
     /// Copy a reference to the original buffer.
-    fn clone(&self) -> UnsafeRingBufferArc<T, N> {
-        UnsafeRingBufferArc {
+    fn clone(&self) -> RingBufferArc<T, N> {
+        RingBufferArc {
             data: self.data.clone(),
         }
     }
 }
 
 /// Enables the use of a blanket UnsafeRingBufferDeref implementation.
-impl<T, const N: usize> Deref for UnsafeRingBufferArc<T, N>
+impl<T, const N: usize> Deref for RingBufferArc<T, N>
 where
     T: Send,
     usize: PowerOfTwoUsize<N>,
@@ -338,7 +334,7 @@ where
 }
 
 /// Enables the use of a blanket UnsafeRingBufferDeref implementation.
-impl<T, const N: usize> DerefMut for UnsafeRingBufferArc<T, N>
+impl<T, const N: usize> DerefMut for RingBufferArc<T, N>
 where
     T: Send,
     usize: PowerOfTwoUsize<N>,
@@ -465,11 +461,11 @@ where
 
 #[test]
 fn ring_buffer_size_must_be_power_of_two_1() {
-    UnsafeRingBufferArc::<(), 1>::new();
+    RingBufferArc::<(), 1>::new();
 }
 #[test]
 fn ring_buffer_size_must_be_power_of_two_8() {
-    UnsafeRingBufferArc::<(), 8>::new();
+    RingBufferArc::<(), 8>::new();
 }
 
 /// Returns how many slots are open between the publisher's sequence and the consumer's sequence,
@@ -2704,21 +2700,21 @@ pub struct SinglePublisher<T: Send + 'static, const N: usize, W: ProcessingWaitS
 where
     usize: PowerOfTwoUsize<N>,
 {
-    p: GenericPublisher<SinglePublisherSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
+    p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
 
 pub struct SharedConsumer<T: Send + 'static, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    c: GenericSharedConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
+    c: GenericSharedConsumer<SingleConsumerSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
 
 pub struct SingleConsumer<T: Send + 'static, const N: usize, W: ProcessingWaitStrategy>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    c: GenericSingleConsumer<SingleConsumerSequenceBarrier<W, UnsafeRingBufferArc<T, N>>>,
+    c: GenericSingleConsumer<SingleConsumerSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
 
 impl<T, const N: usize, W: ProcessingWaitStrategy> SinglePublisher<T, N, W>
@@ -2729,7 +2725,7 @@ where
     /// Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
     /// SinglePublisher object.
     pub fn new(wait_strategy: W) -> SinglePublisher<T, N, W> {
-        let ring_buffer = UnsafeRingBufferArc::new();
+        let ring_buffer = RingBufferArc::new();
         let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
         let gp = GenericPublisher::new_common(sb);
         SinglePublisher { p: gp }
