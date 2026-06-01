@@ -563,29 +563,15 @@ fn test_calculate_available_publisher() {
     assert!(2 == calculate_available_publisher(SequenceNumber(3), SequenceNumber(3), 2));
 }
 
-/// The underlying data referenced by Sequence.
-struct SequenceData {
-    /// The published value of the sequence, visible to waiting consumers.
-    value: CachePadded<AtomicUsize>,
-    /// A cached copy of the sequence for use by the owner, to minimize atomic operations and
-    /// contention.
-    private_value: usize,
-}
-
-impl SequenceData {
-    fn new(initial_value: usize) -> SequenceData {
-        SequenceData {
-            value: CachePadded::new(AtomicUsize::new(initial_value)),
-            private_value: initial_value,
-        }
-    }
-}
-
 /// A reference to an atomic usize that allows the owner to mutate it, and can generate read-only
 /// references using [`clone_immut`](SequenceOwner::clone_immut). Returns values as SequenceNumber
 /// to disambiguate from indices and other usize values. Memory is managed via reference counting.
 struct SequenceOwner {
-    value_arc: UncheckedUnsafeArc<SequenceData>,
+    /// The published value of the sequence, visible to waiting consumers.
+    value_arc: UncheckedUnsafeArc<CachePadded<AtomicUsize>>,
+    /// A cached copy of the sequence for use by the owner, to minimize atomic operations and
+    /// contention.
+    private_value: usize,
 }
 
 impl Default for SequenceOwner {
@@ -595,32 +581,43 @@ impl Default for SequenceOwner {
     }
 }
 
+/// Common implementation of get for [`SequenceOwner`] and [`SequenceReader`].
+fn common_sequence_owner_get(
+    value_arc: &UncheckedUnsafeArc<CachePadded<AtomicUsize>>,
+) -> SequenceNumber {
+    // SAFETY: SequenceOwner and SequenceReader always access the value atomically.
+    unsafe { SequenceNumber(value_arc.get().load(Acquire)) }
+}
+
 impl SequenceOwner {
     /// Allocates a new sequence.
     fn new() -> SequenceOwner {
         SequenceOwner {
-            value_arc: UncheckedUnsafeArc::new(SequenceData::new(SEQUENCE_INITIAL)),
+            value_arc: UncheckedUnsafeArc::new(CachePadded::new(AtomicUsize::new(
+                SEQUENCE_INITIAL,
+            ))),
+            private_value: SEQUENCE_INITIAL,
         }
     }
 
+    // used in the tests below
+    #[allow(dead_code)]
     /// See SequenceReader's get method
     fn get(&self) -> SequenceNumber {
-        unsafe { SequenceNumber(self.value_arc.get().value.load(Acquire)) }
+        common_sequence_owner_get(&self.value_arc)
     }
 
     /// Gets the internally cached value of the Sequence. This should only be called from the task
     /// that owns the sequence number (in other words, the only task that writes to the sequence
     /// number)
     fn get_owned(&self) -> SequenceNumber {
-        unsafe { SequenceNumber(self.value_arc.get().private_value) }
+        SequenceNumber(self.private_value)
     }
 
     /// Return an immutable reference to the same underlying sequence number.
     fn clone_immut(&self) -> SequenceReader {
         SequenceReader {
-            sequence: SequenceOwner {
-                value_arc: self.value_arc.clone(),
-            },
+            sequence_arc: self.value_arc.clone(),
         }
     }
 
@@ -635,27 +632,22 @@ impl SequenceOwner {
     /// boundary, at which point they will also wrap. The publisher is normally ahead of the sequence
     /// it depends on, but after wrapping, it will be temporarily behind the gating sequence.
     fn advance(&mut self, n: usize, buffer_size: usize) {
-        // NOTE: Mutating the private value here, and in the unwrap function, is safe because this
-        // type's API doesn't allow it to be cloned and accessed from multiple places concurrently.
-        unsafe {
-            let d = self.value_arc.get_mut();
-            d.private_value = d.private_value.wrapping_add(n);
-            // Given that buffer_size is a power of two, wrap by masking out the high bits. This
-            // operation is a noop if the value is less than wrap_boundary(buffer_size), so it's
-            // unnecessary to check before wrapping.
-            let wrap_mask = wrap_boundary(buffer_size).wrapping_sub(1);
-            d.private_value &= wrap_mask;
-        }
+        self.private_value = self.private_value.wrapping_add(n);
+        // Given that buffer_size is a power of two, wrap by masking out the high bits. This
+        // operation is a noop if the value is less than wrap_boundary(buffer_size), so it's
+        // unnecessary to check before wrapping.
+        let wrap_mask = wrap_boundary(buffer_size).wrapping_sub(1);
+        self.private_value &= wrap_mask;
     }
 
     ///  Publishes the private sequence value to other threads, along with any other writes (for
     ///  example, to the corresponding item in the ring buffer) that have taken place before the
     ///  call.
     fn flush(&mut self) {
-        unsafe {
-            let d = self.value_arc.get_mut();
-            d.value.store(d.private_value, Release);
-        }
+        // SAFETY: SequenceOwner ensures the value field is always accessed atomically, and
+        // the private_value field is only accessed by a single owner.
+        let value = unsafe { self.value_arc.get_mut() };
+        value.store(self.private_value, Release);
     }
 
     /// Advance, then immediately make the change visible to other threads.
@@ -666,12 +658,9 @@ impl SequenceOwner {
 
     /// Reverses the effects of wrapping that occur in the advance function.
     fn unwrap(&mut self, buffer_size: usize) {
-        unsafe {
-            let d = self.value_arc.get_mut();
-            let SequenceNumber(unwrapped) =
-                SequenceOwner::unwrap_number(SequenceNumber(d.private_value), buffer_size);
-            d.private_value = unwrapped;
-        }
+        let SequenceNumber(unwrapped) =
+            SequenceOwner::unwrap_number(SequenceNumber(self.private_value), buffer_size);
+        self.private_value = unwrapped;
     }
 
     /// Like unwrap, but for standalone SequenceNumber values.
@@ -732,18 +721,20 @@ fn test_sequence_overflow() {
 /// Immutable reference to a sequence. Can be safely given to other tasks. Reads with acquire
 /// semantics.
 pub struct SequenceReader {
-    sequence: SequenceOwner,
+    sequence_arc: UncheckedUnsafeArc<CachePadded<AtomicUsize>>,
 }
 
 impl SequenceReader {
     /// Gets the value of the sequence, using acquire semantics. For use by publishers/consumers to
     /// confirm that slots have been released by the task(s) ahead of them in the pipeline.
     pub fn get(&self) -> SequenceNumber {
-        self.sequence.get()
+        common_sequence_owner_get(&self.sequence_arc)
     }
     /// Get another reference to the sequence.
     pub fn clone_immut(&self) -> SequenceReader {
-        self.sequence.clone_immut()
+        SequenceReader {
+            sequence_arc: self.sequence_arc.clone(),
+        }
     }
 }
 
