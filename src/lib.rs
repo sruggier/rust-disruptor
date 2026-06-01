@@ -762,8 +762,35 @@ fn test_sequencereader() {
     assert!(12 == reader.get().value());
 }
 
-/// Helps consumers wait on upstream dependencies.
-pub trait ProcessingWaitStrategy: PublishingWaitStrategy {
+// Create a shorthand for availability calculation functions, since this gets repeated several
+// times below.
+pub trait AvailabilityFn: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
+impl<F> AvailabilityFn for F where F: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
+
+/// Allows waiting for upstream dependencies.
+pub trait PollingWaitStrategy: Clone + Send {
+    /// Wait for upstream consumers to finish processing items that have already been published, then
+    /// returns the actual number of available items, which may be greater than n. Returns
+    /// `usize::MAX` if there are no dependencies.
+    fn wait_for_dependencies<F>(
+        &self,
+        n: usize,
+        waiting_sequence: SequenceNumber,
+        dependencies: &[SequenceReader],
+        buffer_size: usize,
+        calculate_available: &F,
+    ) -> usize
+    where
+        F: AvailabilityFn;
+}
+
+/// Interface for wait strategies that require notification when the publishing stage releases new
+/// slots into the pipeline, such as [`BlockingWaitStrategy`].
+///
+/// This is defined separately because it imposes an additional cost on implementing types, who have
+/// to query which slots have been released by the publisher to know whether it makes sense to wait
+/// for a notification or not.
+pub trait NotificationWaitStrategy: PollingWaitStrategy {
     /// Wait for `cursor` to release the next `n` slots, then return the actual number of available
     /// slots, which may be greater than `n`.
     ///
@@ -780,28 +807,6 @@ pub trait ProcessingWaitStrategy: PublishingWaitStrategy {
         cursor: &SequenceReader,
         buffer_size: usize,
     ) -> usize;
-}
-
-// Create a shorthand for availability calculation functions, since this gets repeated several
-// times below.
-pub trait AvailabilityFn: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
-impl<F> AvailabilityFn for F where F: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
-
-/// Helps the publisher wait to avoid overwriting values that are still being consumed.
-pub trait PublishingWaitStrategy: Clone + Send {
-    /// Wait for upstream consumers to finish processing items that have already been published, then
-    /// returns the actual number of available items, which may be greater than n. Returns
-    /// `usize::MAX` if there are no dependencies.
-    fn wait_for_dependencies<F>(
-        &self,
-        n: usize,
-        waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
-        buffer_size: usize,
-        calculate_available: &F,
-    ) -> usize
-    where
-        F: AvailabilityFn;
 
     /// Wakes up any consumers that have blocked waiting for new items to be published.
     ///
@@ -841,7 +846,7 @@ where
 #[derive(Clone, Copy, Debug)]
 pub struct SpinWaitStrategy;
 
-impl ProcessingWaitStrategy for SpinWaitStrategy {
+impl NotificationWaitStrategy for SpinWaitStrategy {
     fn wait_for_publisher(
         &mut self,
         n: usize,
@@ -858,8 +863,10 @@ impl ProcessingWaitStrategy for SpinWaitStrategy {
 
         available
     }
+
+    fn notify_all_waiters(&mut self) {}
 }
-impl PublishingWaitStrategy for SpinWaitStrategy {
+impl PollingWaitStrategy for SpinWaitStrategy {
     fn wait_for_dependencies<F>(
         &self,
         n: usize,
@@ -883,8 +890,6 @@ impl PublishingWaitStrategy for SpinWaitStrategy {
         }
         available
     }
-
-    fn notify_all_waiters(&mut self) {}
 }
 
 /// Spin on a consumer gating sequence until either the desired number of elements becomes available,
@@ -998,7 +1003,7 @@ impl YieldWaitStrategy {
     }
 }
 
-impl PublishingWaitStrategy for YieldWaitStrategy {
+impl PollingWaitStrategy for YieldWaitStrategy {
     fn wait_for_dependencies<F>(
         &self,
         n: usize,
@@ -1035,11 +1040,9 @@ impl PublishingWaitStrategy for YieldWaitStrategy {
 
         available
     }
-
-    fn notify_all_waiters(&mut self) {}
 }
 
-impl ProcessingWaitStrategy for YieldWaitStrategy {
+impl NotificationWaitStrategy for YieldWaitStrategy {
     fn wait_for_publisher(
         &mut self,
         n: usize,
@@ -1066,6 +1069,7 @@ impl ProcessingWaitStrategy for YieldWaitStrategy {
 
         available
     }
+    fn notify_all_waiters(&mut self) {}
 }
 
 impl fmt::Debug for YieldWaitStrategy {
@@ -1232,7 +1236,7 @@ impl Clone for BlockingWaitStrategy {
     }
 }
 
-impl ProcessingWaitStrategy for BlockingWaitStrategy {
+impl NotificationWaitStrategy for BlockingWaitStrategy {
     fn wait_for_publisher(
         &mut self,
         n: usize,
@@ -1280,33 +1284,6 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
 
         available
     }
-}
-
-impl PublishingWaitStrategy for BlockingWaitStrategy {
-    fn wait_for_dependencies<F>(
-        &self,
-        n: usize,
-        waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
-        buffer_size: usize,
-        calculate_available: &F,
-    ) -> usize
-    where
-        F: AvailabilityFn,
-    {
-        let w = YieldWaitStrategy::new_with_retry_count(
-            self.max_spin_tries_publisher,
-            self.max_spin_tries_consumer,
-        );
-
-        w.wait_for_dependencies(
-            n,
-            waiting_sequence,
-            dependencies,
-            buffer_size,
-            calculate_available,
-        )
-    }
 
     fn notify_all_waiters(&mut self) {
         let d;
@@ -1332,6 +1309,33 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
             // hurt much.
             thread::yield_now();
         }
+    }
+}
+
+impl PollingWaitStrategy for BlockingWaitStrategy {
+    fn wait_for_dependencies<F>(
+        &self,
+        n: usize,
+        waiting_sequence: SequenceNumber,
+        dependencies: &[SequenceReader],
+        buffer_size: usize,
+        calculate_available: &F,
+    ) -> usize
+    where
+        F: AvailabilityFn,
+    {
+        let w = YieldWaitStrategy::new_with_retry_count(
+            self.max_spin_tries_publisher,
+            self.max_spin_tries_consumer,
+        );
+
+        w.wait_for_dependencies(
+            n,
+            waiting_sequence,
+            dependencies,
+            buffer_size,
+            calculate_available,
+        )
     }
 }
 
@@ -1475,7 +1479,6 @@ struct SinglePublisherSequenceBarrier<W, RB> {
 
 impl<W, RB> SinglePublisherSequenceBarrier<W, RB>
 where
-    W: PublishingWaitStrategy,
     RB: UnsafeRingBufferOps,
 {
     fn new(
@@ -1495,7 +1498,7 @@ where
 
 impl<W, RB> SequenceBarrier for SinglePublisherSequenceBarrier<W, RB>
 where
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps,
 {
     type T = RB::T;
@@ -1558,7 +1561,7 @@ where
 
 impl<W, RB> SequenceBarrierTake for SinglePublisherSequenceBarrier<W, RB>
 where
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOpsTake,
 {
     unsafe fn take(&mut self) -> RB::T {
@@ -1571,7 +1574,7 @@ where
 
 impl<W, RB> PublisherSequenceBarrier for SinglePublisherSequenceBarrier<W, RB>
 where
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps + Clone,
 {
     type CSB = SingleConsumerSequenceBarrier<W, RB>;
@@ -1601,7 +1604,7 @@ struct SingleConsumerSequenceBarrier<W, RB> {
 
 impl<W, RB> SingleConsumerSequenceBarrier<W, RB>
 where
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps + Clone,
 {
     fn new(
@@ -1619,7 +1622,7 @@ where
 
 impl<W, RB> SequenceBarrier for SingleConsumerSequenceBarrier<W, RB>
 where
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps,
 {
     type T = RB::T;
@@ -1682,7 +1685,7 @@ where
 
 impl<W, RB> SequenceBarrierTake for SingleConsumerSequenceBarrier<W, RB>
 where
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOpsTake,
 {
     unsafe fn take(&mut self) -> Self::T {
@@ -1692,7 +1695,7 @@ where
 
 impl<W, RB> ConsumerSequenceBarrier for SingleConsumerSequenceBarrier<W, RB>
 where
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps + Clone,
 {
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
@@ -2760,7 +2763,7 @@ impl TimeoutResizeWaitStrategy {
     }
 
     /// This function is similar to
-    /// [`wait_for_dependencies`](PublishingWaitStrategy::wait_for_dependencies), except that it may
+    /// [`wait_for_dependencies`](PollingWaitStrategy::wait_for_dependencies), except that it may
     /// finish before the requested number of slots are available, returning a value that is less
     /// than `n`. If this happens, the caller can reallocate a larger buffer and start publishing
     /// items into that buffer instead of waiting. It also maintains a single extra slot in reserve,
@@ -2792,7 +2795,7 @@ impl TimeoutResizeWaitStrategy {
     }
 }
 
-impl ProcessingWaitStrategy for TimeoutResizeWaitStrategy {
+impl NotificationWaitStrategy for TimeoutResizeWaitStrategy {
     fn wait_for_publisher(
         &mut self,
         n: usize,
@@ -2804,9 +2807,12 @@ impl ProcessingWaitStrategy for TimeoutResizeWaitStrategy {
         self.wait_strategy
             .wait_for_publisher(n, waiting_sequence, cursor, buffer_size)
     }
+    fn notify_all_waiters(&mut self) {
+        self.wait_strategy.notify_all_waiters();
+    }
 }
 
-impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
+impl PollingWaitStrategy for TimeoutResizeWaitStrategy {
     fn wait_for_dependencies<F>(
         &self,
         n: usize,
@@ -2827,10 +2833,6 @@ impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
             calculate_available,
         )
     }
-
-    fn notify_all_waiters(&mut self) {
-        self.wait_strategy.notify_all_waiters();
-    }
 }
 
 impl fmt::Debug for TimeoutResizeWaitStrategy {
@@ -2849,7 +2851,7 @@ pub struct SinglePublisher<T, const N: usize, W>
 where
     T: Send + 'static,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
@@ -2858,7 +2860,7 @@ pub struct SharedConsumer<T, const N: usize, W>
 where
     T: Send + 'static,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     c: GenericSharedConsumer<SingleConsumerSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
@@ -2867,7 +2869,7 @@ pub struct SingleConsumer<T, const N: usize, W>
 where
     T: Send + 'static,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     c: GenericSingleConsumer<SingleConsumerSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
@@ -2876,7 +2878,7 @@ impl<T, const N: usize, W> SinglePublisher<T, N, W>
 where
     T: Send + Default,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     /// Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
     /// SinglePublisher object.
@@ -2893,7 +2895,7 @@ impl<T, const N: usize, W> PipelineInit<T, SharedConsumer<T, N, W>, SingleConsum
 where
     T: Send + Default,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     fn create_consumer_pipeline(
         &mut self,
@@ -2910,7 +2912,7 @@ impl<T, const N: usize, W> Publisher<T> for SinglePublisher<T, N, W>
 where
     T: Send,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
@@ -2923,7 +2925,7 @@ impl<T, const N: usize, W> Consumer<T> for SharedConsumer<T, N, W>
 where
     T: Send,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     fn consume<C>(&self, consume_callback: C)
     where
@@ -2937,7 +2939,7 @@ impl<T, const N: usize, W> Consumer<T> for SingleConsumer<T, N, W>
 where
     T: Send,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     fn consume<C>(&self, consume_callback: C)
     where
@@ -2951,7 +2953,7 @@ impl<T, const N: usize, W> ConsumerMut<T> for SingleConsumer<T, N, W>
 where
     T: Send + Default,
     usize: PowerOfTwoUsize<N>,
-    W: ProcessingWaitStrategy,
+    W: NotificationWaitStrategy,
 {
     fn take(&self) -> T {
         self.c.take()

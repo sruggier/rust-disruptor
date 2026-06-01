@@ -22,7 +22,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::measurement::WallTime;
 use disruptor::{
-    BlockingWaitStrategy, ConsumerMut, PipelineInit, ProcessingWaitStrategy, Publisher,
+    BlockingWaitStrategy, ConsumerMut, NotificationWaitStrategy, PipelineInit, Publisher,
     SinglePublisher, SingleResizingPublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
 use quanta::Instant;
@@ -162,7 +162,7 @@ fn run_nonresizing_disruptor_benchmark<W, WF>(
     g: &mut BenchmarkGroup<WallTime>,
     create_wait_strategy: WF,
 ) where
-    W: ProcessingWaitStrategy + fmt::Debug + 'static,
+    W: NotificationWaitStrategy + fmt::Debug + 'static,
     WF: Fn() -> W,
 {
     let desc = format!("{:?}", create_wait_strategy());

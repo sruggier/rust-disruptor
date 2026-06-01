@@ -3,7 +3,7 @@ use criterion::{
     measurement::WallTime,
 };
 use disruptor::{
-    BlockingWaitStrategy, Consumer, ConsumerMut, PipelineInit, ProcessingWaitStrategy, Publisher,
+    BlockingWaitStrategy, Consumer, ConsumerMut, NotificationWaitStrategy, PipelineInit, Publisher,
     SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
 use quanta::Instant;
@@ -48,7 +48,7 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W>(
     g: &mut BenchmarkGroup<WallTime>,
     w: W,
 ) where
-    W: ProcessingWaitStrategy + 'static,
+    W: NotificationWaitStrategy + 'static,
 {
     let mut ping_publisher = SinglePublisher::<u64, 8192, W>::new(w.clone());
     let ping_consumer = ping_publisher.create_single_consumer_pipeline();
@@ -94,7 +94,7 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W>(
     g: &mut BenchmarkGroup<WallTime>,
     w: W,
 ) where
-    W: ProcessingWaitStrategy + 'static,
+    W: NotificationWaitStrategy + 'static,
 {
     let mut ping_publisher = SinglePublisher::<u64, 8192, W>::new(w.clone());
 
