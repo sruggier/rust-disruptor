@@ -2074,12 +2074,12 @@ impl<T: Send + Default> RingBufferOpsTake for ResizableRingBufferData<T> {
 /// consumers. The consumers retrieve the remaining items from the old buffer until they reach a
 /// flagged element left by the publisher, which signals to them that they should traverse the
 /// pointer and retrieve items from the next buffer from now on.
-struct UnsafeResizableRingBufferArc<T: Send> {
+struct ResizableRingBufferArc<T: Send> {
     d: UncheckedUnsafeArc<ResizableRingBufferData<T>>,
 }
 
 /// Enables the use of a blanket UnsafeRingBufferDeref implementation.
-impl<T> Deref for UnsafeResizableRingBufferArc<T>
+impl<T> Deref for ResizableRingBufferArc<T>
 where
     T: Send,
 {
@@ -2091,7 +2091,7 @@ where
 }
 
 /// Enables the use of a blanket UnsafeRingBufferDeref implementation.
-impl<T> DerefMut for UnsafeResizableRingBufferArc<T>
+impl<T> DerefMut for ResizableRingBufferArc<T>
 where
     T: Send,
 {
@@ -2100,11 +2100,11 @@ where
     }
 }
 
-impl<T: Default + Send + 'static> UnsafeResizableRingBufferArc<T> {
+impl<T: Default + Send + 'static> ResizableRingBufferArc<T> {
     /// Construct a new ResizableRingBuffer with a capacity for `size` elements. As with
     /// RingBuffer, `size` must be a power of two.
-    fn new(size: usize) -> UnsafeResizableRingBufferArc<T> {
-        UnsafeResizableRingBufferArc {
+    fn new(size: usize) -> ResizableRingBufferArc<T> {
+        ResizableRingBufferArc {
             d: UncheckedUnsafeArc::new(ResizableRingBufferData::new(size)),
         }
     }
@@ -2119,7 +2119,7 @@ impl<T: Default + Send + 'static> UnsafeResizableRingBufferArc<T> {
     }
 }
 
-impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
+impl<T: Send + 'static> ResizableRingBufferArc<T> {
     /// Check for the reallocation flag in a given slot. If it is set, then access the next
     /// reference on the ResizableRingBufferData and switch to it.
     ///
@@ -2141,17 +2141,17 @@ impl<T: Send + 'static> UnsafeResizableRingBufferArc<T> {
     }
 }
 
-impl<T: Send> Clone for UnsafeResizableRingBufferArc<T> {
+impl<T: Send> Clone for ResizableRingBufferArc<T> {
     /// Copy a reference to the original buffer.
-    fn clone(&self) -> UnsafeResizableRingBufferArc<T> {
-        UnsafeResizableRingBufferArc { d: self.d.clone() }
+    fn clone(&self) -> ResizableRingBufferArc<T> {
+        ResizableRingBufferArc { d: self.d.clone() }
     }
 }
 
 #[test]
 fn test_resizeable_ring_buffer() {
     // General smoke test
-    let mut publisher_rb = UnsafeResizableRingBufferArc::<usize>::new(2);
+    let mut publisher_rb = ResizableRingBufferArc::<usize>::new(2);
     let mut consumer_rb = publisher_rb.clone();
 
     // Dummy values
@@ -2227,12 +2227,12 @@ fn test_calculate_available_publisher_resizing() {
 /// Resizing variant of SinglePublisherSequenceBarrier.
 struct SingleResizingPublisherSequenceBarrier<T: Send> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
-    sb: SinglePublisherSequenceBarrier<TimeoutResizeWaitStrategy, UnsafeResizableRingBufferArc<T>>,
+    sb: SinglePublisherSequenceBarrier<TimeoutResizeWaitStrategy, ResizableRingBufferArc<T>>,
 }
 
 impl<T: Send + 'static> SingleResizingPublisherSequenceBarrier<T> {
     fn new(
-        ring_buffer: UnsafeResizableRingBufferArc<T>,
+        ring_buffer: ResizableRingBufferArc<T>,
         dependencies: Vec<SequenceReader>,
         wait_strategy: TimeoutResizeWaitStrategy,
     ) -> SingleResizingPublisherSequenceBarrier<T> {
@@ -2359,15 +2359,12 @@ impl<T: Send + 'static> PublisherSequenceBarrier for SingleResizingPublisherSequ
 /// Resizing-aware consumer barrier.
 struct SingleResizingConsumerSequenceBarrier<T: Send> {
     /// Reuse data and constructor from SingleConsumerSequenceBarrier
-    cb: SingleConsumerSequenceBarrier<TimeoutResizeWaitStrategy, UnsafeResizableRingBufferArc<T>>,
+    cb: SingleConsumerSequenceBarrier<TimeoutResizeWaitStrategy, ResizableRingBufferArc<T>>,
 }
 
 impl<T: Send + 'static> SingleResizingConsumerSequenceBarrier<T> {
     fn new(
-        cb: SingleConsumerSequenceBarrier<
-            TimeoutResizeWaitStrategy,
-            UnsafeResizableRingBufferArc<T>,
-        >,
+        cb: SingleConsumerSequenceBarrier<TimeoutResizeWaitStrategy, ResizableRingBufferArc<T>>,
     ) -> SingleResizingConsumerSequenceBarrier<T> {
         SingleResizingConsumerSequenceBarrier { cb }
     }
@@ -2816,7 +2813,7 @@ impl<T: Default + Send + 'static> SingleResizingPublisher<T> {
         max_spin_tries_publisher: usize,
         max_spin_tries_consumer: usize,
     ) -> SingleResizingPublisher<T> {
-        let ring_buffer = UnsafeResizableRingBufferArc::<T>::new(size);
+        let ring_buffer = ResizableRingBufferArc::<T>::new(size);
 
         let blocking_wait_strategy = BlockingWaitStrategy::new_with_retry_count(
             max_spin_tries_publisher,
