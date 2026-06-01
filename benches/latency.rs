@@ -43,11 +43,13 @@ where
 ///
 /// * c - the benchmark manager
 /// * w - The wait strategy to use
-fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy + 'static>(
+fn measure_ping_pong_latency_two_ringbuffers_generic<W>(
     flavour: &str,
     g: &mut BenchmarkGroup<WallTime>,
     w: W,
-) {
+) where
+    W: ProcessingWaitStrategy + 'static,
+{
     let mut ping_publisher = SinglePublisher::<u64, 8192, W>::new(w.clone());
     let ping_consumer = ping_publisher.create_single_consumer_pipeline();
     let mut pong_publisher = SinglePublisher::<u64, 8192, W>::new(w.clone());
@@ -87,11 +89,13 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W: ProcessingWaitStrategy +
 ///
 /// * b - the Bencher
 /// * w - The wait strategy to use
-fn measure_ping_pong_latency_one_ringbuffer_generic<W: ProcessingWaitStrategy + 'static>(
+fn measure_ping_pong_latency_one_ringbuffer_generic<W>(
     flavour: &str,
     g: &mut BenchmarkGroup<WallTime>,
     w: W,
-) {
+) where
+    W: ProcessingWaitStrategy + 'static,
+{
     let mut ping_publisher = SinglePublisher::<u64, 8192, W>::new(w.clone());
 
     // The second task listens for items from ping_consumer, and the publisher waits for the ping to
