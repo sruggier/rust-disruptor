@@ -792,7 +792,7 @@ pub trait PublishingWaitStrategy: Clone + Send {
     /// Wait for upstream consumers to finish processing items that have already been published, then
     /// returns the actual number of available items, which may be greater than n. Returns
     /// `usize::MAX` if there are no dependencies.
-    fn wait_for_consumers<F>(
+    fn wait_for_dependencies<F>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
@@ -860,7 +860,7 @@ impl ProcessingWaitStrategy for SpinWaitStrategy {
     }
 }
 impl PublishingWaitStrategy for SpinWaitStrategy {
-    fn wait_for_consumers<F>(
+    fn wait_for_dependencies<F>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
@@ -999,7 +999,7 @@ impl YieldWaitStrategy {
 }
 
 impl PublishingWaitStrategy for YieldWaitStrategy {
-    fn wait_for_consumers<F>(
+    fn wait_for_dependencies<F>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
@@ -1283,7 +1283,7 @@ impl ProcessingWaitStrategy for BlockingWaitStrategy {
 }
 
 impl PublishingWaitStrategy for BlockingWaitStrategy {
-    fn wait_for_consumers<F>(
+    fn wait_for_dependencies<F>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
@@ -1299,7 +1299,7 @@ impl PublishingWaitStrategy for BlockingWaitStrategy {
             self.max_spin_tries_consumer,
         );
 
-        w.wait_for_consumers(
+        w.wait_for_dependencies(
             n,
             waiting_sequence,
             dependencies,
@@ -1521,7 +1521,7 @@ where
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.sequence.get_owned();
-        let available = self.wait_strategy.wait_for_consumers(
+        let available = self.wait_strategy.wait_for_dependencies(
             batch_size,
             current_sequence,
             self.dependencies.as_slice(),
@@ -1651,14 +1651,14 @@ where
             &self.cursor,
             self.sb.ring_buffer.len(),
         );
-        let a = self.sb.wait_strategy.wait_for_consumers(
+        let a = self.sb.wait_strategy.wait_for_dependencies(
             batch_size,
             current_sequence,
             self.sb.dependencies.as_slice(),
             self.sb.ring_buffer.len(),
             &calculate_available_consumer,
         );
-        // wait_for_consumers returns usize::MAX if there are no other dependencies
+        // wait_for_dependencies returns usize::MAX if there are no other dependencies
         cmp::min(available, a)
     }
 
@@ -2760,7 +2760,7 @@ impl TimeoutResizeWaitStrategy {
     }
 
     /// This function is similar to
-    /// [`wait_for_consumers`](PublishingWaitStrategy::wait_for_consumers), except that it may
+    /// [`wait_for_dependencies`](PublishingWaitStrategy::wait_for_dependencies), except that it may
     /// finish before the requested number of slots are available, returning a value that is less
     /// than `n`. If this happens, the caller can reallocate a larger buffer and start publishing
     /// items into that buffer instead of waiting. It also maintains a single extra slot in reserve,
@@ -2807,7 +2807,7 @@ impl ProcessingWaitStrategy for TimeoutResizeWaitStrategy {
 }
 
 impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
-    fn wait_for_consumers<F>(
+    fn wait_for_dependencies<F>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
@@ -2819,7 +2819,7 @@ impl PublishingWaitStrategy for TimeoutResizeWaitStrategy {
         F: AvailabilityFn,
     {
         // This code path should be unused
-        self.wait_strategy.wait_for_consumers(
+        self.wait_strategy.wait_for_dependencies(
             n,
             waiting_sequence,
             dependencies,
