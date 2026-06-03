@@ -31,6 +31,6 @@ while inotifywait -q -e attrib,close_write,create,delete,delete_self,move_self,m
 		cargo check --all-targets &&
 			cargo build &&
 			cargo test &&
-			cargo bench
+			cargo bench -- --quick
 	) || true
 done
