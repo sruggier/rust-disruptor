@@ -28,7 +28,7 @@ while inotifywait -q -e attrib,close_write,create,delete,delete_self,move_self,m
 	reset
 	echo -e "\n\nRebuilding...\n"
 	(
-		cargo check &&
+		cargo check --all-targets &&
 			cargo build &&
 			cargo test &&
 			cargo bench
