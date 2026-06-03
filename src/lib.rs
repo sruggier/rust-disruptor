@@ -177,17 +177,9 @@ trait RingBufferOps: Send {
 
     /// Returns an immutable reference to the value pointed to by `sequence`.
     fn get_sequence(&self, sequence: SequenceNumber) -> &Self::T;
-}
 
-/// Extends [`RingBufferOps`] with a take function, which depends on being able to replace T with a
-/// default or unset value.
-trait RingBufferOpsTake: RingBufferOps {
-    /// Take the value pointed to by `sequence`, moving it out of the RingBuffer.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the slot is unset
-    fn take(&mut self, sequence: SequenceNumber) -> Self::T;
+    /// Returns a mutable reference to the value pointed to by `sequence`.
+    fn get_sequence_mut(&mut self, sequence: SequenceNumber) -> &mut Self::T;
 }
 
 // Implement the operations for each of the defined types.
@@ -217,17 +209,10 @@ where
         let index = sequence.as_index(RingBufferOps::len(self));
         &(*self)[index]
     }
-}
 
-impl<I, S, T> RingBufferOpsTake for S
-where
-    S: DerefMut<Target = [I]> + RingBufferOps<T = T>,
-    I: DerefMut<Target = T> + 'static,
-    T: Default,
-{
-    fn take(&mut self, sequence: SequenceNumber) -> T {
+    fn get_sequence_mut(&mut self, sequence: SequenceNumber) -> &mut Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
-        std::mem::take(&mut *(*self)[index])
+        &mut (*self)[index]
     }
 }
 
@@ -463,12 +448,12 @@ trait UnsafeRingBufferOpsTake: UnsafeRingBufferOps {
 /// RingBufferOpsTake.
 impl<T, SRB, URB> UnsafeRingBufferOpsTake for URB
 where
-    T: Send,
-    SRB: RingBufferOpsTake<T = T> + 'static,
+    T: Send + Default,
+    SRB: RingBufferOps<T = T> + 'static,
     URB: UnsafeRingBufferDeref<RB = SRB, T = T>,
 {
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T {
-        unsafe { self.get_mut().take(sequence) }
+        unsafe { std::mem::take(self.get_mut().get_sequence_mut(sequence)) }
     }
 }
 
@@ -1965,6 +1950,14 @@ impl<T> ReallocationFlag<T> {
         }
     }
 
+    /// Converts from `&ReallocationFlag<T>` to `ReallocationFlag<&mut T>`, like [`Option::as_mut`].
+    fn as_mut(&mut self) -> ReallocationFlag<&mut T> {
+        match *self {
+            Self::BufferReallocated => ReallocationFlag::BufferReallocated,
+            Self::Item(ref mut x) => ReallocationFlag::Item(x),
+        }
+    }
+
     /// Similar to [`Option::unwrap`].
     fn unwrap(self) -> T {
         match self {
@@ -1973,16 +1966,6 @@ impl<T> ReallocationFlag<T> {
             }
             Self::Item(x) => x,
         }
-    }
-}
-
-impl<T> ReallocationFlag<T>
-where
-    T: Default,
-{
-    /// Similar to [`Option::take`], except for this type's different default value.
-    fn take(&mut self) -> Self {
-        std::mem::take(self)
     }
 }
 
@@ -2148,22 +2131,22 @@ where
     /// check [`is_reallocation_event`](Self::is_reallocation_event) first.
     fn get_sequence(&self, sequence: SequenceNumber) -> &Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
+        debug_assert!(
+            self.rb_data[index].is_item(),
+            "Attempted borrow of `ReallocationFlag::BufferReallocated` at sequence: {}",
+            sequence.value()
+        );
         self.rb_data[index].as_ref().unwrap()
     }
-}
 
-impl<T> RingBufferOpsTake for ResizableRingBufferData<T>
-where
-    T: Send + Default,
-{
-    fn take(&mut self, sequence: SequenceNumber) -> T {
+    fn get_sequence_mut(&mut self, sequence: SequenceNumber) -> &mut Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
         debug_assert!(
             self.rb_data[index].is_item(),
-            "Take of `ReallocationFlag::BufferReallocated` at sequence: {}",
+            "Attempted mutable borrow of `ReallocationFlag::BufferReallocated` at sequence: {}",
             sequence.value()
         );
-        self.rb_data[index].take().unwrap()
+        self.rb_data[index].as_mut().unwrap()
     }
 }
 
