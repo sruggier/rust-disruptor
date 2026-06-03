@@ -115,6 +115,7 @@ impl SequenceNumber {
 /// The returned number will be a power of two, and a multiple of buffer_size.
 fn wrap_boundary(buffer_size: usize) -> usize {
     assert_power_of_two(buffer_size);
+    debug_assert!(buffer_size <= usize::MAX.div_ceil(4));
     buffer_size.wrapping_mul(4)
 }
 
