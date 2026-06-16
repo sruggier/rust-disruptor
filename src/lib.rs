@@ -2082,12 +2082,22 @@ where
     /// Reallocates a larger ring buffer, stores a pointer to the new buffer in `next`, and marks the
     /// corresponding slot in the old buffer to signal to consumers that there is a larger buffer.  A
     /// reference to the new buffer is returned.
+    ///
+    /// # Invariants
+    ///
+    /// This expects to be called only once for a given instance.
+    ///
+    /// # Safety
+    ///
+    /// Calling this concurrently from multiple threads would result in a data race (in addition to
+    /// violating the expectation that this be called once.
     unsafe fn reallocate(
         &mut self,
         sequence: SequenceNumber,
         new_size: usize,
     ) -> UncheckedUnsafeArc<ResizableRingBufferData<T>> {
         let new_rrbd = ResizableRingBufferData::new(new_size);
+        debug_assert!(self.next.is_none(), "reallocate called multiple times");
         self.next = Some(UncheckedUnsafeArc::new(new_rrbd));
         let index = sequence.as_index(self.len());
         *self.rb_data.entries[index] = ReallocationFlag::BufferReallocated;
@@ -2198,11 +2208,14 @@ where
 
     /// Allocates a new ring buffer of the given size, then replaces self with a reference to the
     /// newly allocated buffer.
+    ///
+    /// # Safety
+    ///
+    /// Calling this concurrently from multiple threads would result in a data race.
     unsafe fn reallocate(&mut self, sequence: SequenceNumber, new_size: usize) {
-        unsafe {
-            let new_rrbd = self.d.get_mut().reallocate(sequence, new_size);
-            self.d = new_rrbd;
-        }
+        // SAFETY: delegated to the caller.
+        let new_rrbd = unsafe { self.d.get_mut().reallocate(sequence, new_size) };
+        self.d = new_rrbd;
     }
 }
 
