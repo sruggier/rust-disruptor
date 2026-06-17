@@ -119,44 +119,49 @@ fn wrap_boundary(buffer_size: usize) -> usize {
     buffer_size.wrapping_mul(4)
 }
 
-// Use Deref to abstract away the data model of the statically and dynamically
-// sized buffer structs. The types are private, so confusion among downstream
-// users isn't a concern.
+// Use a trait to abstract away the data model, so higher-level operations only need to be
+// implemented once.
 
-/// Enables the use of a blanket RingBufferOps implementation.
-impl<T, const N: usize> Deref for RingBufferData<T, N>
-where
-    usize: PowerOfTwoUsize<N>,
-{
-    type Target = [CachePadded<T>];
+/// Implementation of this trait facilitates use of a given type as a ring buffer with the disruptor
+/// implementation in this crate.
+pub trait RingBufferAsSlice {
+    /// The type to expose in higher-level interfaces
+    type T;
 
-    fn deref(&self) -> &Self::Target {
-        &self.entries
-    }
+    /// The type of each element in the returned slices.
+    type Element: DerefMut<Target = Self::T>;
+
+    /// Returns a slice containing the entire buffer.
+    fn as_slice(&self) -> &[Self::Element];
+    /// Returns a mutable slice containing the entire buffer.
+    fn as_mut_slice(&mut self) -> &mut [Self::Element];
 }
 
-/// Enables the use of a blanket RingBufferOps implementation.
-impl<T, const N: usize> DerefMut for RingBufferData<T, N>
+impl<T, const N: usize> RingBufferAsSlice for RingBufferData<T, N>
 where
     usize: PowerOfTwoUsize<N>,
 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+    type T = T;
+    type Element = CachePadded<T>;
+
+    fn as_slice(&self) -> &[CachePadded<T>] {
+        &self.entries
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [CachePadded<T>] {
         &mut self.entries
     }
 }
 
 /// Enables the use of a blanket RingBufferOps implementation.
-impl<T> Deref for BoxedRingBufferData<T> {
-    type Target = Vec<CachePadded<T>>;
+impl<T> RingBufferAsSlice for BoxedRingBufferData<T> {
+    type T = T;
+    type Element = CachePadded<T>;
 
-    fn deref(&self) -> &Self::Target {
+    fn as_slice(&self) -> &[CachePadded<T>] {
         &self.entries
     }
-}
-
-/// Enables the use of a blanket RingBufferOps implementation.
-impl<T> DerefMut for BoxedRingBufferData<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+    fn as_mut_slice(&mut self) -> &mut [CachePadded<T>] {
         &mut self.entries
     }
 }
@@ -185,35 +190,35 @@ trait RingBufferOps: Send {
 
 // Implement the operations for each of the defined types.
 
-/// Blanket implementation for anything that derefs to a slice of `Option<T>`.
+/// Blanket implementation for anything that implements [`RingBufferAsSlice`].
 ///
 /// The size is assumed to be a power of two, but that can't be enforced
 /// at compile time, in general, so it's enforced via a debug assertion in
 /// as_index.
-impl<I, S, T> RingBufferOps for S
+impl<S, E, T> RingBufferOps for S
 where
-    S: DerefMut<Target = [I]> + Send,
-    I: DerefMut<Target = T> + 'static,
+    S: RingBufferAsSlice<T = T, Element = E> + Send,
+    E: DerefMut<Target = T> + 'static,
 {
     type T = T;
 
     fn set_sequence(&mut self, sequence: SequenceNumber, value: Self::T) {
         let index = sequence.as_index(RingBufferOps::len(self));
-        *((*self)[index]) = value;
+        *(self.as_mut_slice()[index]) = value;
     }
 
     fn len(&self) -> usize {
-        self.deref().len()
+        self.as_slice().len()
     }
 
     fn get_sequence(&self, sequence: SequenceNumber) -> &Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
-        &(*self)[index]
+        self.as_slice()[index].deref()
     }
 
     fn get_sequence_mut(&mut self, sequence: SequenceNumber) -> &mut Self::T {
         let index = sequence.as_index(RingBufferOps::len(self));
-        &mut (*self)[index]
+        self.as_mut_slice()[index].deref_mut()
     }
 }
 
@@ -2115,21 +2120,21 @@ where
     ///
     /// Caller is responsible for synchronizing access to each slot.
     unsafe fn is_reallocation_event(&self, sequence: SequenceNumber) -> bool {
-        let index = sequence.as_index(self.len());
-        !self.rb_data[index].is_item()
+        let flag = self.rb_data.get_sequence(sequence);
+        !flag.is_item()
     }
 }
 
 // Explicitly implement this, to adapt the type of the buffer
 impl<T> RingBufferOps for ResizableRingBufferData<T>
 where
-    T: Send,
+    T: Send + 'static,
 {
     type T = T;
 
     fn set_sequence(&mut self, sequence: SequenceNumber, value: Self::T) {
-        let index = sequence.as_index(RingBufferOps::len(self));
-        *(self.rb_data[index]) = ReallocationFlag::Item(value);
+        self.rb_data
+            .set_sequence(sequence, ReallocationFlag::Item(value));
     }
 
     fn len(&self) -> usize {
@@ -2141,23 +2146,23 @@ where
     /// Will panic if the slot referenced by sequence contains a ReallocationFlag. The caller should
     /// check [`is_reallocation_event`](Self::is_reallocation_event) first.
     fn get_sequence(&self, sequence: SequenceNumber) -> &Self::T {
-        let index = sequence.as_index(RingBufferOps::len(self));
+        let flag = self.rb_data.get_sequence(sequence);
         debug_assert!(
-            self.rb_data[index].is_item(),
+            flag.is_item(),
             "Attempted borrow of `ReallocationFlag::BufferReallocated` at sequence: {}",
             sequence.value()
         );
-        self.rb_data[index].as_ref().unwrap()
+        flag.as_ref().unwrap()
     }
 
     fn get_sequence_mut(&mut self, sequence: SequenceNumber) -> &mut Self::T {
-        let index = sequence.as_index(RingBufferOps::len(self));
+        let flag = self.rb_data.get_sequence_mut(sequence);
         debug_assert!(
-            self.rb_data[index].is_item(),
+            flag.is_item(),
             "Attempted mutable borrow of `ReallocationFlag::BufferReallocated` at sequence: {}",
             sequence.value()
         );
-        self.rb_data[index].as_mut().unwrap()
+        flag.as_mut().unwrap()
     }
 }
 
