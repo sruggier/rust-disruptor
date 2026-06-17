@@ -2177,7 +2177,7 @@ impl<T> ResizableRingBufferArc<T>
 where
     T: Send + 'static,
 {
-    /// Accesses the next reference on the ResizableRingBufferData, and switches to it.
+    /// Returns a ResizableRingBufferArc pointing to the next ResizableRingBufferData.
     ///
     /// # Panics
     ///
@@ -2188,13 +2188,13 @@ where
     /// This should only be called after a reallocation has occurred. The caller must establish a
     /// happens-before relationship between the reallocation and a call to this function, otherwise
     /// calling this can result in a data race.
-    unsafe fn try_switch_next(&mut self) {
+    unsafe fn get_next(&mut self) -> Self {
         // SAFETY: based on the invariants delegated to the caller of this function, as well as the
         // caller to reallocate, access to the `next` field below cannot race with a concurrent
         // write.
         let rrbd = unsafe { self.d.get_mut() };
-        let next_rrbd = rrbd.next.as_mut().unwrap();
-        self.d = next_rrbd.clone();
+        let next_rrbd = rrbd.next.as_ref().unwrap().clone();
+        Self { d: next_rrbd }
     }
 }
 
@@ -2245,9 +2245,7 @@ fn test_resizeable_ring_buffer() {
         let mut flag = unsafe { consumer_rb.take(SequenceNumber(s2)) };
         let mut switch_occurred = false;
         if !flag.is_item() {
-            unsafe {
-                consumer_rb.try_switch_next();
-            }
+            consumer_rb = unsafe { consumer_rb.get_next() };
             switch_occurred = true;
             flag = unsafe { consumer_rb.take(SequenceNumber(s2)) };
         }
@@ -2539,12 +2537,10 @@ where
         // calling this.
         let flag = unsafe { self.cb.get() };
         if !flag.is_item() {
+            // Switch to newly allocated buffer
             // SAFETY: the flag has established that the buffer was reallocated. If the caller
             // called this correctly, then a happens-before relationship has been established.
-            unsafe {
-                // Switch to newly allocated buffer
-                self.cb.sb.ring_buffer.try_switch_next();
-            }
+            self.cb.sb.ring_buffer = unsafe { self.cb.sb.ring_buffer.get_next() };
             // This is necessary to dereference the same slots that the publisher has written to.
             // In other words, downstream consumers must retrace the publisher's steps.
             self.unwrap_sequence(old_buffer_size);
