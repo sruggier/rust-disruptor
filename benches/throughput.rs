@@ -111,7 +111,7 @@ fn bench_disruptor<P, FC, DisruptorFactory>(
     desc: string::String,
 ) where
     P: Publisher<u64>,
-    FC: ConsumerMut<u64> + 'static,
+    FC: ConsumerMut<u64> + Send + 'static,
     DisruptorFactory: Fn() -> (P, FC),
 {
     g.bench_function(BenchmarkId::new("disruptor", desc), |b| {

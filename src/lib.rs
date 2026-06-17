@@ -31,17 +31,13 @@ use quanta::Instant;
 // To start, define the data model for the ring buffer:
 
 /// A statically-sized buffer, with nullable entries and cache line padding.
-struct RingBufferData<T, const N: usize>
-where
-    usize: PowerOfTwoUsize<N>,
-{
+struct RingBufferData<T, const N: usize> {
     entries: [CachePadded<T>; N],
 }
 
 impl<T, const N: usize> Default for RingBufferData<T, N>
 where
     T: Default,
-    usize: PowerOfTwoUsize<N>,
 {
     fn default() -> Self {
         RingBufferData {
@@ -139,6 +135,7 @@ pub trait RingBufferAsSlice {
 
 impl<T, const N: usize> RingBufferAsSlice for RingBufferData<T, N>
 where
+    // The blanket RingBufferOps implementation depends on the size being a power of two.
     usize: PowerOfTwoUsize<N>,
 {
     type T = T;
@@ -169,7 +166,7 @@ impl<T> RingBufferAsSlice for BoxedRingBufferData<T> {
 // Now define some common operations that are indexed SequenceNumber.
 
 /// Operations that index via SequenceNumber, and automatically handle wrapping.
-trait RingBufferOps: Send {
+trait RingBufferOps {
     type T;
 
     /// Writes a value into the ring buffer.
@@ -197,7 +194,7 @@ trait RingBufferOps: Send {
 /// as_index.
 impl<S, E, T> RingBufferOps for S
 where
-    S: RingBufferAsSlice<T = T, Element = E> + Send,
+    S: RingBufferAsSlice<T = T, Element = E>,
     E: DerefMut<Target = T> + 'static,
 {
     type T = T;
@@ -231,17 +228,11 @@ where
 /// # Safety notes
 ///
 /// It's the user's responsibility to synchronize access to the inner value.
-struct UncheckedUnsafeArc<T>
-where
-    T: Send,
-{
+struct UncheckedUnsafeArc<T> {
     arc: Arc<UnsafeCell<T>>,
 }
 
-impl<T> UncheckedUnsafeArc<T>
-where
-    T: Send,
-{
+impl<T> UncheckedUnsafeArc<T> {
     fn new(data: T) -> UncheckedUnsafeArc<T> {
         let arc = Arc::new(UnsafeCell::new(data));
         UncheckedUnsafeArc { arc }
@@ -266,10 +257,7 @@ where
     }
 }
 
-impl<T> Clone for UncheckedUnsafeArc<T>
-where
-    T: Send,
-{
+impl<T> Clone for UncheckedUnsafeArc<T> {
     fn clone(&self) -> UncheckedUnsafeArc<T> {
         UncheckedUnsafeArc {
             arc: self.arc.clone(),
@@ -283,39 +271,25 @@ unsafe impl<T> Send for UncheckedUnsafeArc<T> where T: Send {}
 
 /// A reference-counted pointer to a statically-sized circular buffer, implementing
 /// [`UnsafeRingBufferDeref`].
-struct RingBufferArc<T, const N: usize>
-where
-    T: Send,
-    usize: PowerOfTwoUsize<N>,
-{
+struct RingBufferArc<T, const N: usize> {
     data: UncheckedUnsafeArc<RingBufferData<T, N>>,
 }
 
 impl<T, const N: usize> RingBufferArc<T, N>
 where
-    T: Send + Default + 'static,
-    usize: PowerOfTwoUsize<N>,
+    T: Default,
 {
-    /// Constructs a new RingBuffer with a capacity of `N` elements. The const
-    /// parameter `N` must be a power of two.
-    fn new() -> RingBufferArc<T, N>
-    where
-        usize: PowerOfTwoUsize<N>,
-    {
+    /// Constructs a new RingBuffer with a capacity of `N` elements. The const parameter `N` must be
+    /// a power of two for the rest of the functionality in this crate to be available for use.
+    fn new() -> RingBufferArc<T, N> {
         let data = RingBufferData::default();
-        let size = data.len();
-        assert_power_of_two(size);
         RingBufferArc {
             data: UncheckedUnsafeArc::new(data),
         }
     }
 }
 
-impl<T, const N: usize> Clone for RingBufferArc<T, N>
-where
-    T: Send,
-    usize: PowerOfTwoUsize<N>,
-{
+impl<T, const N: usize> Clone for RingBufferArc<T, N> {
     /// Copy a reference to the original buffer.
     fn clone(&self) -> RingBufferArc<T, N> {
         RingBufferArc {
@@ -325,11 +299,7 @@ where
 }
 
 /// Enables the use of a blanket UnsafeRingBufferDeref implementation.
-impl<T, const N: usize> Deref for RingBufferArc<T, N>
-where
-    T: Send,
-    usize: PowerOfTwoUsize<N>,
-{
+impl<T, const N: usize> Deref for RingBufferArc<T, N> {
     type Target = UncheckedUnsafeArc<RingBufferData<T, N>>;
 
     fn deref(&self) -> &Self::Target {
@@ -338,20 +308,15 @@ where
 }
 
 /// Enables the use of a blanket UnsafeRingBufferDeref implementation.
-impl<T, const N: usize> DerefMut for RingBufferArc<T, N>
-where
-    T: Send,
-    usize: PowerOfTwoUsize<N>,
-{
+impl<T, const N: usize> DerefMut for RingBufferArc<T, N> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.data
     }
 }
 
 /// Unsafe methods providing shared references to the underlying ring buffer.
-trait UnsafeRingBufferDeref: Clone + Send {
-    type T: Send;
-    type RB: RingBufferOps<T = Self::T>;
+trait UnsafeRingBufferDeref {
+    type RB;
 
     /// Get a reference to the underlying ring buffer
     ///
@@ -365,12 +330,7 @@ trait UnsafeRingBufferDeref: Clone + Send {
 }
 
 /// Blanket impl for UncheckedUnsafeArc holding a RingBufferOps type.
-impl<T, RB> UnsafeRingBufferDeref for UncheckedUnsafeArc<RB>
-where
-    T: Send,
-    RB: RingBufferOps<T = T>,
-{
-    type T = T;
+impl<RB> UnsafeRingBufferDeref for UncheckedUnsafeArc<RB> {
     type RB = RB;
 
     // The duplication here is intentional: the underlying UncheckedUnsafeArc
@@ -385,14 +345,11 @@ where
 }
 
 /// Blanket impl for types that deref to UnsafeRingBufferDeref
-impl<T, RB, A, AD> UnsafeRingBufferDeref for AD
+impl<RB, A, AD> UnsafeRingBufferDeref for AD
 where
-    T: Send,
-    RB: RingBufferOps<T = T>,
-    A: UnsafeRingBufferDeref<T = T, RB = RB> + 'static,
-    AD: DerefMut<Target = A> + Clone + Send,
+    A: UnsafeRingBufferDeref<RB = RB> + 'static,
+    AD: DerefMut<Target = A>,
 {
-    type T = T;
     type RB = RB;
 
     unsafe fn get(&self) -> &Self::RB {
@@ -405,8 +362,8 @@ where
 
 /// An unsafe version of RingBufferOps. Defines the same abstraction, but
 /// without exposing it to safe code.
-trait UnsafeRingBufferOps: Send {
-    type T: Send;
+trait UnsafeRingBufferOps {
+    type T;
 
     /// See `RingBufferOps::len`
     fn len(&self) -> usize;
@@ -425,9 +382,8 @@ trait UnsafeRingBufferOps: Send {
 /// Blanket impl for types that implement UnsafeRingBufferDeref.
 impl<T, SRB, URB> UnsafeRingBufferOps for URB
 where
-    T: Send,
     SRB: RingBufferOps<T = T> + 'static,
-    URB: UnsafeRingBufferDeref<RB = SRB, T = T>,
+    URB: UnsafeRingBufferDeref<RB = SRB>,
 {
     type T = T;
 
@@ -454,9 +410,9 @@ trait UnsafeRingBufferOpsTake: UnsafeRingBufferOps {
 /// RingBufferOpsTake.
 impl<T, SRB, URB> UnsafeRingBufferOpsTake for URB
 where
-    T: Send + Default,
+    T: Default,
     SRB: RingBufferOps<T = T> + 'static,
-    URB: UnsafeRingBufferDeref<RB = SRB, T = T>,
+    URB: UnsafeRingBufferDeref<RB = SRB>,
 {
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T {
         unsafe { std::mem::take(self.get_mut().get_sequence_mut(sequence)) }
@@ -1333,8 +1289,8 @@ impl fmt::Debug for BlockingWaitStrategy {
 
 /// Responsible for ensuring that the caller does not proceed until one or more dependent sequences
 /// have finished working with the subsequent slots.
-trait SequenceBarrier: Send {
-    type T: Send;
+trait SequenceBarrier {
+    type T;
 
     /// Get the current value of the sequence associated with this SequenceBarrier.
     fn get_current(&self) -> SequenceNumber;
@@ -1436,7 +1392,7 @@ trait SequenceBarrierTake: SequenceBarrier {
 /// Split off from SequenceBarrier to reduce unnecessary type parameter requirements for general
 /// users of the SequenceBarrier type, and users of the GenericPublisher type.
 trait PublisherSequenceBarrier {
-    type CSB: SequenceBarrier + ConsumerSequenceBarrier;
+    type CSB: ConsumerSequenceBarrier;
 
     /// Constructs a consumer barrier that is set up to wait on this SequenceBarrier's sequence
     /// before it attempts to process items.
@@ -1459,10 +1415,7 @@ struct SinglePublisherSequenceBarrier<W, RB> {
     cached_available: usize,
 }
 
-impl<W, RB> SinglePublisherSequenceBarrier<W, RB>
-where
-    RB: UnsafeRingBufferOps,
-{
+impl<W, RB> SinglePublisherSequenceBarrier<W, RB> {
     fn new(
         ring_buffer: RB,
         dependencies: Vec<SequenceReader>,
@@ -1556,8 +1509,8 @@ where
 
 impl<W, RB> PublisherSequenceBarrier for SinglePublisherSequenceBarrier<W, RB>
 where
-    W: NotificationWaitStrategy,
-    RB: UnsafeRingBufferOps + Clone,
+    W: Clone,
+    RB: Clone,
 {
     type CSB = SingleConsumerSequenceBarrier<W, RB>;
 
@@ -1584,11 +1537,7 @@ struct SingleConsumerSequenceBarrier<W, RB> {
     cursor: SequenceReader,
 }
 
-impl<W, RB> SingleConsumerSequenceBarrier<W, RB>
-where
-    W: NotificationWaitStrategy,
-    RB: UnsafeRingBufferOps + Clone,
-{
+impl<W, RB> SingleConsumerSequenceBarrier<W, RB> {
     fn new(
         ring_buffer: RB,
         cursor: SequenceReader,
@@ -1677,8 +1626,8 @@ where
 
 impl<W, RB> ConsumerSequenceBarrier for SingleConsumerSequenceBarrier<W, RB>
 where
-    W: NotificationWaitStrategy,
-    RB: UnsafeRingBufferOps + Clone,
+    W: Clone,
+    RB: Clone,
 {
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
@@ -1691,22 +1640,14 @@ where
 }
 
 /// Allows callers to send items through a disruptor pipeline.
-pub trait Publisher<T>: Send
-where
-    T: Send,
-{
+pub trait Publisher<T> {
     /// Sends a single item into the pipeline. The value will be exposed to each consumer downstream
     /// in the pipeline.
     fn publish(&self, value: T);
 }
 
 /// Functions used during the initial setup of the pipeline.
-pub trait PipelineInit<T, C, FC>
-where
-    T: Send + Default,
-    C: Consumer<T>,
-    FC: ConsumerMut<T>,
-{
+pub trait PipelineInit<T, C, FC> {
     /// Creates and returns a single consumer, which will receive items sent through the publisher.
     /// This should only be called once, during setup of the pipeline.
     fn create_single_consumer_pipeline(&mut self) -> FC {
@@ -1720,10 +1661,7 @@ where
 }
 
 /// Provides access Exposes values that are passing through the the pipeline
-pub trait Consumer<T>: Send
-where
-    T: Send,
-{
+pub trait Consumer<T> {
     /// Waits for a single item to become available, then calls the given function to process the
     /// value.
     fn consume<C>(&self, consume_callback: C)
@@ -1732,34 +1670,30 @@ where
 }
 
 /// Consumers that aren't sharing a pipeline stage with other consumers can mutate items.
-pub trait ConsumerMut<T>: Consumer<T>
-where
-    T: Send,
-{
+pub trait ConsumerMut<T>: Consumer<T> {
     /// Waits for the next value to be available, moves it out of the ring buffer, and returns it.
     fn take(&self) -> T;
 }
 
 /// Allows callers to wire up dependencies, then send values down the pipeline
 /// of dependent consumers.
-struct GenericPublisher<SB>
-where
-    SB: SequenceBarrier,
-{
+struct GenericPublisher<SB> {
     sequence_barrier: UnsafeCell<SB>,
 }
 
-impl<SB> GenericPublisher<SB>
-where
-    SB: SequenceBarrier,
-{
+impl<SB> GenericPublisher<SB> {
     /// Generic constructor that works with any UnsafeRingBufferOps implemention
     fn new_common(sb: SB) -> GenericPublisher<SB> {
         GenericPublisher {
             sequence_barrier: UnsafeCell::new(sb),
         }
     }
+}
 
+impl<SB> GenericPublisher<SB>
+where
+    SB: SequenceBarrier,
+{
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
     fn publish(&self, value: SB::T) {
@@ -1778,7 +1712,7 @@ where
 
 impl<SB> GenericPublisher<SB>
 where
-    SB: SequenceBarrier + PublisherSequenceBarrier,
+    SB: SequenceBarrier + PublisherSequenceBarrier<CSB: SequenceBarrier>,
 {
     // TODO: take a list of usize to support parallel consumers. Need to pick a convenient return
     // type. Possible candidates:
@@ -1830,23 +1764,22 @@ where
 }
 
 /// Allows callers to retrieve values from upstream tasks in the pipeline.
-struct GenericSharedConsumer<SB>
-where
-    SB: SequenceBarrier,
-{
+struct GenericSharedConsumer<SB> {
     sequence_barrier: UnsafeCell<SB>,
+}
+
+impl<SB> GenericSharedConsumer<SB> {
+    fn new(sb: SB) -> GenericSharedConsumer<SB> {
+        GenericSharedConsumer {
+            sequence_barrier: UnsafeCell::new(sb),
+        }
+    }
 }
 
 impl<SB> GenericSharedConsumer<SB>
 where
     SB: SequenceBarrier,
 {
-    fn new(sb: SB) -> GenericSharedConsumer<SB> {
-        GenericSharedConsumer {
-            sequence_barrier: UnsafeCell::new(sb),
-        }
-    }
-
     fn consume<C: FnMut(&SB::T)>(&self, mut consume_callback: C) {
         unsafe {
             let sequence_barrier = &mut *self.sequence_barrier.get();
@@ -1892,23 +1825,22 @@ mod generic_publisher_tests {
 
 /// A consumer in the pipeline that doesn't share its stage with any concurrent consumers, allowing
 /// it to have mutable access to the elements it processes.
-struct GenericSingleConsumer<SB>
-where
-    SB: SequenceBarrier,
-{
+struct GenericSingleConsumer<SB> {
     sc: GenericSharedConsumer<SB>,
+}
+
+impl<SB> GenericSingleConsumer<SB> {
+    /// Return a new instance wrapped around a given GenericSharedConsumer instance. In addition to
+    /// existing features, it also allows the caller to take ownership of the items it accesses.
+    fn new(sc: GenericSharedConsumer<SB>) -> GenericSingleConsumer<SB> {
+        GenericSingleConsumer { sc }
+    }
 }
 
 impl<SB> GenericSingleConsumer<SB>
 where
     SB: SequenceBarrier,
 {
-    /// Return a new instance wrapped around a given GenericSharedConsumer instance. In addition to
-    /// existing features, it also allows the caller to take ownership of the items it accesses.
-    fn new(sc: GenericSharedConsumer<SB>) -> GenericSingleConsumer<SB> {
-        GenericSingleConsumer { sc }
-    }
-
     /// See the GenericConsumer.consume method.
     fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) {
         self.sc.consume(consume_callback)
@@ -2055,10 +1987,7 @@ where
 ///
 /// The publisher's availability calculation function was rewritten to correctly handle the second
 /// point, and the wrap boundary was changed to `4*buffer_size` to facilitate the third point.
-struct ResizableRingBufferData<T>
-where
-    T: Send,
-{
+struct ResizableRingBufferData<T> {
     rb_data: BoxedRingBufferData<T>,
     /// When non-null, points to a larger buffer allocated by the publisher to replace this one.
     next: Option<UncheckedUnsafeArc<ResizableRingBufferData<T>>>,
@@ -2066,7 +1995,7 @@ where
 
 impl<T> ResizableRingBufferData<T>
 where
-    T: Default + Send + 'static,
+    T: Default,
 {
     /// Constructs a new ring buffer with the given size.
     fn new(size: usize) -> ResizableRingBufferData<T> {
@@ -2098,10 +2027,7 @@ where
     }
 }
 
-impl<T> RingBufferAsSlice for ResizableRingBufferData<T>
-where
-    T: Send,
-{
+impl<T> RingBufferAsSlice for ResizableRingBufferData<T> {
     type Element = CachePadded<T>;
     type T = T;
 
@@ -2118,18 +2044,12 @@ where
 /// consumers. The consumers retrieve the remaining items from the old buffer until they reach a
 /// flagged element left by the publisher, which signals to them that they should traverse the
 /// pointer and retrieve items from the next buffer from now on.
-struct ResizableRingBufferArc<T>
-where
-    T: Send,
-{
+struct ResizableRingBufferArc<T> {
     d: UncheckedUnsafeArc<ResizableRingBufferData<T>>,
 }
 
 /// Enables the use of a blanket UnsafeRingBufferDeref implementation.
-impl<T> Deref for ResizableRingBufferArc<T>
-where
-    T: Send,
-{
+impl<T> Deref for ResizableRingBufferArc<T> {
     type Target = UncheckedUnsafeArc<ResizableRingBufferData<T>>;
 
     fn deref(&self) -> &Self::Target {
@@ -2138,10 +2058,7 @@ where
 }
 
 /// Enables the use of a blanket UnsafeRingBufferDeref implementation.
-impl<T> DerefMut for ResizableRingBufferArc<T>
-where
-    T: Send,
-{
+impl<T> DerefMut for ResizableRingBufferArc<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.d
     }
@@ -2149,7 +2066,7 @@ where
 
 impl<T> ResizableRingBufferArc<T>
 where
-    T: Default + Send + 'static,
+    T: Default,
 {
     /// Construct a new ResizableRingBuffer with a capacity for `size` elements. As with
     /// RingBuffer, `size` must be a power of two.
@@ -2173,10 +2090,7 @@ where
     }
 }
 
-impl<T> ResizableRingBufferArc<T>
-where
-    T: Send + 'static,
-{
+impl<T> ResizableRingBufferArc<T> {
     /// Returns a ResizableRingBufferArc pointing to the next ResizableRingBufferData.
     ///
     /// # Panics
@@ -2198,10 +2112,7 @@ where
     }
 }
 
-impl<T> Clone for ResizableRingBufferArc<T>
-where
-    T: Send,
-{
+impl<T> Clone for ResizableRingBufferArc<T> {
     /// Copy a reference to the original buffer.
     fn clone(&self) -> ResizableRingBufferArc<T> {
         ResizableRingBufferArc { d: self.d.clone() }
@@ -2300,10 +2211,7 @@ fn test_calculate_available_publisher_resizing() {
 }
 
 /// Resizing variant of SinglePublisherSequenceBarrier.
-struct SingleResizingPublisherSequenceBarrier<T>
-where
-    T: Send,
-{
+struct SingleResizingPublisherSequenceBarrier<T> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
     sb: SinglePublisherSequenceBarrier<
         TimeoutResizeWaitStrategy,
@@ -2311,10 +2219,7 @@ where
     >,
 }
 
-impl<T> SingleResizingPublisherSequenceBarrier<T>
-where
-    T: Send + 'static,
-{
+impl<T> SingleResizingPublisherSequenceBarrier<T> {
     fn new(
         ring_buffer: ResizableRingBufferArc<ReallocationFlag<T>>,
         dependencies: Vec<SequenceReader>,
@@ -2328,7 +2233,7 @@ where
 
 impl<T> SequenceBarrier for SingleResizingPublisherSequenceBarrier<T>
 where
-    T: Default + Send + 'static,
+    T: Default + 'static,
 {
     type T = T;
 
@@ -2439,7 +2344,7 @@ where
 
 impl<T> SequenceBarrierTake for SingleResizingPublisherSequenceBarrier<T>
 where
-    T: Default + Send + 'static,
+    T: Default + 'static,
 {
     unsafe fn take(&mut self) -> T {
         unsafe { self.sb.take().unwrap() }
@@ -2448,7 +2353,7 @@ where
 
 impl<T> PublisherSequenceBarrier for SingleResizingPublisherSequenceBarrier<T>
 where
-    T: Send + 'static,
+    T: 'static,
 {
     type CSB = SingleResizingConsumerSequenceBarrier<T>;
 
@@ -2458,10 +2363,7 @@ where
 }
 
 /// Resizing-aware consumer barrier.
-struct SingleResizingConsumerSequenceBarrier<T>
-where
-    T: Send,
-{
+struct SingleResizingConsumerSequenceBarrier<T> {
     /// Reuse data and constructor from SingleConsumerSequenceBarrier
     cb: SingleConsumerSequenceBarrier<
         TimeoutResizeWaitStrategy,
@@ -2469,10 +2371,7 @@ where
     >,
 }
 
-impl<T> SingleResizingConsumerSequenceBarrier<T>
-where
-    T: Send + 'static,
-{
+impl<T> SingleResizingConsumerSequenceBarrier<T> {
     fn new(
         cb: SingleConsumerSequenceBarrier<
             TimeoutResizeWaitStrategy,
@@ -2481,7 +2380,12 @@ where
     ) -> SingleResizingConsumerSequenceBarrier<T> {
         SingleResizingConsumerSequenceBarrier { cb }
     }
+}
 
+impl<T> SingleResizingConsumerSequenceBarrier<T>
+where
+    T: 'static,
+{
     /// Alters this barrier's sequence to follow the same path that the publisher's took when it
     /// allocated a new buffer. This is necessary when following buffer reallocations to ensure
     /// that downstream consumers take from the same slots that the publisher has written to.
@@ -2555,7 +2459,7 @@ where
 
 impl<T> SequenceBarrier for SingleResizingConsumerSequenceBarrier<T>
 where
-    T: Send + 'static,
+    T: 'static,
 {
     type T = T;
 
@@ -2625,7 +2529,7 @@ where
 
 impl<T> SequenceBarrierTake for SingleResizingConsumerSequenceBarrier<T>
 where
-    T: Default + Send + 'static,
+    T: Default + 'static,
 {
     unsafe fn take(&mut self) -> T {
         // SAFETY: caller has established that at least one item is available.
@@ -2643,7 +2547,7 @@ where
 
 impl<T> ConsumerSequenceBarrier for SingleResizingConsumerSequenceBarrier<T>
 where
-    T: Send + 'static,
+    T: 'static,
 {
     fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T> {
         SingleResizingConsumerSequenceBarrier {
@@ -2850,37 +2754,21 @@ impl fmt::Debug for TimeoutResizeWaitStrategy {
     }
 }
 
-pub struct SinglePublisher<T, const N: usize, W>
-where
-    T: Send + 'static,
-    usize: PowerOfTwoUsize<N>,
-    W: NotificationWaitStrategy,
-{
+pub struct SinglePublisher<T, const N: usize, W> {
     p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
 
-pub struct SharedConsumer<T, const N: usize, W>
-where
-    T: Send + 'static,
-    usize: PowerOfTwoUsize<N>,
-    W: NotificationWaitStrategy,
-{
+pub struct SharedConsumer<T, const N: usize, W> {
     c: GenericSharedConsumer<SingleConsumerSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
 
-pub struct SingleConsumer<T, const N: usize, W>
-where
-    T: Send + 'static,
-    usize: PowerOfTwoUsize<N>,
-    W: NotificationWaitStrategy,
-{
+pub struct SingleConsumer<T, const N: usize, W> {
     c: GenericSingleConsumer<SingleConsumerSequenceBarrier<W, RingBufferArc<T, N>>>,
 }
 
 impl<T, const N: usize, W> SinglePublisher<T, N, W>
 where
-    T: Send + Default,
-    usize: PowerOfTwoUsize<N>,
+    T: Default,
     W: NotificationWaitStrategy,
 {
     /// Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
@@ -2896,7 +2784,7 @@ where
 impl<T, const N: usize, W> PipelineInit<T, SharedConsumer<T, N, W>, SingleConsumer<T, N, W>>
     for SinglePublisher<T, N, W>
 where
-    T: Send + Default,
+    T: 'static,
     usize: PowerOfTwoUsize<N>,
     W: NotificationWaitStrategy,
 {
@@ -2913,7 +2801,7 @@ where
 
 impl<T, const N: usize, W> Publisher<T> for SinglePublisher<T, N, W>
 where
-    T: Send,
+    T: 'static,
     usize: PowerOfTwoUsize<N>,
     W: NotificationWaitStrategy,
 {
@@ -2926,7 +2814,7 @@ where
 
 impl<T, const N: usize, W> Consumer<T> for SharedConsumer<T, N, W>
 where
-    T: Send,
+    T: 'static,
     usize: PowerOfTwoUsize<N>,
     W: NotificationWaitStrategy,
 {
@@ -2940,7 +2828,7 @@ where
 
 impl<T, const N: usize, W> Consumer<T> for SingleConsumer<T, N, W>
 where
-    T: Send,
+    T: 'static,
     usize: PowerOfTwoUsize<N>,
     W: NotificationWaitStrategy,
 {
@@ -2954,7 +2842,7 @@ where
 
 impl<T, const N: usize, W> ConsumerMut<T> for SingleConsumer<T, N, W>
 where
-    T: Send + Default,
+    T: Default + 'static,
     usize: PowerOfTwoUsize<N>,
     W: NotificationWaitStrategy,
 {
@@ -2963,31 +2851,22 @@ where
     }
 }
 
-pub struct SingleResizingPublisher<T>
-where
-    T: Default + Send + 'static,
-{
+pub struct SingleResizingPublisher<T> {
     p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T>>,
 }
 
-pub struct SharedResizingConsumer<T>
-where
-    T: Send + 'static,
-{
+pub struct SharedResizingConsumer<T> {
     c: GenericSharedConsumer<SingleResizingConsumerSequenceBarrier<T>>,
 }
 
-pub struct SingleResizingConsumer<T>
-where
-    T: Send + 'static,
-{
+pub struct SingleResizingConsumer<T> {
     c: GenericSingleConsumer<SingleResizingConsumerSequenceBarrier<T>>,
 }
 
 /// Specialization for resizable ring buffer.
 impl<T> SingleResizingPublisher<T>
 where
-    T: Default + Send + 'static,
+    T: Default,
 {
     /// Create a new GenericPublisher using a resizable ring buffer, specifying the timeout after
     /// which the publisher will allocate a larger buffer to publish items into.
@@ -3031,7 +2910,7 @@ where
 impl<T> PipelineInit<T, SharedResizingConsumer<T>, SingleResizingConsumer<T>>
     for SingleResizingPublisher<T>
 where
-    T: Send + 'static + Default,
+    T: Default + 'static,
 {
     fn create_consumer_pipeline(
         &mut self,
@@ -3049,7 +2928,7 @@ where
 
 impl<T> Publisher<T> for SingleResizingPublisher<T>
 where
-    T: Default + Send + 'static,
+    T: Default + 'static,
 {
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
@@ -3060,7 +2939,7 @@ where
 
 impl<T> Consumer<T> for SharedResizingConsumer<T>
 where
-    T: Send + 'static,
+    T: 'static,
 {
     fn consume<C>(&self, consume_callback: C)
     where
@@ -3072,7 +2951,7 @@ where
 
 impl<T> Consumer<T> for SingleResizingConsumer<T>
 where
-    T: Send + 'static,
+    T: 'static,
 {
     fn consume<C>(&self, consume_callback: C)
     where
@@ -3084,7 +2963,7 @@ where
 
 impl<T> ConsumerMut<T> for SingleResizingConsumer<T>
 where
-    T: Default + Send + 'static,
+    T: Default + 'static,
 {
     fn take(&self) -> T {
         self.c.take()
