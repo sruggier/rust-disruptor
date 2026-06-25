@@ -1403,41 +1403,21 @@ trait ConsumerSequenceBarrier {
     fn new_consumer_barrier(&self) -> Self;
 }
 
-/// Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
-/// publisher.
-struct SinglePublisherSequenceBarrier<W, RB> {
+/// A common definition of the fields that are shared between non-concurrent publisher or consumer
+/// pipeline stages.
+struct CommonSingleSequenceBarrier<RB, W> {
     ring_buffer: RB,
     sequence: SequenceOwner,
     dependencies: Vec<SequenceReader>,
-    wait_strategy: W,
     /// Contains the number of available items as of the last time the dependent sequence values were
     /// retrieved.
     cached_available: usize,
+    wait_strategy: W,
 }
 
-impl<W, RB> SinglePublisherSequenceBarrier<W, RB> {
-    fn new(
-        ring_buffer: RB,
-        dependencies: Vec<SequenceReader>,
-        wait_strategy: W,
-    ) -> SinglePublisherSequenceBarrier<W, RB> {
-        SinglePublisherSequenceBarrier {
-            ring_buffer,
-            sequence: SequenceOwner::new(),
-            dependencies,
-            wait_strategy,
-            cached_available: 0,
-        }
-    }
-}
-
-impl<W, RB> SequenceBarrier for SinglePublisherSequenceBarrier<W, RB>
-where
-    W: NotificationWaitStrategy,
-    RB: UnsafeRingBufferOps,
-{
-    type T = RB::T;
-
+/// A common implementation of functions that can be shared between publisher and
+/// consumer types.
+impl<RB, W> CommonSingleSequenceBarrier<RB, W> {
     fn get_current(&self) -> SequenceNumber {
         self.sequence.get_owned()
     }
@@ -1456,29 +1436,19 @@ where
     fn get_sequence(&self) -> SequenceReader {
         self.sequence.clone_immut()
     }
+}
 
-    fn next_n_real(&mut self, batch_size: usize) -> usize {
-        let current_sequence = self.sequence.get_owned();
-        let available = self.wait_strategy.wait_for_dependencies(
-            batch_size,
-            current_sequence,
-            self.dependencies.as_slice(),
-            self.ring_buffer.len(),
-            &calculate_available_publisher,
-        );
-        available
-    }
-
-    fn release_n_real(&mut self, batch_size: usize) {
-        self.sequence
-            .advance_and_flush(batch_size, self.ring_buffer.len());
-        self.wait_strategy.notify_all_waiters();
-    }
-
+/// A common implementation of functions that can be shared between publisher and
+/// consumer types, where the [`UnsafeRingBufferOps`] trait is required.
+impl<RB, W> CommonSingleSequenceBarrier<RB, W>
+where
+    RB: UnsafeRingBufferOps,
+{
     fn len(&self) -> usize {
         self.ring_buffer.len()
     }
 
+    /// See [`SequenceBarrier::set`].
     unsafe fn set(&mut self, value: RB::T) {
         unsafe {
             let current_sequence = self.get_current();
@@ -1486,11 +1456,103 @@ where
         }
     }
 
+    /// See [`SequenceBarrier::get`].
     unsafe fn get(&mut self) -> &RB::T {
         unsafe {
             let current_sequence = self.get_current();
             self.ring_buffer.get(current_sequence)
         }
+    }
+}
+
+/// A common implementation of functions that can be shared between publisher and
+/// consumer types, where the [`UnsafeRingBufferOpsTake`] trait is required.
+impl<RB, W> CommonSingleSequenceBarrier<RB, W>
+where
+    RB: UnsafeRingBufferOpsTake,
+{
+    /// See [`SequenceBarrierTake::take`].
+    unsafe fn take(&mut self) -> RB::T {
+        unsafe {
+            let current_sequence = self.get_current();
+            self.ring_buffer.take(current_sequence)
+        }
+    }
+}
+
+/// Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
+/// publisher.
+struct SinglePublisherSequenceBarrier<W, RB> {
+    sb: CommonSingleSequenceBarrier<RB, W>,
+}
+
+impl<W, RB> SinglePublisherSequenceBarrier<W, RB> {
+    fn new(ring_buffer: RB, dependencies: Vec<SequenceReader>, wait_strategy: W) -> Self {
+        Self {
+            sb: CommonSingleSequenceBarrier {
+                ring_buffer,
+                sequence: SequenceOwner::new(),
+                dependencies,
+                cached_available: 0,
+                wait_strategy,
+            },
+        }
+    }
+}
+
+impl<W, RB> SequenceBarrier for SinglePublisherSequenceBarrier<W, RB>
+where
+    W: NotificationWaitStrategy,
+    RB: UnsafeRingBufferOps,
+{
+    type T = RB::T;
+
+    fn get_current(&self) -> SequenceNumber {
+        self.sb.get_current()
+    }
+    fn set_cached_available(&mut self, available: usize) {
+        self.sb.set_cached_available(available);
+    }
+    fn get_cached_available(&self) -> usize {
+        self.sb.get_cached_available()
+    }
+    fn get_dependencies(&self) -> &[SequenceReader] {
+        self.sb.get_dependencies()
+    }
+    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
+        self.sb.set_dependencies(dependencies);
+    }
+    fn get_sequence(&self) -> SequenceReader {
+        self.sb.get_sequence()
+    }
+
+    fn next_n_real(&mut self, batch_size: usize) -> usize {
+        let current_sequence = self.sb.sequence.get_owned();
+        let available = self.sb.wait_strategy.wait_for_dependencies(
+            batch_size,
+            current_sequence,
+            self.sb.dependencies.as_slice(),
+            self.len(),
+            &calculate_available_publisher,
+        );
+        available
+    }
+
+    fn release_n_real(&mut self, batch_size: usize) {
+        self.sb.sequence.advance_and_flush(batch_size, self.len());
+        self.sb.wait_strategy.notify_all_waiters();
+    }
+
+    fn len(&self) -> usize {
+        self.sb.len()
+    }
+
+    unsafe fn set(&mut self, value: RB::T) {
+        unsafe { self.sb.set(value) }
+    }
+
+    unsafe fn get(&mut self) -> &RB::T {
+        unsafe { self.sb.get() }
     }
 }
 
@@ -1502,7 +1564,7 @@ where
     unsafe fn take(&mut self) -> RB::T {
         unsafe {
             let current_sequence = self.get_current();
-            self.ring_buffer.take(current_sequence)
+            self.sb.ring_buffer.take(current_sequence)
         }
     }
 }
@@ -1516,14 +1578,14 @@ where
 
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
-            self.ring_buffer.clone(),
+            self.sb.ring_buffer.clone(),
             // Our sequence is the publisher's sequence (aka the cursor)
-            self.sequence.clone_immut(),
+            self.sb.sequence.clone_immut(),
             // The first stage consumers wait on the publisher's sequence, which is provided to all
             // consumers regardless of their position in the pipeline. It's not necessary to provide a
             // second reference to the same sequence, so an empty array is provided instead.
             Vec::new(),
-            self.wait_strategy.clone(),
+            self.sb.wait_strategy.clone(),
         )
     }
 }
@@ -1532,7 +1594,7 @@ where
 /// consumers, but all consumers will process all events. This is unsuitable for when a
 /// load-balancing arrangement is desired.
 struct SingleConsumerSequenceBarrier<W, RB> {
-    sb: SinglePublisherSequenceBarrier<W, RB>,
+    sb: CommonSingleSequenceBarrier<RB, W>,
     /// A reference to the publisher's sequence.
     cursor: SequenceReader,
 }
@@ -1545,7 +1607,13 @@ impl<W, RB> SingleConsumerSequenceBarrier<W, RB> {
         wait_strategy: W,
     ) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier {
-            sb: SinglePublisherSequenceBarrier::new(ring_buffer, dependencies, wait_strategy),
+            sb: CommonSingleSequenceBarrier {
+                ring_buffer,
+                cached_available: 0,
+                sequence: SequenceOwner::new(),
+                dependencies,
+                wait_strategy,
+            },
             cursor,
         }
     }
@@ -2283,11 +2351,11 @@ where
         // NOTE: the returned availability value is always 1 less than the actual number of
         // available slots. The extra slot is reserved for use below with the reallocate
         // function.
-        let current_size = self.sb.ring_buffer.len();
-        let mut available = self.sb.wait_strategy.try_wait_for_consumers(
+        let current_size = self.sb.len();
+        let mut available = self.sb.sb.wait_strategy.try_wait_for_consumers(
             batch_size,
             self.get_current(),
-            self.sb.dependencies.as_slice(),
+            self.sb.sb.dependencies.as_slice(),
             current_size,
             &calculate_available_publisher_resizing,
         );
@@ -2305,7 +2373,7 @@ where
             // Unwrapping the publisher's sequence ensures that availablity calculations remain
             // correct throughout the reallocation transition.
             let old_sequence = self.get_current();
-            self.sb.sequence.unwrap(current_size);
+            self.sb.sb.sequence.unwrap(current_size);
             let unwrapped_sequence = self.get_current();
 
             // Resizing shouldn't be a normal part of a program's operation. Alert the user, so that
@@ -2323,7 +2391,7 @@ where
             unsafe {
                 // Signal to consumers that there's a larger buffer to transition to.
                 self.sb.set(ReallocationFlag::BufferReallocated);
-                self.sb.ring_buffer.reallocate(new_size);
+                self.sb.sb.ring_buffer.reallocate(new_size);
             }
 
             // Modify the cached availability value to facilitate usage of the entire newly
