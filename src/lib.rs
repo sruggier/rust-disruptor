@@ -2346,7 +2346,9 @@ where
         self.sb.set_cached_available(available)
     }
     fn get_cached_available(&self) -> usize {
-        self.sb.get_cached_available()
+        // Don't expose the reserved slot. This ensures the default next_n implementation will wait
+        // correctly in order to maintain the extra slot.
+        self.sb.get_cached_available().saturating_sub(1)
     }
     fn release_n_real(&mut self, batch_size: usize) {
         self.sb.release_n_real(batch_size)
@@ -2381,19 +2383,19 @@ where
     /// Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
     /// policy requests that.
     fn next_n_real(&mut self, batch_size: usize) -> usize {
-        // NOTE: the returned availability value is always 1 less than the actual number of
-        // available slots. The extra slot is reserved for use below with the reallocate
-        // function.
+        // Always leave an extra slot available, for use being marked if we decide to allocate a
+        // larger buffer.
+        let needed_size = batch_size + 1;
         let current_size = self.sb.len();
         let mut available = self.sb.sb.wait_strategy.try_wait_for_consumers(
-            batch_size,
+            needed_size,
             self.get_current(),
             self.sb.sb.dependencies.as_slice(),
             current_size,
             &calculate_available_publisher_resizing,
         );
 
-        if available < batch_size {
+        if available < needed_size {
             // The wait strategy timed out, so allocate a new buffer here.
 
             // Make the new buffer twice as large
@@ -2436,7 +2438,7 @@ where
             // buffer_size items, and that will require it to wait for consumers to catch up.
             // Alternatively, if consumers don't catch up, the publisher may reallocate another
             // buffer, but in doing so, it will continue to avoid wrapping its sequence number.
-            available = new_size - 1;
+            available = new_size;
         }
 
         available
@@ -2510,7 +2512,8 @@ where
         // automatically batch both reads of gating sequence values, and atomic updates of their own
         // sequence value, in between calls.
         let unwrapped_sequence = self.get_current().value();
-        let current_available = self.get_cached_available();
+        // Use the real availability value, including the reserved slot
+        let current_available = self.cb.get_cached_available();
         let unwrap_difference = unwrapped_sequence - original_sequence;
         let mut actual_cached_available = current_available.wrapping_sub(unwrap_difference);
         // The current cached availability value may be less than the difference if the consumer's
@@ -2529,7 +2532,7 @@ where
             original_sequence,
             unwrapped_sequence
         );
-        self.set_cached_available(actual_cached_available);
+        self.cb.set_cached_available(actual_cached_available);
     }
 
     /// Check for a reallocation flag in the slot pointed to by `sequence`. If so, adjust our
@@ -2703,10 +2706,11 @@ impl Clone for TimeoutResizeWaitStrategy {
 }
 
 impl TimeoutResizeWaitStrategy {
-    /// Private helper function that handles waiting and timing out, so
-    /// [`try_wait_for_consumers`](TimeoutResizeWaitStrategy::try_wait_for_consumers), can focus on
-    /// reserving an extra slot.
-    fn try_wait_for_consumers_real<F>(
+    /// Similar to [`wait_for_dependencies`](PollingWaitStrategy::wait_for_dependencies), except
+    /// that it may finish before the requested number of slots are available, returning a value
+    /// that is less than `n`. If this happens, the caller can reallocate a larger buffer and start
+    /// publishing items into that buffer instead of waiting.
+    fn try_wait_for_consumers<F>(
         &self,
         n: usize,
         waiting_sequence: SequenceNumber,
@@ -2768,38 +2772,6 @@ impl TimeoutResizeWaitStrategy {
         }
         // If the timeout was reached, this will be less than n
         available
-    }
-
-    /// This function is similar to
-    /// [`wait_for_dependencies`](PollingWaitStrategy::wait_for_dependencies), except that it may
-    /// finish before the requested number of slots are available, returning a value that is less
-    /// than `n`. If this happens, the caller can reallocate a larger buffer and start publishing
-    /// items into that buffer instead of waiting. It also maintains a single extra slot in reserve,
-    /// for use in communicating to consumers that a reallocation has occurred.
-    fn try_wait_for_consumers<F>(
-        &self,
-        mut n: usize,
-        waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
-        buffer_size: usize,
-        calculate_available: &F,
-    ) -> usize
-    where
-        F: AvailabilityFn,
-    {
-        // Always leave an extra slot available, for use being marked if we decide to allocate a
-        // larger buffer.
-        n += 1;
-        let available = self.try_wait_for_consumers_real(
-            n,
-            waiting_sequence,
-            dependencies,
-            buffer_size,
-            calculate_available,
-        );
-
-        // Don't expose the extra slot to callers, so it remains unused
-        available.saturating_sub(1)
     }
 }
 
