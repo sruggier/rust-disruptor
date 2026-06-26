@@ -49,3 +49,4 @@ missing_safety_doc = "deny"
 
 [dev-dependencies]
 criterion = "0.8.2"
+test-log = "0.2.21"

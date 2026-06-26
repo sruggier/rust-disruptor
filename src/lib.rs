@@ -419,11 +419,13 @@ where
     }
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn ring_buffer_size_must_be_power_of_two_1() {
     RingBufferArc::<(), 1>::new();
 }
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn ring_buffer_size_must_be_power_of_two_8() {
     RingBufferArc::<(), 8>::new();
 }
@@ -453,7 +455,8 @@ fn calculate_available_consumer(
     available
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_calculate_available_consumer() {
     // A consumer waiting for publisher or earlier consumer
     assert!(1 == calculate_available_consumer(SequenceNumber(13), SequenceNumber(12), 8));
@@ -492,7 +495,8 @@ fn calculate_available_publisher(
     available
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_calculate_available_publisher() {
     // Publisher waiting for consumer
     assert!(8 == calculate_available_publisher(SequenceNumber(17), SequenceNumber(17), 8));
@@ -639,7 +643,8 @@ fn log2(mut power_of_2: usize) -> usize {
 }
 
 /// Ensure sequences correctly support the maximum buffer size.
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_sequence_overflow() {
     // The maximum buffer size is (usize::MAX+1) / wrap_boundary(1) (for example, 2^30 with the
     // current boundary of 4*buffer_size). For that size, wrap_boundary(buffer_size) - 1 would
@@ -685,7 +690,8 @@ impl SequenceReader {
     }
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_sequencereader() {
     // For the purposes of this test, it doessn't matter what the buffer size is, as long as it's
     // larger than the tested sequence numbers
@@ -1868,7 +1874,7 @@ mod generic_publisher_tests {
         wrap_boundary,
     };
 
-    #[test]
+    #[test_log::test]
     fn send_single_value() {
         let mut publisher = SinglePublisher::<isize, 1, SpinWaitStrategy>::new(SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
@@ -1877,7 +1883,7 @@ mod generic_publisher_tests {
             assert!(*value == 1);
         });
     }
-    #[test]
+    #[test_log::test]
     fn send_single_value_via_take() {
         let mut publisher = SinglePublisher::<isize, 1, SpinWaitStrategy>::new(SpinWaitStrategy);
         let consumer = publisher.create_single_consumer_pipeline();
@@ -1887,7 +1893,7 @@ mod generic_publisher_tests {
         assert_eq!(received_value, value);
     }
 
-    #[test]
+    #[test_log::test]
     fn test_sequence_wrapping() {
         const CAPACITY: usize = 8;
         let mut publisher =
@@ -2212,7 +2218,8 @@ impl<T> Clone for ResizableRingBufferArc<T> {
     }
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_resizeable_ring_buffer() {
     // General smoke test
     let mut publisher_rb = ResizableRingBufferArc::<ReallocationFlag<usize>>::new(2);
@@ -2283,7 +2290,8 @@ fn calculate_available_publisher_resizing(
     available
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_calculate_available_publisher_resizing() {
     // Test a few in sequence:
     let test =
@@ -3069,7 +3077,7 @@ mod resizing_tests {
         Consumer, ConsumerMut, PipelineInit, Publisher, SingleResizingPublisher, wrap_boundary,
     };
 
-    #[test]
+    #[test_log::test]
     fn resizing() {
         const CAPACITY: usize = 8;
         let mut publisher = SingleResizingPublisher::new_resize_after_timeout(CAPACITY);
