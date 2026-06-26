@@ -1863,8 +1863,9 @@ where
 
 #[cfg(test)]
 mod generic_publisher_tests {
-    use super::{
+    use crate::{
         Consumer, ConsumerMut, PipelineInit, Publisher, SinglePublisher, SpinWaitStrategy,
+        wrap_boundary,
     };
 
     #[test]
@@ -1884,6 +1885,30 @@ mod generic_publisher_tests {
         publisher.publish(value);
         let received_value = consumer.take();
         assert_eq!(received_value, value);
+    }
+
+    #[test]
+    fn test_sequence_wrapping() {
+        const CAPACITY: usize = 8;
+        let mut publisher =
+            SinglePublisher::<isize, CAPACITY, SpinWaitStrategy>::new(SpinWaitStrategy);
+        let mut next_published_item = 1;
+        let consumer = publisher.create_single_consumer_pipeline();
+        let mut next_consumed_item = 1;
+
+        // Fill the buffer
+        for _ in 0..(CAPACITY as isize) {
+            publisher.publish(next_published_item);
+            next_published_item += 1;
+        }
+
+        // Increase the sequences, one at a time, until they both wrap.
+        for _ in 0..(wrap_boundary(CAPACITY)) {
+            assert!(next_consumed_item == consumer.take());
+            next_consumed_item += 1;
+            publisher.publish(next_published_item);
+            next_published_item += 1;
+        }
     }
 
     // TODO: test that dependencies hold true by setting up a chain, grabbing a list of timestamps
