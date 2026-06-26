@@ -22,16 +22,16 @@ where
     b.iter_custom(move |iters| {
         let mut total_time = Duration::ZERO;
         for _i in 0..iters {
-            let latency_start = Instant::now();
-            black_box(routine());
-            total_time += latency_start.elapsed();
-
-            // Pause for 1 µs after each measurement, to show the worst-case latency from each
+            // Pause for 1 µs before each measurement, to show the worst-case latency from each
             // wait strategy.
             let pause_start = Instant::now();
             while pause_start.elapsed() < PAUSE_DURATION {
                 yield_now();
             }
+
+            let latency_start = Instant::now();
+            black_box(routine());
+            total_time += latency_start.elapsed();
         }
         total_time
     });
