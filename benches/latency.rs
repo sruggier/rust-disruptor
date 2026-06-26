@@ -17,7 +17,9 @@ fn iter_latency<O, R>(b: &mut Bencher, mut routine: R)
 where
     R: FnMut() -> O,
 {
-    const PAUSE_DURATION: Duration = Duration::from_micros(1);
+    // Chosen using cargo llvm-cov to verify that the relevant wait strategy code paths are properly
+    // exercised the vast majority of the time.
+    const PAUSE_DURATION: Duration = Duration::from_micros(100);
 
     b.iter_custom(move |iters| {
         let mut total_time = Duration::ZERO;
