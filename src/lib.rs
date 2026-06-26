@@ -3062,3 +3062,54 @@ where
         self.c.take()
     }
 }
+
+#[cfg(test)]
+mod resizing_tests {
+    use crate::{
+        Consumer, ConsumerMut, PipelineInit, Publisher, SingleResizingPublisher, wrap_boundary,
+    };
+
+    #[test]
+    fn resizing() {
+        const CAPACITY: usize = 8;
+        let mut publisher = SingleResizingPublisher::new_resize_after_timeout(CAPACITY);
+        let (mut consumers_list, final_consumer) = publisher.create_consumer_pipeline(2);
+        let consumer = consumers_list.pop().unwrap();
+
+        let mut next_item_publish = 1;
+        let mut next_item_consume = 1;
+        let mut next_item_take = 1;
+
+        // Test several simultaneously pending reallocations
+        const MAX_CAPACITY: usize = CAPACITY * 2 * 2 * 2;
+        const ITEMS_IN_FLIGHT: usize = MAX_CAPACITY + 1;
+        #[allow(clippy::explicit_counter_loop)]
+        for _ in 0..ITEMS_IN_FLIGHT {
+            publisher.publish(next_item_publish);
+            next_item_publish += 1;
+        }
+        for _ in 0..ITEMS_IN_FLIGHT {
+            consumer.consume(|item| {
+                assert!(*item == next_item_consume);
+                next_item_consume += 1;
+            });
+        }
+        for _ in 0..ITEMS_IN_FLIGHT {
+            assert!(next_item_take == final_consumer.take());
+            next_item_take += 1;
+        }
+
+        // Also test wrapping in publisher availability calculation, at some level, by running all
+        // three stages in lockstep with each other.
+        for _ in 0..wrap_boundary(MAX_CAPACITY) {
+            publisher.publish(next_item_publish);
+            next_item_publish += 1;
+            consumer.consume(|item| {
+                assert!(*item == next_item_consume);
+                next_item_consume += 1;
+            });
+            assert!(next_item_take == final_consumer.take());
+            next_item_take += 1;
+        }
+    }
+}
