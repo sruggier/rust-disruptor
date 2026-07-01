@@ -1584,13 +1584,13 @@ where
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
             self.sb.ring_buffer.clone(),
-            // Our sequence is the publisher's sequence (aka the cursor)
-            self.sb.sequence.clone_immut(),
             // The first stage consumers wait on the publisher's sequence, which is provided to all
             // consumers regardless of their position in the pipeline. It's not necessary to provide a
             // second reference to the same sequence, so an empty array is provided instead.
             Vec::new(),
             self.sb.wait_strategy.clone(),
+            // Our sequence is the publisher's sequence (aka the cursor)
+            self.sb.sequence.clone_immut(),
         )
     }
 }
@@ -1607,9 +1607,9 @@ struct SingleConsumerSequenceBarrier<W, RB> {
 impl<W, RB> SingleConsumerSequenceBarrier<W, RB> {
     fn new(
         ring_buffer: RB,
-        cursor: SequenceReader,
         dependencies: Vec<SequenceReader>,
         wait_strategy: W,
+        cursor: SequenceReader,
     ) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier {
             sb: CommonSingleSequenceBarrier {
@@ -1705,9 +1705,9 @@ where
     fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier::new(
             self.sb.ring_buffer.clone(),
-            self.cursor.clone_immut(),
             vec![self.sb.sequence.clone_immut()],
             self.sb.wait_strategy.clone(),
+            self.cursor.clone_immut(),
         )
     }
 }
