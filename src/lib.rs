@@ -104,6 +104,18 @@ impl SequenceNumber {
         let SequenceNumber(value) = self;
         value
     }
+
+    /// Performs a subtraction, checking for overflow and unwrapping with respect to the given
+    /// wrap_boundary. If wrap_boundary is 0, the subtraction will wrap across usize::MAX.
+    fn wrapping_sub(self, rhs: usize, wrap_boundary: usize) -> SequenceNumber {
+        let mut value = self.0;
+        if rhs > self.0 {
+            value = value.wrapping_add(wrap_boundary);
+        }
+        // use a normal subtraction here, opting into overflow checks in debug mode.
+        value = value.wrapping_sub(rhs);
+        SequenceNumber(value)
+    }
 }
 
 /// Returns the number at which sequence values will be wrapped back to 0 using a mod operation.
@@ -541,12 +553,16 @@ fn common_sequence_owner_get(
 
 impl SequenceOwner {
     /// Allocates a new sequence.
-    fn new() -> SequenceOwner {
+    fn new() -> Self {
+        Self::new_from_sequence(SequenceNumber(SEQUENCE_INITIAL))
+    }
+
+    fn new_from_sequence(sequence: SequenceNumber) -> Self {
         SequenceOwner {
             value_arc: UncheckedUnsafeArc::new(CachePadded::new(AtomicUsize::new(
-                SEQUENCE_INITIAL,
+                sequence.value(),
             ))),
-            private_value: SEQUENCE_INITIAL,
+            private_value: sequence.value(),
         }
     }
 
@@ -1365,15 +1381,6 @@ trait SequenceBarrier {
     /// Same as `release_n`,but without caching. This is called every time release_n is called.
     fn release_n_real(&mut self, batch_size: usize);
 
-    /// Returns a read-only reference to this barrier's sequence number.
-    fn get_sequence(&self) -> SequenceReader;
-
-    /// Returns a borrowed pointer to the dependency list.
-    fn get_dependencies(&self) -> &[SequenceReader];
-
-    /// Assign a new set of dependencies to this barrier.
-    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>);
-
     // Ring buffer related operations
 
     /// Returns the size of the underlying ring buffer.
@@ -1401,18 +1408,14 @@ trait SequenceBarrierTake: SequenceBarrier {
     unsafe fn take(&mut self) -> Self::T;
 }
 
-/// Split off from SequenceBarrier to reduce unnecessary type parameter requirements for general
-/// users of the SequenceBarrier type, and users of the GenericPublisher type.
-trait PublisherSequenceBarrier {
-    type CSB: ConsumerSequenceBarrier;
+pub trait InsertSingleConsumer {
+    type SingleConsumer;
 
-    /// Constructs a consumer barrier that is set up to wait on this SequenceBarrier's sequence
-    /// before it attempts to process items.
-    fn new_consumer_barrier(&self) -> Self::CSB;
-}
-
-trait ConsumerSequenceBarrier {
-    fn new_consumer_barrier(&self) -> Self;
+    /// Adds a new pipeline stage, consisting of a single consumer that has exclusive access to the
+    /// items it processes. The new consumer waits for elements to be released by whatever
+    /// dependencies self was previously waiting on, while self now depends on the new consumer to
+    /// release elements.
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer;
 }
 
 /// A common definition of the fields that are shared between non-concurrent publisher or consumer
@@ -1438,15 +1441,6 @@ impl<RB, W> CommonSingleSequenceBarrier<RB, W> {
     }
     fn get_cached_available(&self) -> usize {
         self.cached_available
-    }
-    fn get_dependencies(&self) -> &[SequenceReader] {
-        self.dependencies.as_slice()
-    }
-    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
-        self.dependencies = dependencies;
-    }
-    fn get_sequence(&self) -> SequenceReader {
-        self.sequence.clone_immut()
     }
 }
 
@@ -1512,6 +1506,39 @@ impl<W, RB> SinglePublisherSequenceBarrier<W, RB> {
     }
 }
 
+impl<W, RB> SinglePublisherSequenceBarrier<W, RB>
+where
+    RB: UnsafeRingBufferOps,
+{
+    fn poll(&mut self) {
+        self.sb.cached_available = calculate_available_list(
+            self.sb.sequence.get_owned(),
+            self.sb.dependencies.as_slice(),
+            self.sb.len(),
+            &calculate_available_publisher,
+        );
+    }
+
+    /// Returns the earliest sequence that may not yet be handled by the rest of the pipeline.
+    ///
+    /// This is used in the insertion of new consumers as their initial sequence number.
+    fn calculate_earliest_consumer_sequence(&mut self) -> SequenceNumber {
+        if self.sb.dependencies.is_empty() {
+            SequenceNumber(SEQUENCE_INITIAL)
+        } else {
+            // Poll dependencies once, to ensure the latest possible information is used in this
+            // calculation.
+            self.poll();
+
+            let slots_in_progress = self.sb.len() - self.sb.cached_available;
+            self.sb
+                .sequence
+                .get_owned()
+                .wrapping_sub(slots_in_progress, wrap_boundary(self.sb.len()))
+        }
+    }
+}
+
 impl<W, RB> SequenceBarrier for SinglePublisherSequenceBarrier<W, RB>
 where
     W: NotificationWaitStrategy,
@@ -1527,15 +1554,6 @@ where
     }
     fn get_cached_available(&self) -> usize {
         self.sb.get_cached_available()
-    }
-    fn get_dependencies(&self) -> &[SequenceReader] {
-        self.sb.get_dependencies()
-    }
-    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
-        self.sb.set_dependencies(dependencies);
-    }
-    fn get_sequence(&self) -> SequenceReader {
-        self.sb.get_sequence()
     }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
@@ -1581,24 +1599,65 @@ where
     }
 }
 
-impl<W, RB> PublisherSequenceBarrier for SinglePublisherSequenceBarrier<W, RB>
+impl<W, RB> InsertSingleConsumer for SinglePublisherSequenceBarrier<W, RB>
 where
     W: Clone,
-    RB: Clone,
+    RB: UnsafeRingBufferOps + Clone,
 {
-    type CSB = SingleConsumerSequenceBarrier<W, RB>;
+    type SingleConsumer = SingleConsumerSequenceBarrier<W, RB>;
 
-    fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
-        SingleConsumerSequenceBarrier::new(
+    /// Insert a new consumer.
+    ///
+    /// # Behaviour while racing with existing consumers
+    ///
+    /// While most users will want to call this before emitting any events into the pipeline, it's
+    /// safe to call after passing the consumer handles to other threads, even while events are
+    /// partially handled by the rest of the pipeline. However, the behaviour is non-deterministic,
+    /// for now.
+    ///
+    /// Intuitively, the least surprising behaviour would arguably be for the newly inserted
+    /// consumer to only handle events that are inserted after the consumer was inserted. However,
+    /// that's not supported by the current availability calculation algorithm.
+    ///
+    /// Instead, the implementation settles for the next best thing, by reducing the sequence just
+    /// enough to guarantee that it'll be less than or equal to the sequence(s) of the previous
+    /// stage in the pipeline. This means that the newly inserted consumer will process any items
+    /// that were previously inserted into the pipeline, but not yet observed by the publisher to
+    /// be fully handled as of when the new consumer is inserted.
+    ///
+    /// It's possible to block until the pipeline is flushed, if there's a use case that would
+    /// benefit from that, or it may be possible to make the availability calculation a bit more
+    /// complicated in order to make this work.
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        let new_sequence = self.calculate_earliest_consumer_sequence();
+
+        let my_dependencies = &mut self.sb.dependencies;
+        let dependencies = if my_dependencies.is_empty() {
+            // This is the first addition to the pipeline, so use this publisher's sequence as its
+            // dependency.
+            vec![self.sb.sequence.clone_immut()]
+        } else {
+            // A newly inserted consumer needs to wait for what was previously the last stage in the
+            // pipeline, so give the new consumer the existing dependency list.
+            std::mem::take(my_dependencies)
+        };
+        // my_dependencies is an empty Vec now, to be populated with a reference to the new
+        // consumer's sequence.
+
+        let new_consumer = SingleConsumerSequenceBarrier::new(
             self.sb.ring_buffer.clone(),
-            // The first stage consumers wait on the publisher's sequence, which is provided to all
-            // consumers regardless of their position in the pipeline. It's not necessary to provide a
-            // second reference to the same sequence, so an empty array is provided instead.
-            Vec::new(),
+            new_sequence,
+            dependencies,
+            0,
             self.sb.wait_strategy.clone(),
             // Our sequence is the publisher's sequence (aka the cursor)
             self.sb.sequence.clone_immut(),
-        )
+        );
+
+        my_dependencies.reserve_exact(1);
+        my_dependencies.push(new_consumer.sb.sequence.clone_immut());
+
+        new_consumer
     }
 }
 
@@ -1614,15 +1673,17 @@ struct SingleConsumerSequenceBarrier<W, RB> {
 impl<W, RB> SingleConsumerSequenceBarrier<W, RB> {
     fn new(
         ring_buffer: RB,
+        initial_sequence: SequenceNumber,
         dependencies: Vec<SequenceReader>,
+        cached_available: usize,
         wait_strategy: W,
         cursor: SequenceReader,
     ) -> SingleConsumerSequenceBarrier<W, RB> {
         SingleConsumerSequenceBarrier {
             sb: CommonSingleSequenceBarrier {
                 ring_buffer,
-                cached_available: 0,
-                sequence: SequenceOwner::new(),
+                cached_available,
+                sequence: SequenceOwner::new_from_sequence(initial_sequence),
                 dependencies,
                 wait_strategy,
             },
@@ -1647,15 +1708,6 @@ where
     fn get_cached_available(&self) -> usize {
         self.sb.get_cached_available()
     }
-    fn get_dependencies(&self) -> &[SequenceReader] {
-        self.sb.get_dependencies()
-    }
-    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
-        self.sb.set_dependencies(dependencies)
-    }
-    fn get_sequence(&self) -> SequenceReader {
-        self.sb.get_sequence()
-    }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.get_current();
@@ -1672,7 +1724,7 @@ where
             self.sb.ring_buffer.len(),
             &calculate_available_consumer,
         );
-        // wait_for_dependencies returns usize::MAX if there are no other dependencies
+        // wait_for_dependencies returns buffer_size if there are no other dependencies
         cmp::min(available, a)
     }
 
@@ -1704,18 +1756,34 @@ where
     }
 }
 
-impl<W, RB> ConsumerSequenceBarrier for SingleConsumerSequenceBarrier<W, RB>
+impl<W, RB> InsertSingleConsumer for SingleConsumerSequenceBarrier<W, RB>
 where
     W: Clone,
     RB: Clone,
 {
-    fn new_consumer_barrier(&self) -> SingleConsumerSequenceBarrier<W, RB> {
-        SingleConsumerSequenceBarrier::new(
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self {
+        // Reuse self's dependencies, and populate its replacement below, after constructing the new
+        // consumer.
+        let new_dependencies = std::mem::take(&mut self.sb.dependencies);
+        let new_consumer = Self::new(
             self.sb.ring_buffer.clone(),
-            vec![self.sb.sequence.clone_immut()],
+            self.sb.sequence.get_owned(),
+            new_dependencies,
+            self.sb.cached_available,
             self.sb.wait_strategy.clone(),
             self.cursor.clone_immut(),
-        )
+        );
+
+        // Wait for the new consumer to process the events that would otherwise have been available
+        // to self.
+        self.sb.dependencies.reserve_exact(1);
+        self.sb
+            .dependencies
+            .push(new_consumer.sb.sequence.clone_immut());
+        self.sb.cached_available = 0;
+        new_consumer
     }
 }
 
@@ -1724,20 +1792,6 @@ pub trait Publisher<T> {
     /// Sends a single item into the pipeline. The value will be exposed to each consumer downstream
     /// in the pipeline.
     fn publish(&self, value: T);
-}
-
-/// Functions used during the initial setup of the pipeline.
-pub trait PipelineInit<T, C, FC> {
-    /// Creates and returns a single consumer, which will receive items sent through the publisher.
-    /// This should only be called once, during setup of the pipeline.
-    fn create_single_consumer_pipeline(&mut self) -> FC {
-        let (_, c) = self.create_consumer_pipeline(1);
-        c
-    }
-
-    /// Creates a chain of dependent consumers, and then adds the final
-    /// consumer(s) in the chain as a dependency of the publisher.
-    fn create_consumer_pipeline(&mut self, count_consumers: usize) -> (Vec<C>, FC);
 }
 
 /// Provides access Exposes values that are passing through the the pipeline
@@ -1790,56 +1844,16 @@ where
     }
 }
 
-impl<SB> GenericPublisher<SB>
+impl<SB> InsertSingleConsumer for GenericPublisher<SB>
 where
-    SB: SequenceBarrier + PublisherSequenceBarrier<CSB: SequenceBarrier>,
+    SB: InsertSingleConsumer,
 {
-    // TODO: take a list of usize to support parallel consumers. Need to pick a convenient return
-    // type. Possible candidates:
-    //  - List of lists
-    //  - List of enum (single or parallel)
-    //  - ?
-    fn create_consumer_pipeline(
-        &mut self,
-        count_consumers: usize,
-    ) -> (
-        Vec<GenericSharedConsumer<SB::CSB>>,
-        GenericSingleConsumer<SB::CSB>,
-    ) {
-        let sequence_barrier;
-        unsafe {
-            sequence_barrier = &mut *self.sequence_barrier.get();
-        }
-        assert!(
-            sequence_barrier.get_dependencies().is_empty(),
-            "The create_consumer_pipeline method can only be called once."
-        );
+    type SingleConsumer = GenericSingleConsumer<SB::SingleConsumer>;
 
-        // Create each stage in the chain, adding the previous stage as a gating dependency
-
-        let mut sb = sequence_barrier.new_consumer_barrier();
-
-        let count_nonfinal_consumers = count_consumers - 1;
-        let mut nonfinal_consumers =
-            Vec::<GenericSharedConsumer<SB::CSB>>::with_capacity(count_nonfinal_consumers);
-        let final_consumer;
-
-        for _ in 0..count_nonfinal_consumers {
-            let sb_next = sb.new_consumer_barrier();
-            let c = GenericSharedConsumer::new(sb);
-            sb = sb_next;
-
-            nonfinal_consumers.push(c);
-        }
-
-        // Last consumer gets the ability to take ownership
-        let dependencies = vec![sb.get_sequence()];
-        let c = GenericSharedConsumer::new(sb);
-        final_consumer = GenericSingleConsumer::new(c);
-
-        sequence_barrier.set_dependencies(dependencies);
-
-        (nonfinal_consumers, final_consumer)
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        GenericSingleConsumer::new(GenericSharedConsumer::new(
+            self.sequence_barrier.get_mut().insert_single_consumer(),
+        ))
     }
 }
 
@@ -1876,14 +1890,14 @@ where
 #[cfg(test)]
 mod generic_publisher_tests {
     use crate::{
-        Consumer, ConsumerMut, PipelineInit, Publisher, SinglePublisher, SpinWaitStrategy,
+        Consumer, ConsumerMut, InsertSingleConsumer, Publisher, SinglePublisher, SpinWaitStrategy,
         wrap_boundary,
     };
 
     #[test_log::test]
     fn send_single_value() {
         let mut publisher = SinglePublisher::<isize, 1, SpinWaitStrategy>::new(SpinWaitStrategy);
-        let consumer = publisher.create_single_consumer_pipeline();
+        let consumer = publisher.insert_single_consumer();
         publisher.publish(1);
         consumer.consume(|value: &isize| {
             assert!(*value == 1);
@@ -1892,7 +1906,7 @@ mod generic_publisher_tests {
     #[test_log::test]
     fn send_single_value_via_take() {
         let mut publisher = SinglePublisher::<isize, 1, SpinWaitStrategy>::new(SpinWaitStrategy);
-        let consumer = publisher.create_single_consumer_pipeline();
+        let consumer = publisher.insert_single_consumer();
         let value = 1;
         publisher.publish(value);
         let received_value = consumer.take();
@@ -1905,7 +1919,7 @@ mod generic_publisher_tests {
         let mut publisher =
             SinglePublisher::<isize, CAPACITY, SpinWaitStrategy>::new(SpinWaitStrategy);
         let mut next_published_item = 1;
-        let consumer = publisher.create_single_consumer_pipeline();
+        let consumer = publisher.insert_single_consumer();
         let mut next_consumed_item = 1;
 
         // Fill the buffer
@@ -1939,6 +1953,21 @@ impl<SB> GenericSingleConsumer<SB> {
     /// existing features, it also allows the caller to take ownership of the items it accesses.
     fn new(sc: GenericSharedConsumer<SB>) -> GenericSingleConsumer<SB> {
         GenericSingleConsumer { sc }
+    }
+}
+
+impl<SB> InsertSingleConsumer for GenericSingleConsumer<SB>
+where
+    SB: InsertSingleConsumer<SingleConsumer = SB>,
+{
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        Self {
+            sc: GenericSharedConsumer::new(
+                self.sc.sequence_barrier.get_mut().insert_single_consumer(),
+            ),
+        }
     }
 }
 
@@ -2359,15 +2388,6 @@ where
     fn release_n_real(&mut self, batch_size: usize) {
         self.sb.release_n_real(batch_size)
     }
-    fn get_sequence(&self) -> SequenceReader {
-        self.sb.get_sequence()
-    }
-    fn get_dependencies(&self) -> &[SequenceReader] {
-        self.sb.get_dependencies()
-    }
-    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
-        self.sb.set_dependencies(dependencies);
-    }
     fn len(&self) -> usize {
         self.sb.len()
     }
@@ -2460,14 +2480,27 @@ where
     }
 }
 
-impl<T> PublisherSequenceBarrier for SingleResizingPublisherSequenceBarrier<T>
+impl<T> InsertSingleConsumer for SingleResizingPublisherSequenceBarrier<T>
 where
     T: 'static,
 {
-    type CSB = SingleResizingConsumerSequenceBarrier<T>;
+    type SingleConsumer = SingleResizingConsumerSequenceBarrier<T>;
 
-    fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T> {
-        SingleResizingConsumerSequenceBarrier::new(self.sb.new_consumer_barrier())
+    /// See [`InsertSingleConsumer::insert_single_consumer`].
+    ///
+    /// # Panics
+    ///
+    /// For now, [this type](Self) only supports a single call to this function, before any items
+    /// have been published, and will trigger a panic if called multiple times, or after any items
+    /// are released.
+    fn insert_single_consumer(&mut self) -> SingleResizingConsumerSequenceBarrier<T> {
+        // Prevent this from executing during a transition between buffers, unless/until the
+        // implementation is reworked to make support for that possible.
+        assert!(
+            self.sb.sb.dependencies.is_empty() && self.sb.sb.sequence.get_owned().value() == 0,
+            "The create_consumer_pipeline method can only be called once."
+        );
+        SingleResizingConsumerSequenceBarrier::new(self.sb.insert_single_consumer())
     }
 }
 
@@ -2582,15 +2615,6 @@ where
     fn get_cached_available(&self) -> usize {
         self.cb.get_cached_available()
     }
-    fn get_dependencies(&self) -> &[SequenceReader] {
-        self.cb.get_dependencies()
-    }
-    fn set_dependencies(&mut self, dependencies: Vec<SequenceReader>) {
-        self.cb.set_dependencies(dependencies);
-    }
-    fn get_sequence(&self) -> SequenceReader {
-        self.cb.get_sequence()
-    }
 
     // Unfortunately, the resizing scheme removes the ability to guarantee that more than one slot
     // is actually available after returning from next_n, because the next slot could be the last
@@ -2655,13 +2679,12 @@ where
     }
 }
 
-impl<T> ConsumerSequenceBarrier for SingleResizingConsumerSequenceBarrier<T>
-where
-    T: 'static,
-{
-    fn new_consumer_barrier(&self) -> SingleResizingConsumerSequenceBarrier<T> {
-        SingleResizingConsumerSequenceBarrier {
-            cb: self.cb.new_consumer_barrier(),
+impl<T> InsertSingleConsumer for SingleResizingConsumerSequenceBarrier<T> {
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self {
+        Self {
+            cb: self.cb.insert_single_consumer(),
         }
     }
 }
@@ -2860,21 +2883,18 @@ where
     }
 }
 
-impl<T, const N: usize, W> PipelineInit<T, SharedConsumer<T, N, W>, SingleConsumer<T, N, W>>
-    for SinglePublisher<T, N, W>
+impl<T, const N: usize, W> InsertSingleConsumer for SinglePublisher<T, N, W>
 where
     T: 'static,
     usize: PowerOfTwoUsize<N>,
-    W: NotificationWaitStrategy,
+    W: Clone,
 {
-    fn create_consumer_pipeline(
-        &mut self,
-        count_consumers: usize,
-    ) -> (Vec<SharedConsumer<T, N, W>>, SingleConsumer<T, N, W>) {
-        let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc.into_iter().map(|x| SharedConsumer { c: x }).collect();
-        let fc = SingleConsumer { c: gfc };
-        (c, fc)
+    type SingleConsumer = SingleConsumer<T, N, W>;
+
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        Self::SingleConsumer {
+            c: self.p.insert_single_consumer(),
+        }
     }
 }
 
@@ -2902,6 +2922,19 @@ where
         C: FnMut(&T),
     {
         self.c.consume(consume_callback)
+    }
+}
+
+impl<T, const N: usize, W> InsertSingleConsumer for SingleConsumer<T, N, W>
+where
+    W: Clone,
+{
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        Self {
+            c: self.c.insert_single_consumer(),
+        }
     }
 }
 
@@ -2986,22 +3019,23 @@ where
     }
 }
 
-impl<T> PipelineInit<T, SharedResizingConsumer<T>, SingleResizingConsumer<T>>
-    for SingleResizingPublisher<T>
+impl<T> InsertSingleConsumer for SingleResizingPublisher<T>
 where
-    T: Default + 'static,
+    T: 'static,
 {
-    fn create_consumer_pipeline(
-        &mut self,
-        count_consumers: usize,
-    ) -> (Vec<SharedResizingConsumer<T>>, SingleResizingConsumer<T>) {
-        let (gc, gfc) = self.p.create_consumer_pipeline(count_consumers);
-        let c = gc
-            .into_iter()
-            .map(|x| SharedResizingConsumer { c: x })
-            .collect();
-        let fc = SingleResizingConsumer { c: gfc };
-        (c, fc)
+    type SingleConsumer = SingleResizingConsumer<T>;
+
+    /// See [`InsertSingleConsumer::insert_single_consumer`].
+    ///
+    /// # Panics
+    ///
+    /// For now, the resizing variant only supports a single call to this function, before any items
+    /// have been published, and will trigger a panic if called multiple times, or after any items
+    /// are released.
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        SingleResizingConsumer {
+            c: self.p.insert_single_consumer(),
+        }
     }
 }
 
@@ -3025,6 +3059,16 @@ where
         C: FnMut(&T),
     {
         self.c.consume(consume_callback)
+    }
+}
+
+impl<T> InsertSingleConsumer for SingleResizingConsumer<T> {
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        Self {
+            c: self.c.insert_single_consumer(),
+        }
     }
 }
 
@@ -3052,15 +3096,17 @@ where
 #[cfg(test)]
 mod resizing_tests {
     use crate::{
-        Consumer, ConsumerMut, PipelineInit, Publisher, SingleResizingPublisher, wrap_boundary,
+        Consumer, ConsumerMut, InsertSingleConsumer, Publisher, SingleResizingPublisher,
+        wrap_boundary,
     };
 
     #[test_log::test]
     fn resizing() {
         const CAPACITY: usize = 8;
         let mut publisher = SingleResizingPublisher::new_resize_after_timeout(CAPACITY);
-        let (mut consumers_list, final_consumer) = publisher.create_consumer_pipeline(2);
-        let consumer = consumers_list.pop().unwrap();
+        let mut final_consumer = publisher.insert_single_consumer();
+
+        let consumer = final_consumer.insert_single_consumer();
 
         let mut next_item_publish = 1;
         let mut next_item_consume = 1;

@@ -19,9 +19,10 @@ use criterion::Criterion;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::measurement::WallTime;
+use disruptor::InsertSingleConsumer;
 use disruptor::{
-    BlockingWaitStrategy, ConsumerMut, NotificationWaitStrategy, PipelineInit, Publisher,
-    SinglePublisher, SingleResizingPublisher, SpinWaitStrategy, YieldWaitStrategy,
+    BlockingWaitStrategy, ConsumerMut, NotificationWaitStrategy, Publisher, SinglePublisher,
+    SingleResizingPublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
 use quanta::Instant;
 
@@ -166,7 +167,7 @@ fn run_nonresizing_disruptor_benchmark<W, WF>(
     let desc = format!("{:?}", create_wait_strategy());
     let create_disruptor = || {
         let mut publisher = SinglePublisher::<u64, 8192, W>::new(create_wait_strategy());
-        let consumer = publisher.create_single_consumer_pipeline();
+        let consumer = publisher.insert_single_consumer();
         (publisher, consumer)
     };
     bench_disruptor(g, create_disruptor, desc);
@@ -198,7 +199,7 @@ fn bench_disruptor_resizeable(g: &mut BenchmarkGroup<WallTime>) {
             mstp,
             mstc,
         );
-        let consumer = publisher.create_single_consumer_pipeline();
+        let consumer = publisher.insert_single_consumer();
         (publisher, consumer)
     };
     let desc = format!(

@@ -9,8 +9,8 @@ use criterion::{
     measurement::WallTime,
 };
 use disruptor::{
-    BlockingWaitStrategy, Consumer, ConsumerMut, NotificationWaitStrategy, PipelineInit, Publisher,
-    SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
+    BlockingWaitStrategy, Consumer, ConsumerMut, InsertSingleConsumer, NotificationWaitStrategy,
+    Publisher, SinglePublisher, SpinWaitStrategy, YieldWaitStrategy,
 };
 use quanta::Instant;
 use std::{
@@ -59,9 +59,9 @@ fn measure_ping_pong_latency_two_ringbuffers_generic<W>(
     W: NotificationWaitStrategy + 'static,
 {
     let mut ping_publisher = SinglePublisher::<u64, 8192, W>::new(w.clone());
-    let ping_consumer = ping_publisher.create_single_consumer_pipeline();
+    let ping_consumer = ping_publisher.insert_single_consumer();
     let mut pong_publisher = SinglePublisher::<u64, 8192, W>::new(w.clone());
-    let pong_consumer = pong_publisher.create_single_consumer_pipeline();
+    let pong_consumer = pong_publisher.insert_single_consumer();
 
     spawn(move || {
         loop {
@@ -108,8 +108,8 @@ fn measure_ping_pong_latency_one_ringbuffer_generic<W>(
 
     // The second task listens for items from ping_consumer, and the publisher waits for the ping to
     // be processed by listening on pong_consumer before publishing the next item.
-    let (mut ping_consumer_vec, pong_consumer) = ping_publisher.create_consumer_pipeline(2);
-    let ping_consumer = ping_consumer_vec.pop().unwrap();
+    let mut pong_consumer = ping_publisher.insert_single_consumer();
+    let ping_consumer = pong_consumer.insert_single_consumer();
 
     spawn(move || {
         loop {
