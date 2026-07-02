@@ -714,7 +714,7 @@ impl<F> AvailabilityFn for F where F: Fn(SequenceNumber, SequenceNumber, usize) 
 pub trait PollingWaitStrategy: Clone + Send {
     /// Wait for upstream consumers to finish processing items that have already been published, then
     /// returns the actual number of available items, which may be greater than n. Returns
-    /// `usize::MAX` if there are no dependencies.
+    /// `buffer_size - waiting_sequence` if there are no dependencies.
     fn wait_for_dependencies<F>(
         &self,
         n: usize,
@@ -772,12 +772,19 @@ fn calculate_available_list<F>(
 where
     F: AvailabilityFn,
 {
-    let mut available = usize::MAX;
-    for consumer_sequence in dependencies.iter() {
-        let a = calculate_available(consumer_sequence.get(), waiting_sequence, buffer_size);
-        available = cmp::min(available, a);
+    if dependencies.is_empty() {
+        // The corresponding stage of the pipeline has ownership of all elements in the buffer. In
+        // practice, this can only happen with the publisher, and only if the caller starts setting
+        // or mutating elements before constructing the rest of the pipeline.
+        cmp::max(0, buffer_size - waiting_sequence.value())
+    } else {
+        let mut available = usize::MAX;
+        for consumer_sequence in dependencies.iter() {
+            let a = calculate_available(consumer_sequence.get(), waiting_sequence, buffer_size);
+            available = cmp::min(available, a);
+        }
+        available
     }
-    available
 }
 
 /// Waits using simple busy waiting.
