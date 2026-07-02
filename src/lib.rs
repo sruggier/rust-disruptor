@@ -1493,12 +1493,12 @@ struct SinglePublisherSequenceBarrier<W, RB> {
 }
 
 impl<W, RB> SinglePublisherSequenceBarrier<W, RB> {
-    fn new(ring_buffer: RB, dependencies: Vec<SequenceReader>, wait_strategy: W) -> Self {
+    fn new(ring_buffer: RB, wait_strategy: W) -> Self {
         Self {
             sb: CommonSingleSequenceBarrier {
                 ring_buffer,
                 sequence: SequenceOwner::new(),
-                dependencies,
+                dependencies: Vec::new(),
                 cached_available: 0,
                 wait_strategy,
             },
@@ -2358,11 +2358,10 @@ struct SingleResizingPublisherSequenceBarrier<T> {
 impl<T> SingleResizingPublisherSequenceBarrier<T> {
     fn new(
         ring_buffer: ResizableRingBufferArc<ReallocationFlag<T>>,
-        dependencies: Vec<SequenceReader>,
         wait_strategy: TimeoutResizeWaitStrategy,
     ) -> SingleResizingPublisherSequenceBarrier<T> {
         SingleResizingPublisherSequenceBarrier {
-            sb: SinglePublisherSequenceBarrier::new(ring_buffer, dependencies, wait_strategy),
+            sb: SinglePublisherSequenceBarrier::new(ring_buffer, wait_strategy),
         }
     }
 }
@@ -2877,7 +2876,7 @@ where
     /// SinglePublisher object.
     pub fn new(wait_strategy: W) -> SinglePublisher<T, N, W> {
         let ring_buffer = RingBufferArc::new();
-        let sb = SinglePublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
+        let sb = SinglePublisherSequenceBarrier::new(ring_buffer, wait_strategy);
         let gp = GenericPublisher::new_common(sb);
         SinglePublisher { p: gp }
     }
@@ -3002,8 +3001,7 @@ where
         );
         let wait_strategy =
             TimeoutResizeWaitStrategy::new_with_timeout(resize_timeout, blocking_wait_strategy);
-        let sb =
-            SingleResizingPublisherSequenceBarrier::new(ring_buffer, Vec::new(), wait_strategy);
+        let sb = SingleResizingPublisherSequenceBarrier::new(ring_buffer, wait_strategy);
         let gp = GenericPublisher::new_common(sb);
         SingleResizingPublisher { p: gp }
     }
