@@ -1433,6 +1433,22 @@ struct CommonSingleSequenceBarrier<RB, W> {
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types.
 impl<RB, W> CommonSingleSequenceBarrier<RB, W> {
+    fn new(
+        ring_buffer: RB,
+        sequence: SequenceOwner,
+        dependencies: Vec<SequenceReader>,
+        cached_available: usize,
+        wait_strategy: W,
+    ) -> Self {
+        Self {
+            ring_buffer,
+            sequence,
+            dependencies,
+            cached_available,
+            wait_strategy,
+        }
+    }
+
     fn get_current(&self) -> SequenceNumber {
         self.sequence.get_owned()
     }
@@ -1495,13 +1511,13 @@ struct SinglePublisherSequenceBarrier<RB, W> {
 impl<RB, W> SinglePublisherSequenceBarrier<RB, W> {
     fn new(ring_buffer: RB, wait_strategy: W) -> Self {
         Self {
-            sb: CommonSingleSequenceBarrier {
+            sb: CommonSingleSequenceBarrier::new(
                 ring_buffer,
-                sequence: SequenceOwner::new(),
-                dependencies: Vec::new(),
-                cached_available: 0,
+                SequenceOwner::new(),
+                Vec::new(),
+                0,
                 wait_strategy,
-            },
+            ),
         }
     }
 }
@@ -1680,13 +1696,13 @@ impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
         cursor: SequenceReader,
     ) -> SingleConsumerSequenceBarrier<RB, W> {
         SingleConsumerSequenceBarrier {
-            sb: CommonSingleSequenceBarrier {
+            sb: CommonSingleSequenceBarrier::new(
                 ring_buffer,
-                cached_available,
-                sequence: SequenceOwner::new_from_sequence(initial_sequence),
+                SequenceOwner::new_from_sequence(initial_sequence),
                 dependencies,
+                cached_available,
                 wait_strategy,
-            },
+            ),
             cursor,
         }
     }
