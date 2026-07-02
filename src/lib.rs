@@ -2365,7 +2365,7 @@ fn test_calculate_available_publisher_resizing() {
 /// Resizing variant of SinglePublisherSequenceBarrier.
 struct SingleResizingPublisherSequenceBarrier<T> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
-    sb: SinglePublisherSequenceBarrier<
+    sb: CommonSingleSequenceBarrier<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         TimeoutResizeWaitStrategy,
     >,
@@ -2377,7 +2377,13 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
         wait_strategy: TimeoutResizeWaitStrategy,
     ) -> SingleResizingPublisherSequenceBarrier<T> {
         SingleResizingPublisherSequenceBarrier {
-            sb: SinglePublisherSequenceBarrier::new(ring_buffer, wait_strategy),
+            sb: CommonSingleSequenceBarrier::new(
+                ring_buffer,
+                SequenceOwner::new(),
+                Vec::new(),
+                0,
+                wait_strategy,
+            ),
         }
     }
 }
@@ -2401,7 +2407,9 @@ where
         self.sb.get_cached_available().saturating_sub(1)
     }
     fn release_n_real(&mut self, batch_size: usize) {
-        self.sb.release_n_real(batch_size)
+        // Similar to SinglePublisherSequenceBarrier::release_n_real.
+        self.sb.sequence.advance_and_flush(batch_size, self.len());
+        self.sb.wait_strategy.notify_all_waiters();
     }
     fn len(&self) -> usize {
         self.sb.len()
@@ -2428,9 +2436,9 @@ where
         // larger buffer.
         let needed_size = batch_size + 1;
         let current_size = self.sb.len();
-        let mut available = self.sb.sb.wait_strategy.try_wait_for_consumers(
+        let mut available = self.sb.wait_strategy.try_wait_for_consumers(
             self.get_current(),
-            self.sb.sb.dependencies.as_slice(),
+            self.sb.dependencies.as_slice(),
             current_size,
             &calculate_available_publisher_resizing,
             needed_size,
@@ -2449,7 +2457,7 @@ where
             // Unwrapping the publisher's sequence ensures that availablity calculations remain
             // correct throughout the reallocation transition.
             let old_sequence = self.get_current();
-            self.sb.sb.sequence.unwrap(current_size);
+            self.sb.sequence.unwrap(current_size);
             let unwrapped_sequence = self.get_current();
 
             // Resizing shouldn't be a normal part of a program's operation. Alert the user, so that
@@ -2467,7 +2475,7 @@ where
             unsafe {
                 // Signal to consumers that there's a larger buffer to transition to.
                 self.sb.set(ReallocationFlag::BufferReallocated);
-                self.sb.sb.ring_buffer.reallocate(new_size);
+                self.sb.ring_buffer.reallocate(new_size);
             }
 
             // Modify the cached availability value to facilitate usage of the entire newly
@@ -2512,10 +2520,33 @@ where
         // Prevent this from executing during a transition between buffers, unless/until the
         // implementation is reworked to make support for that possible.
         assert!(
-            self.sb.sb.dependencies.is_empty() && self.sb.sb.sequence.get_owned().value() == 0,
+            self.sb.dependencies.is_empty() && self.sb.sequence.get_owned().value() == 0,
             "The create_consumer_pipeline method can only be called once."
         );
-        SingleResizingConsumerSequenceBarrier::new(self.sb.insert_single_consumer())
+
+        // Similar to SinglePublisherSequenceBarrier::insert_single_consumer, but the limitations on
+        // when this is called result in a simpler implementation, for now. This makes it possible
+        // to defer implementing a better solution until after other refactoring is carried out, to
+        // avoid doing too much in a single step.
+
+        let new_consumer =
+            SingleResizingConsumerSequenceBarrier::new(SingleConsumerSequenceBarrier::new(
+                self.sb.ring_buffer.clone(),
+                SequenceNumber(SEQUENCE_INITIAL),
+                vec![self.sb.sequence.clone_immut()],
+                0,
+                self.sb.wait_strategy.clone(),
+                self.sb.sequence.clone_immut(),
+            ));
+
+        // my_dependencies is an empty Vec now, to be populated with a reference to the new
+        // consumer's sequence.
+        self.sb.dependencies.reserve_exact(1);
+        self.sb
+            .dependencies
+            .push(new_consumer.cb.sb.sequence.clone_immut());
+
+        new_consumer
     }
 }
 
