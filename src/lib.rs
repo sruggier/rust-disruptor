@@ -728,16 +728,16 @@ impl<F> AvailabilityFn for F where F: Fn(SequenceNumber, SequenceNumber, usize) 
 
 /// Allows waiting for upstream dependencies.
 pub trait PollingWaitStrategy: Clone + Send {
-    /// Wait for upstream consumers to finish processing items that have already been published, then
-    /// returns the actual number of available items, which may be greater than n. Returns
-    /// `buffer_size - waiting_sequence` if there are no dependencies.
+    /// Wait for upstream consumers to finish processing items that have already been published,
+    /// then returns the actual number of available items, which may be greater than
+    /// `min_available`. Returns `buffer_size - waiting_sequence` if there are no dependencies.
     fn wait_for_dependencies<F>(
         &self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
         calculate_available: &F,
+        min_available: usize,
     ) -> usize
     where
         F: AvailabilityFn;
@@ -750,8 +750,8 @@ pub trait PollingWaitStrategy: Clone + Send {
 /// to query which slots have been released by the publisher to know whether it makes sense to wait
 /// for a notification or not.
 pub trait NotificationWaitStrategy: PollingWaitStrategy {
-    /// Wait for `cursor` to release the next `n` slots, then return the actual number of available
-    /// slots, which may be greater than `n`.
+    /// Wait for `cursor` to release the next `min_available` slots, then return the actual number
+    /// of available slots, which may be greater than `min_available`.
     ///
     /// For strategies that block, only the publisher will attempt to wake the task. Therefore, the
     /// publisher's `cursor` is needed so that once the publisher has advanced sufficiently, the task
@@ -761,10 +761,10 @@ pub trait NotificationWaitStrategy: PollingWaitStrategy {
     /// worth wasting some CPU time to achieve lower latency.
     fn wait_for_publisher(
         &mut self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
         buffer_size: usize,
+        min_available: usize,
     ) -> usize;
 
     /// Wakes up any consumers that have blocked waiting for new items to be published.
@@ -815,14 +815,14 @@ pub struct SpinWaitStrategy;
 impl NotificationWaitStrategy for SpinWaitStrategy {
     fn wait_for_publisher(
         &mut self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
         buffer_size: usize,
+        min_available: usize,
     ) -> usize {
         let mut available =
             calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
-        while n > available {
+        while min_available > available {
             // busy wait
             available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
         }
@@ -835,17 +835,17 @@ impl NotificationWaitStrategy for SpinWaitStrategy {
 impl PollingWaitStrategy for SpinWaitStrategy {
     fn wait_for_dependencies<F>(
         &self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
         calculate_available: &F,
+        min_available: usize,
     ) -> usize
     where
         F: AvailabilityFn,
     {
         let mut available = 0;
-        while available < n {
+        while available < min_available {
             // busy wait
             available = calculate_available_list(
                 waiting_sequence,
@@ -863,14 +863,14 @@ impl PollingWaitStrategy for SpinWaitStrategy {
 ///
 /// # Return value
 ///
-/// The number of available items, which may be less than `n` if the maximum amount of tries was
+/// The number of available items, which may be less than `min_available` if the maximum amount of tries was
 /// reached.
 fn spin_for_consumer_retries<F>(
-    n: usize,
     waiting_sequence: SequenceNumber,
     dependencies: &[SequenceReader],
     buffer_size: usize,
     calculate_available: &F,
+    min_available: usize,
     max_tries: usize,
 ) -> usize
 where
@@ -878,7 +878,7 @@ where
 {
     let mut tries = 0;
     let mut available = 0;
-    while available < n && tries < max_tries {
+    while available < min_available && tries < max_tries {
         // busy wait
         available = calculate_available_list(
             waiting_sequence,
@@ -896,10 +896,10 @@ where
 ///
 /// # Return value
 ///
-/// The number of available items, which may be less than `n` if the maximum amount of tries was
-/// reached.
+/// The number of available items, which may be less than `min_available` if the maximum amount of
+/// tries was reached.
 fn spin_for_publisher_retries(
-    n: usize,
+    min_available: usize,
     waiting_sequence: SequenceNumber,
     cursor: &SequenceReader,
     buffer_size: usize,
@@ -907,7 +907,7 @@ fn spin_for_publisher_retries(
 ) -> usize {
     let mut tries = 0;
     let mut available = 0;
-    while n > available && tries < max_tries {
+    while min_available > available && tries < max_tries {
         // busy wait
         available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
         tries += 1;
@@ -972,29 +972,29 @@ impl YieldWaitStrategy {
 impl PollingWaitStrategy for YieldWaitStrategy {
     fn wait_for_dependencies<F>(
         &self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
         calculate_available: &F,
+        min_available: usize,
     ) -> usize
     where
         F: AvailabilityFn,
     {
         let mut available = spin_for_consumer_retries(
-            n,
             waiting_sequence,
             dependencies,
             buffer_size,
             calculate_available,
+            min_available,
             self.max_spin_tries_consumer,
         );
 
-        if available >= n {
+        if available >= min_available {
             return available;
         }
 
-        while n > available {
+        while min_available > available {
             available = calculate_available_list(
                 waiting_sequence,
                 dependencies,
@@ -1011,24 +1011,24 @@ impl PollingWaitStrategy for YieldWaitStrategy {
 impl NotificationWaitStrategy for YieldWaitStrategy {
     fn wait_for_publisher(
         &mut self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
         buffer_size: usize,
+        min_available: usize,
     ) -> usize {
         let mut available = spin_for_publisher_retries(
-            n,
+            min_available,
             waiting_sequence,
             cursor,
             buffer_size,
             self.max_spin_tries_publisher,
         );
 
-        if available >= n {
+        if available >= min_available {
             return available;
         }
 
-        while available < n {
+        while available < min_available {
             available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
             thread::yield_now();
         }
@@ -1205,20 +1205,20 @@ impl Clone for BlockingWaitStrategy {
 impl NotificationWaitStrategy for BlockingWaitStrategy {
     fn wait_for_publisher(
         &mut self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
         buffer_size: usize,
+        min_available: usize,
     ) -> usize {
         let mut available = spin_for_publisher_retries(
-            n,
+            min_available,
             waiting_sequence,
             cursor,
             buffer_size,
             self.max_spin_tries_publisher,
         );
 
-        if available >= n {
+        if available >= min_available {
             return available;
         }
 
@@ -1231,14 +1231,14 @@ impl NotificationWaitStrategy for BlockingWaitStrategy {
         // Grab lock on wait condition
         let signal_needed = &mut d.signal_needed;
         {
-            while n > available {
+            while min_available > available {
                 let mutex_guard = d.wait_mutex.lock().unwrap();
                 // Communicate intent to wait to publisher
                 let _dummy: bool = signal_needed.swap(true, AcqRel);
                 // Verify that no slot was published
                 available =
                     calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
-                if n > available {
+                if min_available > available {
                     // Sleep
                     let lock_result = d.wait_condvar.wait(mutex_guard);
                     assert!(lock_result.is_ok());
@@ -1281,11 +1281,11 @@ impl NotificationWaitStrategy for BlockingWaitStrategy {
 impl PollingWaitStrategy for BlockingWaitStrategy {
     fn wait_for_dependencies<F>(
         &self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
         calculate_available: &F,
+        min_available: usize,
     ) -> usize
     where
         F: AvailabilityFn,
@@ -1296,11 +1296,11 @@ impl PollingWaitStrategy for BlockingWaitStrategy {
         );
 
         w.wait_for_dependencies(
-            n,
             waiting_sequence,
             dependencies,
             buffer_size,
             calculate_available,
+            min_available,
         )
     }
 }
@@ -1366,7 +1366,7 @@ trait SequenceBarrier {
         self.release_n(1);
     }
 
-    /// Release n slots for downstream consumers.
+    /// Release `batch_size` slots for downstream consumers.
     fn release_n(&mut self, batch_size: usize) {
         // Update the cached value to reflect the newly used up slots, then call release_n_real.
 
@@ -1559,11 +1559,11 @@ where
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.sb.sequence.get_owned();
         let available = self.sb.wait_strategy.wait_for_dependencies(
-            batch_size,
             current_sequence,
             self.sb.dependencies.as_slice(),
             self.len(),
             &calculate_available_publisher,
+            batch_size,
         );
         available
     }
@@ -1712,17 +1712,17 @@ where
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.get_current();
         let available = self.sb.wait_strategy.wait_for_publisher(
-            batch_size,
             current_sequence,
             &self.cursor,
             self.sb.ring_buffer.len(),
+            batch_size,
         );
         let a = self.sb.wait_strategy.wait_for_dependencies(
-            batch_size,
             current_sequence,
             self.sb.dependencies.as_slice(),
             self.sb.ring_buffer.len(),
             &calculate_available_consumer,
+            batch_size,
         );
         // wait_for_dependencies returns buffer_size if there are no other dependencies
         cmp::min(available, a)
@@ -2413,11 +2413,11 @@ where
         let needed_size = batch_size + 1;
         let current_size = self.sb.len();
         let mut available = self.sb.sb.wait_strategy.try_wait_for_consumers(
-            needed_size,
             self.get_current(),
             self.sb.sb.dependencies.as_slice(),
             current_size,
             &calculate_available_publisher_resizing,
+            needed_size,
         );
 
         if available < needed_size {
@@ -2736,15 +2736,15 @@ impl Clone for TimeoutResizeWaitStrategy {
 impl TimeoutResizeWaitStrategy {
     /// Similar to [`wait_for_dependencies`](PollingWaitStrategy::wait_for_dependencies), except
     /// that it may finish before the requested number of slots are available, returning a value
-    /// that is less than `n`. If this happens, the caller can reallocate a larger buffer and start
-    /// publishing items into that buffer instead of waiting.
+    /// that is less than `min_available`. If this happens, the caller can reallocate a larger
+    /// buffer and start publishing items into that buffer instead of waiting.
     fn try_wait_for_consumers<F>(
         &self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
         calculate_available: &F,
+        min_available: usize,
     ) -> usize
     where
         F: AvailabilityFn,
@@ -2752,14 +2752,14 @@ impl TimeoutResizeWaitStrategy {
         // Try once before querying the current time, in case the slots have become available since
         // the last wait.
         let mut available = spin_for_consumer_retries(
-            n,
             waiting_sequence,
             dependencies,
             buffer_size,
             calculate_available,
+            min_available,
             1,
         );
-        if available >= n {
+        if available >= min_available {
             return available;
         }
 
@@ -2771,18 +2771,18 @@ impl TimeoutResizeWaitStrategy {
         let mut previous_available = available;
 
         available = spin_for_consumer_retries(
-            n,
             waiting_sequence,
             dependencies,
             buffer_size,
             calculate_available,
+            min_available,
             self.wait_strategy.max_spin_tries_consumer,
         );
-        if available >= n {
+        if available >= min_available {
             return available;
         }
 
-        while available < n && Instant::now() < end_time {
+        while available < min_available && Instant::now() < end_time {
             // Reset the timeout if the pipeline has made progress.There should only be
             // reallocations if it looks like the pipeline has deadlocked.
             if previous_available != available {
@@ -2798,7 +2798,7 @@ impl TimeoutResizeWaitStrategy {
             );
             thread::yield_now();
         }
-        // If the timeout was reached, this will be less than n
+        // If the timeout was reached, this will be less than `min_available`
         available
     }
 }
@@ -2806,14 +2806,14 @@ impl TimeoutResizeWaitStrategy {
 impl NotificationWaitStrategy for TimeoutResizeWaitStrategy {
     fn wait_for_publisher(
         &mut self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         cursor: &SequenceReader,
         buffer_size: usize,
+        min_available: usize,
     ) -> usize {
         // Consumers wait as normal
         self.wait_strategy
-            .wait_for_publisher(n, waiting_sequence, cursor, buffer_size)
+            .wait_for_publisher(waiting_sequence, cursor, buffer_size, min_available)
     }
     fn notify_all_waiters(&mut self) {
         self.wait_strategy.notify_all_waiters();
@@ -2823,22 +2823,22 @@ impl NotificationWaitStrategy for TimeoutResizeWaitStrategy {
 impl PollingWaitStrategy for TimeoutResizeWaitStrategy {
     fn wait_for_dependencies<F>(
         &self,
-        n: usize,
         waiting_sequence: SequenceNumber,
         dependencies: &[SequenceReader],
         buffer_size: usize,
         calculate_available: &F,
+        min_available: usize,
     ) -> usize
     where
         F: AvailabilityFn,
     {
         // This code path should be unused
         self.wait_strategy.wait_for_dependencies(
-            n,
             waiting_sequence,
             dependencies,
             buffer_size,
             calculate_available,
+            min_available,
         )
     }
 }
