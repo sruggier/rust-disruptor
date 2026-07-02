@@ -1488,11 +1488,11 @@ where
 
 /// Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
 /// publisher.
-struct SinglePublisherSequenceBarrier<W, RB> {
+struct SinglePublisherSequenceBarrier<RB, W> {
     sb: CommonSingleSequenceBarrier<RB, W>,
 }
 
-impl<W, RB> SinglePublisherSequenceBarrier<W, RB> {
+impl<RB, W> SinglePublisherSequenceBarrier<RB, W> {
     fn new(ring_buffer: RB, wait_strategy: W) -> Self {
         Self {
             sb: CommonSingleSequenceBarrier {
@@ -1506,7 +1506,7 @@ impl<W, RB> SinglePublisherSequenceBarrier<W, RB> {
     }
 }
 
-impl<W, RB> SinglePublisherSequenceBarrier<W, RB>
+impl<RB, W> SinglePublisherSequenceBarrier<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1539,7 +1539,7 @@ where
     }
 }
 
-impl<W, RB> SequenceBarrier for SinglePublisherSequenceBarrier<W, RB>
+impl<RB, W> SequenceBarrier for SinglePublisherSequenceBarrier<RB, W>
 where
     W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps,
@@ -1586,7 +1586,7 @@ where
     }
 }
 
-impl<W, RB> SequenceBarrierTake for SinglePublisherSequenceBarrier<W, RB>
+impl<RB, W> SequenceBarrierTake for SinglePublisherSequenceBarrier<RB, W>
 where
     W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOpsTake,
@@ -1599,12 +1599,12 @@ where
     }
 }
 
-impl<W, RB> InsertSingleConsumer for SinglePublisherSequenceBarrier<W, RB>
+impl<RB, W> InsertSingleConsumer for SinglePublisherSequenceBarrier<RB, W>
 where
     W: Clone,
     RB: UnsafeRingBufferOps + Clone,
 {
-    type SingleConsumer = SingleConsumerSequenceBarrier<W, RB>;
+    type SingleConsumer = SingleConsumerSequenceBarrier<RB, W>;
 
     /// Insert a new consumer.
     ///
@@ -1664,13 +1664,13 @@ where
 /// Implements `SequenceBarrier` for consumers. This implementation supports multiple concurrent
 /// consumers, but all consumers will process all events. This is unsuitable for when a
 /// load-balancing arrangement is desired.
-struct SingleConsumerSequenceBarrier<W, RB> {
+struct SingleConsumerSequenceBarrier<RB, W> {
     sb: CommonSingleSequenceBarrier<RB, W>,
     /// A reference to the publisher's sequence.
     cursor: SequenceReader,
 }
 
-impl<W, RB> SingleConsumerSequenceBarrier<W, RB> {
+impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
     fn new(
         ring_buffer: RB,
         initial_sequence: SequenceNumber,
@@ -1678,7 +1678,7 @@ impl<W, RB> SingleConsumerSequenceBarrier<W, RB> {
         cached_available: usize,
         wait_strategy: W,
         cursor: SequenceReader,
-    ) -> SingleConsumerSequenceBarrier<W, RB> {
+    ) -> SingleConsumerSequenceBarrier<RB, W> {
         SingleConsumerSequenceBarrier {
             sb: CommonSingleSequenceBarrier {
                 ring_buffer,
@@ -1692,7 +1692,7 @@ impl<W, RB> SingleConsumerSequenceBarrier<W, RB> {
     }
 }
 
-impl<W, RB> SequenceBarrier for SingleConsumerSequenceBarrier<W, RB>
+impl<RB, W> SequenceBarrier for SingleConsumerSequenceBarrier<RB, W>
 where
     W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps,
@@ -1746,17 +1746,17 @@ where
     }
 }
 
-impl<W, RB> SequenceBarrierTake for SingleConsumerSequenceBarrier<W, RB>
+impl<RB, W> SequenceBarrierTake for SingleConsumerSequenceBarrier<RB, W>
 where
-    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOpsTake,
+    W: NotificationWaitStrategy,
 {
     unsafe fn take(&mut self) -> Self::T {
         unsafe { self.sb.take() }
     }
 }
 
-impl<W, RB> InsertSingleConsumer for SingleConsumerSequenceBarrier<W, RB>
+impl<RB, W> InsertSingleConsumer for SingleConsumerSequenceBarrier<RB, W>
 where
     W: Clone,
     RB: Clone,
@@ -2350,8 +2350,8 @@ fn test_calculate_available_publisher_resizing() {
 struct SingleResizingPublisherSequenceBarrier<T> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
     sb: SinglePublisherSequenceBarrier<
-        TimeoutResizeWaitStrategy,
         ResizableRingBufferArc<ReallocationFlag<T>>,
+        TimeoutResizeWaitStrategy,
     >,
 }
 
@@ -2507,16 +2507,16 @@ where
 struct SingleResizingConsumerSequenceBarrier<T> {
     /// Reuse data and constructor from SingleConsumerSequenceBarrier
     cb: SingleConsumerSequenceBarrier<
-        TimeoutResizeWaitStrategy,
         ResizableRingBufferArc<ReallocationFlag<T>>,
+        TimeoutResizeWaitStrategy,
     >,
 }
 
 impl<T> SingleResizingConsumerSequenceBarrier<T> {
     fn new(
         cb: SingleConsumerSequenceBarrier<
-            TimeoutResizeWaitStrategy,
             ResizableRingBufferArc<ReallocationFlag<T>>,
+            TimeoutResizeWaitStrategy,
         >,
     ) -> SingleResizingConsumerSequenceBarrier<T> {
         SingleResizingConsumerSequenceBarrier { cb }
@@ -2856,15 +2856,15 @@ impl fmt::Debug for TimeoutResizeWaitStrategy {
 }
 
 pub struct SinglePublisher<T, const N: usize, W> {
-    p: GenericPublisher<SinglePublisherSequenceBarrier<W, RingBufferArc<T, N>>>,
+    p: GenericPublisher<SinglePublisherSequenceBarrier<RingBufferArc<T, N>, W>>,
 }
 
 pub struct SharedConsumer<T, const N: usize, W> {
-    c: GenericSharedConsumer<SingleConsumerSequenceBarrier<W, RingBufferArc<T, N>>>,
+    c: GenericSharedConsumer<SingleConsumerSequenceBarrier<RingBufferArc<T, N>, W>>,
 }
 
 pub struct SingleConsumer<T, const N: usize, W> {
-    c: GenericSingleConsumer<SingleConsumerSequenceBarrier<W, RingBufferArc<T, N>>>,
+    c: GenericSingleConsumer<SingleConsumerSequenceBarrier<RingBufferArc<T, N>, W>>,
 }
 
 impl<T, const N: usize, W> SinglePublisher<T, N, W>
