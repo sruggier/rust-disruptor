@@ -1333,11 +1333,11 @@ trait SequenceBarrier {
     fn get_current(&self) -> SequenceNumber;
 
     // Facilitate the default implementations of next_n and release_n
-    /// Cache the passed in number of available slots for later use in get_cached_available.
+    /// Cache the passed in number of available slots for later use in len_available.
     fn set_cached_available(&mut self, available: usize);
     /// Return the number of known-available slots as of the last read from the sequence barrier's
     /// gating sequence.
-    fn get_cached_available(&self) -> usize;
+    fn len_available(&self) -> usize;
 
     /// Wait for a single slot to be available.
     fn next(&mut self) {
@@ -1359,7 +1359,7 @@ trait SequenceBarrier {
     fn next_n(&mut self, batch_size: usize) {
         // Avoid waiting if the necessary slots were already available as of the last read. Calls
         // next_n_real if the slots are not available.
-        if self.get_cached_available() < batch_size {
+        if self.len_available() < batch_size {
             let cached_available = self.next_n_real(batch_size);
             self.set_cached_available(cached_available);
         }
@@ -1380,7 +1380,7 @@ trait SequenceBarrier {
         // Update the cached value to reflect the newly used up slots, then call release_n_real.
 
         // Subtract batch_size from the cached number of available slots.
-        let available = self.get_cached_available();
+        let available = self.len_available();
         assert!(available >= batch_size);
         self.set_cached_available(available - batch_size);
 
@@ -1464,7 +1464,7 @@ impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W> {
     fn set_cached_available(&mut self, available: usize) {
         self.cached_available = available
     }
-    fn get_cached_available(&self) -> usize {
+    fn len_available(&self) -> usize {
         self.cached_available
     }
 }
@@ -1580,8 +1580,8 @@ where
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available);
     }
-    fn get_cached_available(&self) -> usize {
-        self.sb.get_cached_available()
+    fn len_available(&self) -> usize {
+        self.sb.len_available()
     }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
@@ -1737,8 +1737,8 @@ where
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available)
     }
-    fn get_cached_available(&self) -> usize {
-        self.sb.get_cached_available()
+    fn len_available(&self) -> usize {
+        self.sb.len_available()
     }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
@@ -2435,10 +2435,10 @@ where
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available)
     }
-    fn get_cached_available(&self) -> usize {
+    fn len_available(&self) -> usize {
         // Don't expose the reserved slot. This ensures the default next_n implementation will wait
         // correctly in order to maintain the extra slot.
-        self.sb.get_cached_available().saturating_sub(1)
+        self.sb.len_available().saturating_sub(1)
     }
     fn release_n_real(&mut self, batch_size: usize) {
         // Similar to SinglePublisherSequenceBarrier::release_n_real.
@@ -2632,7 +2632,7 @@ where
         // sequence value, in between calls.
         let unwrapped_sequence = self.get_current().value();
         // Use the real availability value, including the reserved slot
-        let current_available = self.cb.get_cached_available();
+        let current_available = self.cb.len_available();
         let unwrap_difference = unwrapped_sequence - original_sequence;
         let mut actual_cached_available = current_available.wrapping_sub(unwrap_difference);
         // The current cached availability value may be less than the difference if the consumer's
@@ -2646,7 +2646,7 @@ where
         debug!(
             "Adjusting available by {}, from {} to {}. Original sequence: {}, unwrapped: {}",
             unwrap_difference,
-            self.get_cached_available(),
+            self.len_available(),
             actual_cached_available,
             original_sequence,
             unwrapped_sequence
@@ -2692,8 +2692,8 @@ where
     fn set_cached_available(&mut self, available: usize) {
         self.cb.set_cached_available(available)
     }
-    fn get_cached_available(&self) -> usize {
-        self.cb.get_cached_available()
+    fn len_available(&self) -> usize {
+        self.cb.len_available()
     }
 
     // Unfortunately, the resizing scheme removes the ability to guarantee that more than one slot
