@@ -1330,7 +1330,7 @@ trait SequenceBarrier {
     type T;
 
     /// Get the current value of the sequence associated with this SequenceBarrier.
-    fn get_current(&self) -> SequenceNumber;
+    fn current_sequence(&self) -> SequenceNumber;
 
     // Facilitate the default implementations of next_n and release_n
     /// Cache the passed in number of available slots for later use in len_available.
@@ -1458,7 +1458,7 @@ impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W> {
         }
     }
 
-    fn get_current(&self) -> SequenceNumber {
+    fn current_sequence(&self) -> SequenceNumber {
         self.sequence.get_owned()
     }
     fn set_cached_available(&mut self, available: usize) {
@@ -1494,7 +1494,7 @@ where
     /// See [`SequenceBarrier::set`].
     unsafe fn set(&mut self, value: RB::T) {
         unsafe {
-            let current_sequence = self.get_current();
+            let current_sequence = self.current_sequence();
             self.ring_buffer.set(current_sequence, value)
         }
     }
@@ -1502,7 +1502,7 @@ where
     /// See [`SequenceBarrier::get`].
     unsafe fn get(&mut self) -> &RB::T {
         unsafe {
-            let current_sequence = self.get_current();
+            let current_sequence = self.current_sequence();
             self.ring_buffer.get(current_sequence)
         }
     }
@@ -1517,7 +1517,7 @@ where
     /// See [`SequenceBarrierTake::take`].
     unsafe fn take(&mut self) -> RB::T {
         unsafe {
-            let current_sequence = self.get_current();
+            let current_sequence = self.current_sequence();
             self.ring_buffer.take(current_sequence)
         }
     }
@@ -1574,8 +1574,8 @@ where
 {
     type T = RB::T;
 
-    fn get_current(&self) -> SequenceNumber {
-        self.sb.get_current()
+    fn current_sequence(&self) -> SequenceNumber {
+        self.sb.current_sequence()
     }
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available);
@@ -1620,7 +1620,7 @@ where
 {
     unsafe fn take(&mut self) -> RB::T {
         unsafe {
-            let current_sequence = self.get_current();
+            let current_sequence = self.current_sequence();
             self.sb.ring_buffer.take(current_sequence)
         }
     }
@@ -1731,8 +1731,8 @@ where
 {
     type T = RB::T;
 
-    fn get_current(&self) -> SequenceNumber {
-        self.sb.get_current()
+    fn current_sequence(&self) -> SequenceNumber {
+        self.sb.current_sequence()
     }
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available)
@@ -1742,7 +1742,7 @@ where
     }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
-        let current_sequence = self.get_current();
+        let current_sequence = self.current_sequence();
         let available = self.sb.wait_strategy.wait_for_publisher(
             &self.publisher_availability,
             current_sequence,
@@ -2429,8 +2429,8 @@ where
     type T = T;
 
     // Inherited functions
-    fn get_current(&self) -> SequenceNumber {
-        self.sb.get_current()
+    fn current_sequence(&self) -> SequenceNumber {
+        self.sb.current_sequence()
     }
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available)
@@ -2453,7 +2453,7 @@ where
     }
     unsafe fn get(&mut self) -> &T {
         // Satisfy the borrow checker by performing this call outside the flag variable's lifetime.
-        let current_sequence = self.sb.get_current();
+        let current_sequence = self.sb.current_sequence();
         let flag = unsafe { self.sb.get() };
         debug_assert!(
             flag.is_item(),
@@ -2472,7 +2472,7 @@ where
         let current_size = self.sb.len();
         let mut available = self.sb.wait_strategy.try_wait_for_consumers(
             &self.sb.dependencies,
-            self.get_current(),
+            self.current_sequence(),
             current_size,
             needed_size,
         );
@@ -2489,9 +2489,9 @@ where
             // other sequences in the pipeline, which would break the availability calculations.
             // Unwrapping the publisher's sequence ensures that availablity calculations remain
             // correct throughout the reallocation transition.
-            let old_sequence = self.get_current();
+            let old_sequence = self.current_sequence();
             self.sb.sequence.unwrap(current_size);
-            let unwrapped_sequence = self.get_current();
+            let unwrapped_sequence = self.current_sequence();
 
             // Resizing shouldn't be a normal part of a program's operation. Alert the user, so that
             // they can consider fixing the issue.
@@ -2617,7 +2617,7 @@ where
     /// * old_buffer_size - The ring buffer's size before the reallocation occurred.
     ///
     fn unwrap_sequence(&mut self, old_buffer_size: usize) {
-        let original_sequence = self.get_current().value();
+        let original_sequence = self.current_sequence().value();
 
         self.cb.sb.sequence.unwrap(old_buffer_size);
 
@@ -2630,7 +2630,7 @@ where
         // important or necessary as it is for publishers, because the consumers are able to
         // automatically batch both reads of gating sequence values, and atomic updates of their own
         // sequence value, in between calls.
-        let unwrapped_sequence = self.get_current().value();
+        let unwrapped_sequence = self.current_sequence().value();
         // Use the real availability value, including the reserved slot
         let current_available = self.cb.len_available();
         let unwrap_difference = unwrapped_sequence - original_sequence;
@@ -2659,7 +2659,7 @@ where
     /// adjust the cached availability value to compensate for that jump.
     unsafe fn try_switch_next(&mut self) {
         let old_buffer_size = self.len();
-        let old_sequence = self.get_current();
+        let old_sequence = self.current_sequence();
         // SAFETY: the caller is responsible for ensuring at least one slot is available before
         // calling this.
         let flag = unsafe { self.cb.get() };
@@ -2674,7 +2674,7 @@ where
             debug!(
                 "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
                 old_sequence,
-                self.get_current()
+                self.current_sequence()
             );
         }
     }
@@ -2686,8 +2686,8 @@ where
 {
     type T = T;
 
-    fn get_current(&self) -> SequenceNumber {
-        self.cb.get_current()
+    fn current_sequence(&self) -> SequenceNumber {
+        self.cb.current_sequence()
     }
     fn set_cached_available(&mut self, available: usize) {
         self.cb.set_cached_available(available)
