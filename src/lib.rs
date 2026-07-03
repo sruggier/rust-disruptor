@@ -12,6 +12,7 @@ use std::cell::UnsafeCell;
 use std::clone::Clone;
 use std::cmp;
 use std::fmt;
+use std::hint::spin_loop;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::option::Option;
@@ -890,7 +891,7 @@ impl NotificationWaitStrategy for SpinWaitStrategy {
             buffer_size,
             min_available,
             None,
-            |_| (),
+            |_| spin_loop(),
         )
     }
 
@@ -910,7 +911,7 @@ impl PollingWaitStrategy for SpinWaitStrategy {
             buffer_size,
             min_available,
             None,
-            |_| (),
+            |_| spin_loop(),
         )
     }
 }
@@ -1019,8 +1020,10 @@ impl PollingWaitStrategy for YieldWaitStrategy {
             min_available,
             None,
             |tries| {
-                if tries >= self.max_spin_tries_consumer {
-                    thread::yield_now()
+                if tries < self.max_spin_tries_consumer {
+                    spin_loop();
+                } else {
+                    thread::yield_now();
                 }
             },
         )
@@ -1042,8 +1045,10 @@ impl NotificationWaitStrategy for YieldWaitStrategy {
             min_available,
             None,
             |tries| {
-                if tries > self.max_spin_tries_publisher {
-                    thread::yield_now()
+                if tries < self.max_spin_tries_publisher {
+                    spin_loop();
+                } else {
+                    thread::yield_now();
                 }
             },
         )
@@ -1229,7 +1234,7 @@ impl NotificationWaitStrategy for BlockingWaitStrategy {
             buffer_size,
             min_available,
             Some(self.max_spin_tries_publisher),
-            |_| (),
+            |_| spin_loop(),
         );
 
         if available >= min_available {
@@ -2829,7 +2834,7 @@ impl TimeoutResizeWaitStrategy {
             buffer_size,
             min_available,
             Some(1),
-            |_| (),
+            |_| spin_loop(),
         );
         if available >= min_available {
             return available;
@@ -2848,7 +2853,7 @@ impl TimeoutResizeWaitStrategy {
             buffer_size,
             min_available,
             Some(self.wait_strategy.max_spin_tries_consumer),
-            |_| (),
+            |_| spin_loop(),
         );
         if available >= min_available {
             return available;
