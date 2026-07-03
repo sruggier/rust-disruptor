@@ -1409,15 +1409,15 @@ trait SequenceBarrier: LenAvailable {
     fn set_cached_available(&mut self, available: usize);
 
     /// Wait for a single slot to be available.
-    fn next(&mut self) {
-        self.next_n(1)
+    fn wait_for_one_slot(&mut self) {
+        self.wait_for_slots(1)
     }
 
     /// Wait for N slots to be available.
     ///
     /// # Arguments
     ///
-    /// * batch_size - How many slots should be available before returning.
+    /// * min_available - How many slots should be available before returning.
     ///
     /// # Safety notes
     ///
@@ -1425,19 +1425,19 @@ trait SequenceBarrier: LenAvailable {
     /// rest of the pipeline is waiting for, then this function may deadlock. A size of 1 should
     /// always be safe. Alternatively, increase the size of the buffer to support the desired amount
     /// of batching.
-    fn next_n(&mut self, batch_size: usize) {
+    fn wait_for_slots(&mut self, min_available: usize) {
         // Avoid waiting if the necessary slots were already available as of the last read. Calls
         // next_n_real if the slots are not available.
-        if self.len_available() < batch_size {
-            let cached_available = self.next_n_real(batch_size);
+        if self.len_available() < min_available {
+            let cached_available = self.wait_for_real(min_available);
             self.set_cached_available(cached_available);
         }
     }
 
-    /// Wait for `batch_size` slots to become available, then return the actual number of available
-    /// slots, which may be greater than `batch_size`. This is called only as a last resort. If extra
-    /// slots were available as of the last wait, this function will not be called.
-    fn next_n_real(&mut self, batch_size: usize) -> usize;
+    /// Wait for `min_available` slots to become available, then return the actual number of
+    /// available slots, which may be greater than `min_available`. This is called only as a last
+    /// resort. If extra slots were available as of the last wait, this function will not be called.
+    fn wait_for_real(&mut self, min_available: usize) -> usize;
 
     /// Release a single slot for downstream consumers.
     fn release(&mut self) {
@@ -1667,13 +1667,13 @@ where
         self.sb.set_cached_available(available);
     }
 
-    fn next_n_real(&mut self, batch_size: usize) -> usize {
+    fn wait_for_real(&mut self, min_available: usize) -> usize {
         let current_sequence = self.sb.sequence.get_owned();
         let available = self.sb.wait_strategy.wait_for_dependencies(
             &self.sb.dependencies,
             current_sequence,
             self.capacity(),
-            batch_size,
+            min_available,
         );
         available
     }
@@ -1837,19 +1837,19 @@ where
         self.sb.set_cached_available(available)
     }
 
-    fn next_n_real(&mut self, batch_size: usize) -> usize {
+    fn wait_for_real(&mut self, min_available: usize) -> usize {
         let current_sequence = self.current_sequence();
         let available = self.sb.wait_strategy.wait_for_publisher(
             &self.publisher_availability,
             current_sequence,
             self.sb.ring_buffer.len(),
-            batch_size,
+            min_available,
         );
         let a = self.sb.wait_strategy.wait_for_dependencies(
             &self.sb.dependencies,
             current_sequence,
             self.sb.ring_buffer.len(),
-            batch_size,
+            min_available,
         );
         // wait_for_dependencies returns buffer_size if there are no other dependencies
         cmp::min(available, a)
@@ -1962,7 +1962,7 @@ where
         unsafe {
             let sb = &mut *self.sequence_barrier.get();
             // Wait for available slot
-            sb.next();
+            sb.wait_for_one_slot();
             {
                 sb.set(value);
             }
@@ -2005,7 +2005,7 @@ where
     fn consume<C: FnMut(&SB::T)>(&self, mut consume_callback: C) {
         unsafe {
             let sequence_barrier = &mut *self.sequence_barrier.get();
-            sequence_barrier.next();
+            sequence_barrier.wait_for_one_slot();
             {
                 let item = sequence_barrier.get();
                 consume_callback(item);
@@ -2116,7 +2116,7 @@ where
     fn take(&self) -> SB::T {
         unsafe {
             let sequence_barrier = &mut *self.sc.sequence_barrier.get();
-            sequence_barrier.next();
+            sequence_barrier.wait_for_one_slot();
             let value;
             {
                 value = sequence_barrier.take();
@@ -2520,8 +2520,8 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
 
 impl<T> LenAvailable for SingleResizingPublisherSequenceBarrier<T> {
     fn len_available(&self) -> usize {
-        // Don't expose the reserved slot. This ensures the default next_n implementation will wait
-        // correctly in order to maintain the extra slot.
+        // Don't expose the reserved slot. This ensures the default wait_for_slots implementation
+        // will wait correctly in order to maintain the extra slot.
         self.sb.len_available().saturating_sub(1)
     }
 }
@@ -2582,10 +2582,10 @@ where
 
     /// Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
     /// policy requests that.
-    fn next_n_real(&mut self, batch_size: usize) -> usize {
+    fn wait_for_real(&mut self, min_available: usize) -> usize {
         // Always leave an extra slot available, for use being marked if we decide to allocate a
         // larger buffer.
-        let needed_size = batch_size + 1;
+        let needed_size = min_available + 1;
         let current_size = self.sb.capacity();
         let mut available = self.sb.wait_strategy.try_wait_for_consumers(
             &self.sb.dependencies,
@@ -2614,7 +2614,7 @@ where
             // they can consider fixing the issue.
             error!(
                 "Possible deadlock detected, allocating a larger buffer for disruptor events. Current buffer size: {}, new size: {}, batch size: {}",
-                current_size, new_size, batch_size
+                current_size, new_size, min_available
             );
             debug!(
                 "sequence: {}, unwrapped sequence: {}",
@@ -2829,15 +2829,15 @@ where
     }
 
     // Unfortunately, the resizing scheme removes the ability to guarantee that more than one slot
-    // is actually available after returning from next_n, because the next slot could be the last
-    // one that was published in the current buffer. This is fixable, but for now, just disable
-    // support for larger batch sizes.
-    fn next_n_real(&mut self, batch_size: usize) -> usize {
+    // is actually available after polling, because the next slot could be the last one that was
+    // published in the current buffer. This is fixable, but for now, just disable support for
+    // larger batch sizes.
+    fn wait_for_real(&mut self, min_available: usize) -> usize {
         assert!(
-            batch_size == 1,
+            min_available == 1,
             "Batch sizes larger than 1 are currently not supported with resizable buffers."
         );
-        self.cb.next_n_real(1)
+        self.cb.wait_for_real(1)
     }
     fn release_n_real(&mut self, batch_size: usize) {
         self.cb.release_n_real(batch_size)
