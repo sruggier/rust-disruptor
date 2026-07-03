@@ -2917,7 +2917,6 @@ pub struct SingleConsumer<T, const N: usize, W> {
 impl<T, const N: usize, W> SinglePublisher<T, N, W>
 where
     T: Default,
-    W: NotificationWaitStrategy,
 {
     /// Constructs a new (non-resizeable) ring buffer with _size_ elements and wraps it into a new
     /// SinglePublisher object.
