@@ -730,6 +730,37 @@ fn test_sequencereader() {
     assert!(12 == reader.get().value());
 }
 
+// Create a shorthand for availability calculation functions, since this gets repeated several
+// times below.
+pub trait AvailabilityFn: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
+impl<F> AvailabilityFn for F where F: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
+
+/// Given a list of dependencies, retrieves the current value of each and returns the minimum number
+/// of available items out of all the dependencies.
+fn calculate_available_list<F>(
+    waiting_sequence: SequenceNumber,
+    dependencies: &[SequenceReader],
+    buffer_size: usize,
+    calculate_available: &F,
+) -> usize
+where
+    F: AvailabilityFn,
+{
+    if dependencies.is_empty() {
+        // The corresponding stage of the pipeline has ownership of all elements in the buffer. In
+        // practice, this can only happen with the publisher, and only if the caller starts setting
+        // or mutating elements before constructing the rest of the pipeline.
+        cmp::max(0, buffer_size - waiting_sequence.value())
+    } else {
+        let mut available = usize::MAX;
+        for consumer_sequence in dependencies.iter() {
+            let a = calculate_available(consumer_sequence.get(), waiting_sequence, buffer_size);
+            available = cmp::min(available, a);
+        }
+        available
+    }
+}
+
 // Abstraction over availability calculation, allowing the upstream pipeline stage to define the
 // synchronization protocol it'll use.
 pub trait PollableDependency: Send {
@@ -789,11 +820,6 @@ impl PollableDependency for PublisherAvailability {
     }
 }
 
-// Create a shorthand for availability calculation functions, since this gets repeated several
-// times below.
-pub trait AvailabilityFn: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
-impl<F> AvailabilityFn for F where F: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
-
 /// Allows waiting for upstream dependencies.
 pub trait PollingWaitStrategy: Clone + Send {
     /// Wait for upstream consumers to finish processing items that have already been published,
@@ -839,32 +865,6 @@ pub trait NotificationWaitStrategy: PollingWaitStrategy {
     /// work, and consumers waiting using a blocking wait strategy may sleep indefinitely (until a
     /// second item is published).
     fn notify_all_waiters(&mut self);
-}
-
-/// Given a list of dependencies, retrieves the current value of each and returns the minimum number
-/// of available items out of all the dependencies.
-fn calculate_available_list<F>(
-    waiting_sequence: SequenceNumber,
-    dependencies: &[SequenceReader],
-    buffer_size: usize,
-    calculate_available: &F,
-) -> usize
-where
-    F: AvailabilityFn,
-{
-    if dependencies.is_empty() {
-        // The corresponding stage of the pipeline has ownership of all elements in the buffer. In
-        // practice, this can only happen with the publisher, and only if the caller starts setting
-        // or mutating elements before constructing the rest of the pipeline.
-        cmp::max(0, buffer_size - waiting_sequence.value())
-    } else {
-        let mut available = usize::MAX;
-        for consumer_sequence in dependencies.iter() {
-            let a = calculate_available(consumer_sequence.get(), waiting_sequence, buffer_size);
-            available = cmp::min(available, a);
-        }
-        available
-    }
 }
 
 /// Waits using simple busy waiting.
