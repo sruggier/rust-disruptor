@@ -1393,7 +1393,7 @@ trait SequenceBarrier {
     // Ring buffer related operations
 
     /// Returns the size of the underlying ring buffer.
-    fn len(&self) -> usize;
+    fn capacity(&self) -> usize;
 
     /// Stores a value in the sequence barrier's current slot.
     ///
@@ -1477,7 +1477,7 @@ where
     fn poll(&mut self) {
         self.cached_available = self
             .dependencies
-            .calculate_available(self.sequence.get_owned(), self.len())
+            .calculate_available(self.sequence.get_owned(), self.capacity())
     }
 }
 
@@ -1487,7 +1487,7 @@ impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W>
 where
     RB: UnsafeRingBufferOps,
 {
-    fn len(&self) -> usize {
+    fn capacity(&self) -> usize {
         self.ring_buffer.len()
     }
 
@@ -1558,11 +1558,11 @@ where
             // calculation.
             self.sb.poll();
 
-            let slots_in_progress = self.sb.len() - self.sb.cached_available;
+            let slots_in_progress = self.sb.capacity() - self.sb.cached_available;
             self.sb
                 .sequence
                 .get_owned()
-                .wrapping_sub(slots_in_progress, wrap_boundary(self.sb.len()))
+                .wrapping_sub(slots_in_progress, wrap_boundary(self.sb.capacity()))
         }
     }
 }
@@ -1589,19 +1589,21 @@ where
         let available = self.sb.wait_strategy.wait_for_dependencies(
             &self.sb.dependencies,
             current_sequence,
-            self.len(),
+            self.capacity(),
             batch_size,
         );
         available
     }
 
     fn release_n_real(&mut self, batch_size: usize) {
-        self.sb.sequence.advance_and_flush(batch_size, self.len());
+        self.sb
+            .sequence
+            .advance_and_flush(batch_size, self.capacity());
         self.sb.wait_strategy.notify_all_waiters();
     }
 
-    fn len(&self) -> usize {
-        self.sb.len()
+    fn capacity(&self) -> usize {
+        self.sb.capacity()
     }
 
     unsafe fn set(&mut self, value: RB::T) {
@@ -1766,8 +1768,8 @@ where
         self.sb.sequence.flush();
     }
 
-    fn len(&self) -> usize {
-        self.sb.len()
+    fn capacity(&self) -> usize {
+        self.sb.capacity()
     }
     unsafe fn set(&mut self, value: Self::T) {
         unsafe { self.sb.set(value) }
@@ -2442,11 +2444,13 @@ where
     }
     fn release_n_real(&mut self, batch_size: usize) {
         // Similar to SinglePublisherSequenceBarrier::release_n_real.
-        self.sb.sequence.advance_and_flush(batch_size, self.len());
+        self.sb
+            .sequence
+            .advance_and_flush(batch_size, self.capacity());
         self.sb.wait_strategy.notify_all_waiters();
     }
-    fn len(&self) -> usize {
-        self.sb.len()
+    fn capacity(&self) -> usize {
+        self.sb.capacity()
     }
     unsafe fn set(&mut self, value: T) {
         unsafe { self.sb.set(ReallocationFlag::Item(value)) }
@@ -2469,7 +2473,7 @@ where
         // Always leave an extra slot available, for use being marked if we decide to allocate a
         // larger buffer.
         let needed_size = batch_size + 1;
-        let current_size = self.sb.len();
+        let current_size = self.sb.capacity();
         let mut available = self.sb.wait_strategy.try_wait_for_consumers(
             &self.sb.dependencies,
             self.current_sequence(),
@@ -2658,7 +2662,7 @@ where
     /// sequence to match the change that would have happened to the publisher's sequence, and
     /// adjust the cached availability value to compensate for that jump.
     unsafe fn try_switch_next(&mut self) {
-        let old_buffer_size = self.len();
+        let old_buffer_size = self.capacity();
         let old_sequence = self.current_sequence();
         // SAFETY: the caller is responsible for ensuring at least one slot is available before
         // calling this.
@@ -2710,8 +2714,8 @@ where
     fn release_n_real(&mut self, batch_size: usize) {
         self.cb.release_n_real(batch_size)
     }
-    fn len(&self) -> usize {
-        self.cb.len()
+    fn capacity(&self) -> usize {
+        self.cb.capacity()
     }
     unsafe fn set(&mut self, value: T) {
         unsafe { self.cb.set(ReallocationFlag::Item(value)) }
