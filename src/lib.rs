@@ -239,6 +239,7 @@ where
 /// # Safety notes
 ///
 /// It's the user's responsibility to synchronize access to the inner value.
+#[derive(Debug)]
 struct UncheckedUnsafeArc<T> {
     arc: Arc<UnsafeCell<T>>,
 }
@@ -528,6 +529,7 @@ fn test_calculate_available_publisher() {
 /// A reference to an atomic usize that allows the owner to mutate it, and can generate read-only
 /// references using [`clone_immut`](SequenceOwner::clone_immut). Returns values as SequenceNumber
 /// to disambiguate from indices and other usize values. Memory is managed via reference counting.
+#[derive(Debug)]
 struct SequenceOwner {
     /// The published value of the sequence, visible to waiting consumers.
     value_arc: UncheckedUnsafeArc<CachePadded<AtomicUsize>>,
@@ -687,6 +689,7 @@ fn test_sequence_overflow() {
 
 /// Immutable reference to a sequence. Can be safely given to other tasks. Reads with acquire
 /// semantics.
+#[derive(Debug)]
 pub struct SequenceReader {
     sequence_arc: UncheckedUnsafeArc<CachePadded<AtomicUsize>>,
 }
@@ -702,6 +705,12 @@ impl SequenceReader {
         SequenceReader {
             sequence_arc: self.sequence_arc.clone(),
         }
+    }
+}
+
+impl Clone for SequenceReader {
+    fn clone(&self) -> Self {
+        self.clone_immut()
     }
 }
 
@@ -721,6 +730,65 @@ fn test_sequencereader() {
     assert!(12 == reader.get().value());
 }
 
+// Abstraction over availability calculation, allowing the upstream pipeline stage to define the
+// synchronization protocol it'll use.
+pub trait PollableDependency: Send {
+    fn calculate_available(&self, waiting_sequence: SequenceNumber, buffer_size: usize) -> usize;
+}
+
+/// A list of consumer sequences, used by the publisher stage to calculate availability.
+#[derive(Clone, Debug, Default)]
+struct PublisherDependencies {
+    sequences: Vec<SequenceReader>,
+}
+
+impl PollableDependency for PublisherDependencies {
+    fn calculate_available(&self, waiting_sequence: SequenceNumber, buffer_size: usize) -> usize {
+        calculate_available_list(
+            waiting_sequence,
+            self.sequences.as_slice(),
+            buffer_size,
+            &calculate_available_publisher,
+        )
+    }
+}
+
+// A list of publisher or consumer sequences, used by consumer stages to calculate availability.
+#[derive(Clone, Debug, Default)]
+struct ConsumerDependencies {
+    sequences: Vec<SequenceReader>,
+}
+
+impl ConsumerDependencies {
+    fn from_vec(sequences: Vec<SequenceReader>) -> Self {
+        ConsumerDependencies { sequences }
+    }
+}
+
+impl PollableDependency for ConsumerDependencies {
+    fn calculate_available(&self, waiting_sequence: SequenceNumber, buffer_size: usize) -> usize {
+        calculate_available_list(
+            waiting_sequence,
+            self.sequences.as_slice(),
+            buffer_size,
+            &calculate_available_consumer,
+        )
+    }
+}
+
+/// Separate struct definition for the reference to the publisher, which can only refer to a single
+/// SequenceReader, for now. This will be revisited when implementing support for concurrent
+/// publishing.
+struct PublisherAvailability {
+    sequence: SequenceReader,
+}
+
+impl PollableDependency for PublisherAvailability {
+    fn calculate_available(&self, waiting_sequence: SequenceNumber, buffer_size: usize) -> usize {
+        calculate_available_consumer(self.sequence.get(), waiting_sequence, buffer_size)
+    }
+}
+
 // Create a shorthand for availability calculation functions, since this gets repeated several
 // times below.
 pub trait AvailabilityFn: Fn(SequenceNumber, SequenceNumber, usize) -> usize {}
@@ -731,16 +799,13 @@ pub trait PollingWaitStrategy: Clone + Send {
     /// Wait for upstream consumers to finish processing items that have already been published,
     /// then returns the actual number of available items, which may be greater than
     /// `min_available`. Returns `buffer_size - waiting_sequence` if there are no dependencies.
-    fn wait_for_dependencies<F>(
+    fn wait_for_dependencies(
         &self,
+        dependencies: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F,
         min_available: usize,
-    ) -> usize
-    where
-        F: AvailabilityFn;
+    ) -> usize;
 }
 
 /// Interface for wait strategies that require notification when the publishing stage releases new
@@ -750,19 +815,18 @@ pub trait PollingWaitStrategy: Clone + Send {
 /// to query which slots have been released by the publisher to know whether it makes sense to wait
 /// for a notification or not.
 pub trait NotificationWaitStrategy: PollingWaitStrategy {
-    /// Wait for `cursor` to release the next `min_available` slots, then return the actual number
-    /// of available slots, which may be greater than `min_available`.
+    /// Wait for the publisher to release the next `min_available` slots, then return the actual
+    /// number of available slots, which may be greater than `min_available`.
     ///
-    /// For strategies that block, only the publisher will attempt to wake the task. Therefore, the
-    /// publisher's `cursor` is needed so that once the publisher has advanced sufficiently, the task
-    /// will stop blocking and busy-wait on its immediate dependencies for the event to become
-    /// available for processing. Once the publisher has released the necessary slots, the rest of
-    /// the pipeline should release them in a relatively bounded amount of time, so it's probably
-    /// worth wasting some CPU time to achieve lower latency.
+    /// For strategies that block, only the publisher will attempt to wake the task, so this method
+    /// only waits for the publisher. Consumers will also have to busy-wait on its immediate
+    /// dependencies for the event to become available for processing. Once the publisher has
+    /// released the necessary slots, the rest of the pipeline should release them in a bounded
+    /// amount of time, so the cost of polling is less of a problem.
     fn wait_for_publisher(
         &mut self,
+        publisher_availability: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        cursor: &SequenceReader,
         buffer_size: usize,
         min_available: usize,
     ) -> usize;
@@ -815,16 +879,15 @@ pub struct SpinWaitStrategy;
 impl NotificationWaitStrategy for SpinWaitStrategy {
     fn wait_for_publisher(
         &mut self,
+        publisher_availability: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        cursor: &SequenceReader,
         buffer_size: usize,
         min_available: usize,
     ) -> usize {
-        let mut available =
-            calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+        let mut available = 0;
         while min_available > available {
             // busy wait
-            available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+            available = publisher_availability.calculate_available(waiting_sequence, buffer_size);
         }
 
         available
@@ -833,86 +896,55 @@ impl NotificationWaitStrategy for SpinWaitStrategy {
     fn notify_all_waiters(&mut self) {}
 }
 impl PollingWaitStrategy for SpinWaitStrategy {
-    fn wait_for_dependencies<F>(
+    fn wait_for_dependencies(
         &self,
+        dependencies: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F,
         min_available: usize,
-    ) -> usize
-    where
-        F: AvailabilityFn,
-    {
+    ) -> usize {
         let mut available = 0;
         while available < min_available {
             // busy wait
-            available = calculate_available_list(
-                waiting_sequence,
-                dependencies,
-                buffer_size,
-                calculate_available,
-            );
+            available = dependencies.calculate_available(waiting_sequence, buffer_size);
         }
         available
     }
 }
 
-/// Spin on a consumer gating sequence until either the desired number of elements becomes available,
-/// or a maximum number of retries is reached.
+/// Spin on a [`PollableDependency`] implementation until either the desired number of elements
+/// becomes available, or a maximum number of retries is reached.
+///
+/// If `None` is passed as an argument for the `max_tries` parameter, this function will spin
+/// forever. If 0 or 1 are passed, it'll try exactly once.
+///
+/// The function `busy_fn` will be called during each iteration, and can be used to implement
+/// various back-off strategies.
 ///
 /// # Return value
 ///
 /// The number of available items, which may be less than `min_available` if the maximum amount of tries was
 /// reached.
-fn spin_for_consumer_retries<F>(
+fn spin_for_dependency_with_retries<F>(
+    pollable: &dyn PollableDependency,
     waiting_sequence: SequenceNumber,
-    dependencies: &[SequenceReader],
     buffer_size: usize,
-    calculate_available: &F,
     min_available: usize,
-    max_tries: usize,
+    max_tries: Option<usize>,
+    mut busy_fn: F,
 ) -> usize
 where
-    F: AvailabilityFn,
+    F: FnMut(usize),
 {
     let mut tries = 0;
-    let mut available = 0;
-    while available < min_available && tries < max_tries {
-        // busy wait
-        available = calculate_available_list(
-            waiting_sequence,
-            dependencies,
-            buffer_size,
-            calculate_available,
-        );
+    loop {
+        let available = pollable.calculate_available(waiting_sequence, buffer_size);
         tries += 1;
+        if available >= min_available || max_tries.is_some_and(|max_tries| tries >= max_tries) {
+            break available;
+        }
+        busy_fn(tries);
     }
-    available
-}
-
-/// Spin on a publisher gating sequence until either the desired number of elements becomes available,
-/// or a maximum number of retries is reached.
-///
-/// # Return value
-///
-/// The number of available items, which may be less than `min_available` if the maximum amount of
-/// tries was reached.
-fn spin_for_publisher_retries(
-    min_available: usize,
-    waiting_sequence: SequenceNumber,
-    cursor: &SequenceReader,
-    buffer_size: usize,
-    max_tries: usize,
-) -> usize {
-    let mut tries = 0;
-    let mut available = 0;
-    while min_available > available && tries < max_tries {
-        // busy wait
-        available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
-        tries += 1;
-    }
-    available
 }
 
 pub const DEFAULT_MAX_SPIN_TRIES_PUBLISHER: usize = 2500;
@@ -970,70 +1002,48 @@ impl YieldWaitStrategy {
 }
 
 impl PollingWaitStrategy for YieldWaitStrategy {
-    fn wait_for_dependencies<F>(
+    fn wait_for_dependencies(
         &self,
+        dependencies: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F,
         min_available: usize,
-    ) -> usize
-    where
-        F: AvailabilityFn,
-    {
-        let mut available = spin_for_consumer_retries(
-            waiting_sequence,
+    ) -> usize {
+        spin_for_dependency_with_retries(
             dependencies,
+            waiting_sequence,
             buffer_size,
-            calculate_available,
             min_available,
-            self.max_spin_tries_consumer,
-        );
-
-        if available >= min_available {
-            return available;
-        }
-
-        while min_available > available {
-            available = calculate_available_list(
-                waiting_sequence,
-                dependencies,
-                buffer_size,
-                calculate_available,
-            );
-            thread::yield_now();
-        }
-
-        available
+            None,
+            |tries| {
+                if tries >= self.max_spin_tries_consumer {
+                    thread::yield_now()
+                }
+            },
+        )
     }
 }
 
 impl NotificationWaitStrategy for YieldWaitStrategy {
     fn wait_for_publisher(
         &mut self,
+        publisher_availability: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        cursor: &SequenceReader,
         buffer_size: usize,
         min_available: usize,
     ) -> usize {
-        let mut available = spin_for_publisher_retries(
-            min_available,
+        spin_for_dependency_with_retries(
+            publisher_availability,
             waiting_sequence,
-            cursor,
             buffer_size,
-            self.max_spin_tries_publisher,
-        );
-
-        if available >= min_available {
-            return available;
-        }
-
-        while available < min_available {
-            available = calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
-            thread::yield_now();
-        }
-
-        available
+            min_available,
+            None,
+            |tries| {
+                if tries > self.max_spin_tries_publisher {
+                    thread::yield_now()
+                }
+            },
+        )
     }
     fn notify_all_waiters(&mut self) {}
 }
@@ -1205,17 +1215,18 @@ impl Clone for BlockingWaitStrategy {
 impl NotificationWaitStrategy for BlockingWaitStrategy {
     fn wait_for_publisher(
         &mut self,
+        publisher_availability: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        cursor: &SequenceReader,
         buffer_size: usize,
         min_available: usize,
     ) -> usize {
-        let mut available = spin_for_publisher_retries(
-            min_available,
+        let mut available = spin_for_dependency_with_retries(
+            publisher_availability,
             waiting_sequence,
-            cursor,
             buffer_size,
-            self.max_spin_tries_publisher,
+            min_available,
+            Some(self.max_spin_tries_publisher),
+            |_| (),
         );
 
         if available >= min_available {
@@ -1237,13 +1248,13 @@ impl NotificationWaitStrategy for BlockingWaitStrategy {
                 let _dummy: bool = signal_needed.swap(true, AcqRel);
                 // Verify that no slot was published
                 available =
-                    calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+                    publisher_availability.calculate_available(waiting_sequence, buffer_size);
                 if min_available > available {
                     // Sleep
                     let lock_result = d.wait_condvar.wait(mutex_guard);
                     assert!(lock_result.is_ok());
                     available =
-                        calculate_available_consumer(cursor.get(), waiting_sequence, buffer_size);
+                        publisher_availability.calculate_available(waiting_sequence, buffer_size);
                 }
             }
         }
@@ -1279,29 +1290,19 @@ impl NotificationWaitStrategy for BlockingWaitStrategy {
 }
 
 impl PollingWaitStrategy for BlockingWaitStrategy {
-    fn wait_for_dependencies<F>(
+    fn wait_for_dependencies(
         &self,
+        dependencies: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F,
         min_available: usize,
-    ) -> usize
-    where
-        F: AvailabilityFn,
-    {
+    ) -> usize {
         let w = YieldWaitStrategy::new_with_retry_count(
             self.max_spin_tries_publisher,
             self.max_spin_tries_consumer,
         );
 
-        w.wait_for_dependencies(
-            waiting_sequence,
-            dependencies,
-            buffer_size,
-            calculate_available,
-            min_available,
-        )
+        w.wait_for_dependencies(dependencies, waiting_sequence, buffer_size, min_available)
     }
 }
 
@@ -1420,10 +1421,10 @@ pub trait InsertSingleConsumer {
 
 /// A common definition of the fields that are shared between non-concurrent publisher or consumer
 /// pipeline stages.
-struct CommonSingleSequenceBarrier<RB, W> {
+struct CommonSingleSequenceBarrier<RB, D, W> {
     ring_buffer: RB,
     sequence: SequenceOwner,
-    dependencies: Vec<SequenceReader>,
+    dependencies: D,
     /// Contains the number of available items as of the last time the dependent sequence values were
     /// retrieved.
     cached_available: usize,
@@ -1432,11 +1433,11 @@ struct CommonSingleSequenceBarrier<RB, W> {
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types.
-impl<RB, W> CommonSingleSequenceBarrier<RB, W> {
+impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W> {
     fn new(
         ring_buffer: RB,
         sequence: SequenceOwner,
-        dependencies: Vec<SequenceReader>,
+        dependencies: D,
         cached_available: usize,
         wait_strategy: W,
     ) -> Self {
@@ -1460,9 +1461,21 @@ impl<RB, W> CommonSingleSequenceBarrier<RB, W> {
     }
 }
 
+impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W>
+where
+    D: PollableDependency,
+    RB: UnsafeRingBufferOps,
+{
+    fn poll(&mut self) {
+        self.cached_available = self
+            .dependencies
+            .calculate_available(self.sequence.get_owned(), self.len())
+    }
+}
+
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types, where the [`UnsafeRingBufferOps`] trait is required.
-impl<RB, W> CommonSingleSequenceBarrier<RB, W>
+impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1489,7 +1502,7 @@ where
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types, where the [`UnsafeRingBufferOpsTake`] trait is required.
-impl<RB, W> CommonSingleSequenceBarrier<RB, W>
+impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W>
 where
     RB: UnsafeRingBufferOpsTake,
 {
@@ -1505,7 +1518,7 @@ where
 /// Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
 /// publisher.
 struct SinglePublisherSequenceBarrier<RB, W> {
-    sb: CommonSingleSequenceBarrier<RB, W>,
+    sb: CommonSingleSequenceBarrier<RB, PublisherDependencies, W>,
 }
 
 impl<RB, W> SinglePublisherSequenceBarrier<RB, W> {
@@ -1514,7 +1527,7 @@ impl<RB, W> SinglePublisherSequenceBarrier<RB, W> {
             sb: CommonSingleSequenceBarrier::new(
                 ring_buffer,
                 SequenceOwner::new(),
-                Vec::new(),
+                PublisherDependencies::default(),
                 0,
                 wait_strategy,
             ),
@@ -1526,25 +1539,16 @@ impl<RB, W> SinglePublisherSequenceBarrier<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
-    fn poll(&mut self) {
-        self.sb.cached_available = calculate_available_list(
-            self.sb.sequence.get_owned(),
-            self.sb.dependencies.as_slice(),
-            self.sb.len(),
-            &calculate_available_publisher,
-        );
-    }
-
     /// Returns the earliest sequence that may not yet be handled by the rest of the pipeline.
     ///
     /// This is used in the insertion of new consumers as their initial sequence number.
     fn calculate_earliest_consumer_sequence(&mut self) -> SequenceNumber {
-        if self.sb.dependencies.is_empty() {
+        if self.sb.dependencies.sequences.is_empty() {
             SequenceNumber(SEQUENCE_INITIAL)
         } else {
             // Poll dependencies once, to ensure the latest possible information is used in this
             // calculation.
-            self.poll();
+            self.sb.poll();
 
             let slots_in_progress = self.sb.len() - self.sb.cached_available;
             self.sb
@@ -1575,10 +1579,9 @@ where
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.sb.sequence.get_owned();
         let available = self.sb.wait_strategy.wait_for_dependencies(
+            &self.sb.dependencies,
             current_sequence,
-            self.sb.dependencies.as_slice(),
             self.len(),
-            &calculate_available_publisher,
             batch_size,
         );
         available
@@ -1648,15 +1651,16 @@ where
         let new_sequence = self.calculate_earliest_consumer_sequence();
 
         let my_dependencies = &mut self.sb.dependencies;
-        let dependencies = if my_dependencies.is_empty() {
+        let sequences = if my_dependencies.sequences.is_empty() {
             // This is the first addition to the pipeline, so use this publisher's sequence as its
             // dependency.
             vec![self.sb.sequence.clone_immut()]
         } else {
             // A newly inserted consumer needs to wait for what was previously the last stage in the
             // pipeline, so give the new consumer the existing dependency list.
-            std::mem::take(my_dependencies)
+            std::mem::take(&mut my_dependencies.sequences)
         };
+        let dependencies = ConsumerDependencies::from_vec(sequences);
         // my_dependencies is an empty Vec now, to be populated with a reference to the new
         // consumer's sequence.
 
@@ -1670,8 +1674,10 @@ where
             self.sb.sequence.clone_immut(),
         );
 
-        my_dependencies.reserve_exact(1);
-        my_dependencies.push(new_consumer.sb.sequence.clone_immut());
+        my_dependencies.sequences.reserve_exact(1);
+        my_dependencies
+            .sequences
+            .push(new_consumer.sb.sequence.clone_immut());
 
         new_consumer
     }
@@ -1681,19 +1687,19 @@ where
 /// consumers, but all consumers will process all events. This is unsuitable for when a
 /// load-balancing arrangement is desired.
 struct SingleConsumerSequenceBarrier<RB, W> {
-    sb: CommonSingleSequenceBarrier<RB, W>,
+    sb: CommonSingleSequenceBarrier<RB, ConsumerDependencies, W>,
     /// A reference to the publisher's sequence.
-    cursor: SequenceReader,
+    publisher_availability: PublisherAvailability,
 }
 
 impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
     fn new(
         ring_buffer: RB,
         initial_sequence: SequenceNumber,
-        dependencies: Vec<SequenceReader>,
+        dependencies: ConsumerDependencies,
         cached_available: usize,
         wait_strategy: W,
-        cursor: SequenceReader,
+        publisher_sequence: SequenceReader,
     ) -> SingleConsumerSequenceBarrier<RB, W> {
         SingleConsumerSequenceBarrier {
             sb: CommonSingleSequenceBarrier::new(
@@ -1703,7 +1709,9 @@ impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
                 cached_available,
                 wait_strategy,
             ),
-            cursor,
+            publisher_availability: PublisherAvailability {
+                sequence: publisher_sequence,
+            },
         }
     }
 }
@@ -1728,16 +1736,15 @@ where
     fn next_n_real(&mut self, batch_size: usize) -> usize {
         let current_sequence = self.get_current();
         let available = self.sb.wait_strategy.wait_for_publisher(
+            &self.publisher_availability,
             current_sequence,
-            &self.cursor,
             self.sb.ring_buffer.len(),
             batch_size,
         );
         let a = self.sb.wait_strategy.wait_for_dependencies(
+            &self.sb.dependencies,
             current_sequence,
-            self.sb.dependencies.as_slice(),
             self.sb.ring_buffer.len(),
-            &calculate_available_consumer,
             batch_size,
         );
         // wait_for_dependencies returns buffer_size if there are no other dependencies
@@ -1789,14 +1796,15 @@ where
             new_dependencies,
             self.sb.cached_available,
             self.sb.wait_strategy.clone(),
-            self.cursor.clone_immut(),
+            self.publisher_availability.sequence.clone(),
         );
 
         // Wait for the new consumer to process the events that would otherwise have been available
         // to self.
-        self.sb.dependencies.reserve_exact(1);
+        self.sb.dependencies.sequences.reserve_exact(1);
         self.sb
             .dependencies
+            .sequences
             .push(new_consumer.sb.sequence.clone_immut());
         self.sb.cached_available = 0;
         new_consumer
@@ -2362,11 +2370,29 @@ fn test_calculate_available_publisher_resizing() {
     assert_eq!(test(3, 19, new_buffer_size), 0);
 }
 
+/// A resizing-flavoured version of [`PublisherDependencies`].
+#[derive(Clone, Debug, Default)]
+struct ResizingPublisherDependencies {
+    sequences: Vec<SequenceReader>,
+}
+
+impl PollableDependency for ResizingPublisherDependencies {
+    fn calculate_available(&self, waiting_sequence: SequenceNumber, buffer_size: usize) -> usize {
+        calculate_available_list(
+            waiting_sequence,
+            self.sequences.as_slice(),
+            buffer_size,
+            &calculate_available_publisher_resizing,
+        )
+    }
+}
+
 /// Resizing variant of SinglePublisherSequenceBarrier.
 struct SingleResizingPublisherSequenceBarrier<T> {
     // Reuse SinglePublisherSequenceBarrier data declarations and constructor
     sb: CommonSingleSequenceBarrier<
         ResizableRingBufferArc<ReallocationFlag<T>>,
+        ResizingPublisherDependencies,
         TimeoutResizeWaitStrategy,
     >,
 }
@@ -2380,7 +2406,7 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
             sb: CommonSingleSequenceBarrier::new(
                 ring_buffer,
                 SequenceOwner::new(),
-                Vec::new(),
+                ResizingPublisherDependencies::default(),
                 0,
                 wait_strategy,
             ),
@@ -2437,10 +2463,9 @@ where
         let needed_size = batch_size + 1;
         let current_size = self.sb.len();
         let mut available = self.sb.wait_strategy.try_wait_for_consumers(
+            &self.sb.dependencies,
             self.get_current(),
-            self.sb.dependencies.as_slice(),
             current_size,
-            &calculate_available_publisher_resizing,
             needed_size,
         );
 
@@ -2520,7 +2545,7 @@ where
         // Prevent this from executing during a transition between buffers, unless/until the
         // implementation is reworked to make support for that possible.
         assert!(
-            self.sb.dependencies.is_empty() && self.sb.sequence.get_owned().value() == 0,
+            self.sb.dependencies.sequences.is_empty() && self.sb.sequence.get_owned().value() == 0,
             "The create_consumer_pipeline method can only be called once."
         );
 
@@ -2533,7 +2558,7 @@ where
             SingleResizingConsumerSequenceBarrier::new(SingleConsumerSequenceBarrier::new(
                 self.sb.ring_buffer.clone(),
                 SequenceNumber(SEQUENCE_INITIAL),
-                vec![self.sb.sequence.clone_immut()],
+                ConsumerDependencies::from_vec(vec![self.sb.sequence.clone_immut()]),
                 0,
                 self.sb.wait_strategy.clone(),
                 self.sb.sequence.clone_immut(),
@@ -2541,9 +2566,10 @@ where
 
         // my_dependencies is an empty Vec now, to be populated with a reference to the new
         // consumer's sequence.
-        self.sb.dependencies.reserve_exact(1);
+        self.sb.dependencies.sequences.reserve_exact(1);
         self.sb
             .dependencies
+            .sequences
             .push(new_consumer.cb.sb.sequence.clone_immut());
 
         new_consumer
@@ -2785,26 +2811,22 @@ impl TimeoutResizeWaitStrategy {
     /// that it may finish before the requested number of slots are available, returning a value
     /// that is less than `min_available`. If this happens, the caller can reallocate a larger
     /// buffer and start publishing items into that buffer instead of waiting.
-    fn try_wait_for_consumers<F>(
+    fn try_wait_for_consumers(
         &self,
+        dependencies: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F,
         min_available: usize,
-    ) -> usize
-    where
-        F: AvailabilityFn,
-    {
+    ) -> usize {
         // Try once before querying the current time, in case the slots have become available since
         // the last wait.
-        let mut available = spin_for_consumer_retries(
-            waiting_sequence,
+        let mut available = spin_for_dependency_with_retries(
             dependencies,
+            waiting_sequence,
             buffer_size,
-            calculate_available,
             min_available,
-            1,
+            Some(1),
+            |_| (),
         );
         if available >= min_available {
             return available;
@@ -2817,13 +2839,13 @@ impl TimeoutResizeWaitStrategy {
         // Used to check if the pipeline makes any progress
         let mut previous_available = available;
 
-        available = spin_for_consumer_retries(
-            waiting_sequence,
+        available = spin_for_dependency_with_retries(
             dependencies,
+            waiting_sequence,
             buffer_size,
-            calculate_available,
             min_available,
-            self.wait_strategy.max_spin_tries_consumer,
+            Some(self.wait_strategy.max_spin_tries_consumer),
+            |_| (),
         );
         if available >= min_available {
             return available;
@@ -2837,12 +2859,7 @@ impl TimeoutResizeWaitStrategy {
                 end_time = Instant::now() + timeout;
             }
 
-            available = calculate_available_list(
-                waiting_sequence,
-                dependencies,
-                buffer_size,
-                calculate_available,
-            );
+            available = dependencies.calculate_available(waiting_sequence, buffer_size);
             thread::yield_now();
         }
         // If the timeout was reached, this will be less than `min_available`
@@ -2853,14 +2870,18 @@ impl TimeoutResizeWaitStrategy {
 impl NotificationWaitStrategy for TimeoutResizeWaitStrategy {
     fn wait_for_publisher(
         &mut self,
+        publisher_availability: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        cursor: &SequenceReader,
         buffer_size: usize,
         min_available: usize,
     ) -> usize {
         // Consumers wait as normal
-        self.wait_strategy
-            .wait_for_publisher(waiting_sequence, cursor, buffer_size, min_available)
+        self.wait_strategy.wait_for_publisher(
+            publisher_availability,
+            waiting_sequence,
+            buffer_size,
+            min_available,
+        )
     }
     fn notify_all_waiters(&mut self) {
         self.wait_strategy.notify_all_waiters();
@@ -2868,23 +2889,18 @@ impl NotificationWaitStrategy for TimeoutResizeWaitStrategy {
 }
 
 impl PollingWaitStrategy for TimeoutResizeWaitStrategy {
-    fn wait_for_dependencies<F>(
+    fn wait_for_dependencies(
         &self,
+        dependencies: &dyn PollableDependency,
         waiting_sequence: SequenceNumber,
-        dependencies: &[SequenceReader],
         buffer_size: usize,
-        calculate_available: &F,
         min_available: usize,
-    ) -> usize
-    where
-        F: AvailabilityFn,
-    {
+    ) -> usize {
         // This code path should be unused
         self.wait_strategy.wait_for_dependencies(
-            waiting_sequence,
             dependencies,
+            waiting_sequence,
             buffer_size,
-            calculate_available,
             min_available,
         )
     }
