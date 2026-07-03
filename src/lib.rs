@@ -884,13 +884,14 @@ impl NotificationWaitStrategy for SpinWaitStrategy {
         buffer_size: usize,
         min_available: usize,
     ) -> usize {
-        let mut available = 0;
-        while min_available > available {
-            // busy wait
-            available = publisher_availability.calculate_available(waiting_sequence, buffer_size);
-        }
-
-        available
+        spin_for_dependency_with_retries(
+            publisher_availability,
+            waiting_sequence,
+            buffer_size,
+            min_available,
+            None,
+            |_| (),
+        )
     }
 
     fn notify_all_waiters(&mut self) {}
@@ -903,12 +904,14 @@ impl PollingWaitStrategy for SpinWaitStrategy {
         buffer_size: usize,
         min_available: usize,
     ) -> usize {
-        let mut available = 0;
-        while available < min_available {
-            // busy wait
-            available = dependencies.calculate_available(waiting_sequence, buffer_size);
-        }
-        available
+        spin_for_dependency_with_retries(
+            dependencies,
+            waiting_sequence,
+            buffer_size,
+            min_available,
+            None,
+            |_| (),
+        )
     }
 }
 
