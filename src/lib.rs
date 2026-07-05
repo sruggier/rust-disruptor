@@ -821,6 +821,78 @@ impl PollableDependency for PublisherAvailability {
     }
 }
 
+/// A helper trait for expressing availability.
+///
+/// This is defined separately because all of the other pipeline related functionality depends on
+/// it. Any other function defined alongside `len_available` would be pulled into the bottom of the
+/// dependency tree of various other traits.
+trait LenAvailable {
+    /// Returns the number of slots in the buffer known to be available for handling by the
+    /// corresponding stage of the pipeline associated with [`self`], as of the last call to
+    /// [`Pollable::poll`].
+    ///
+    /// # Performance
+    ///
+    /// Generally uses cached information, and should be cheap to call.
+    fn len_available(&self) -> usize;
+}
+
+/// The minimal functionality needed to implement polling wait strategies.
+trait Pollable: LenAvailable {
+    /// Synchronize with dependencies to gain an updated view of how many slots in the buffer are
+    /// available for the owner to reference. A call to this method may increase the number of
+    /// elements returned by the [`len_available`](Self::len_available) method, and can be retried
+    /// indefinitely until that happens.
+    ///
+    /// # Performance
+    ///
+    /// This method generally uses one or more atomic operations (with [`Acquire`] ordering) to
+    /// retrieve the state of upstream dependencies, with the associated implications for
+    /// performance and safety.
+    ///
+    /// # Safety
+    ///
+    /// A happens-before relationship is established between the last pipeline stage and this one,
+    /// ensuring that any modifications made during the previous stage of the pipeline will be
+    /// visible through this reference.
+    fn poll(&mut self);
+}
+
+/// A convenience trait that allows a type to implement pipeline-referencing traits, like
+/// [`LenAvailable`], [`Pollable`], and so on, by returning a reference to some other type that
+/// implements it. This can be used to delegate implementation to a field.
+trait AsPipelineRef {
+    /// The delegated-to type.
+    type T;
+
+    /// Return a reference to the value whose implementation of Pollable should be reused.
+    fn as_pipeline_ref(&self) -> &Self::T;
+    /// Mutable variant of [`Self::as_pollable`].
+    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T;
+}
+
+impl<D> LenAvailable for D
+where
+    D: AsPipelineRef,
+    D::T: LenAvailable,
+{
+    fn len_available(&self) -> usize {
+        self.as_pipeline_ref().len_available()
+    }
+}
+
+/// Automatic [`Pollable`] impl for types that implement
+/// AsPipelineRef.
+impl<D> Pollable for D
+where
+    D: AsPipelineRef,
+    D::T: Pollable,
+{
+    fn poll(&mut self) {
+        self.as_pipeline_ref_mut().poll();
+    }
+}
+
 /// Allows waiting for upstream dependencies.
 pub trait PollingWaitStrategy: Clone + Send {
     /// Wait for upstream consumers to finish processing items that have already been published,
@@ -1326,7 +1398,7 @@ impl fmt::Debug for BlockingWaitStrategy {
 
 /// Responsible for ensuring that the caller does not proceed until one or more dependent sequences
 /// have finished working with the subsequent slots.
-trait SequenceBarrier {
+trait SequenceBarrier: LenAvailable {
     type T;
 
     /// Get the current value of the sequence associated with this SequenceBarrier.
@@ -1335,9 +1407,6 @@ trait SequenceBarrier {
     // Facilitate the default implementations of next_n and release_n
     /// Cache the passed in number of available slots for later use in len_available.
     fn set_cached_available(&mut self, available: usize);
-    /// Return the number of known-available slots as of the last read from the sequence barrier's
-    /// gating sequence.
-    fn len_available(&self) -> usize;
 
     /// Wait for a single slot to be available.
     fn next(&mut self) {
@@ -1464,12 +1533,15 @@ impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W> {
     fn set_cached_available(&mut self, available: usize) {
         self.cached_available = available
     }
+}
+
+impl<RB, D, W> LenAvailable for CommonSingleSequenceBarrier<RB, D, W> {
     fn len_available(&self) -> usize {
         self.cached_available
     }
 }
 
-impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W>
+impl<RB, D, W> Pollable for CommonSingleSequenceBarrier<RB, D, W>
 where
     D: PollableDependency,
     RB: UnsafeRingBufferOps,
@@ -1567,6 +1639,20 @@ where
     }
 }
 
+impl<RB, W> AsPipelineRef for SinglePublisherSequenceBarrier<RB, W>
+where
+    RB: UnsafeRingBufferOps,
+{
+    type T = CommonSingleSequenceBarrier<RB, PublisherDependencies, W>;
+
+    fn as_pipeline_ref(&self) -> &Self::T {
+        &self.sb
+    }
+    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
+        &mut self.sb
+    }
+}
+
 impl<RB, W> SequenceBarrier for SinglePublisherSequenceBarrier<RB, W>
 where
     W: NotificationWaitStrategy,
@@ -1579,9 +1665,6 @@ where
     }
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available);
-    }
-    fn len_available(&self) -> usize {
-        self.sb.len_available()
     }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
@@ -1726,6 +1809,20 @@ impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
     }
 }
 
+impl<RB, W> AsPipelineRef for SingleConsumerSequenceBarrier<RB, W>
+where
+    RB: UnsafeRingBufferOps,
+{
+    type T = CommonSingleSequenceBarrier<RB, ConsumerDependencies, W>;
+
+    fn as_pipeline_ref(&self) -> &Self::T {
+        &self.sb
+    }
+    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
+        &mut self.sb
+    }
+}
+
 impl<RB, W> SequenceBarrier for SingleConsumerSequenceBarrier<RB, W>
 where
     W: NotificationWaitStrategy,
@@ -1738,9 +1835,6 @@ where
     }
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available)
-    }
-    fn len_available(&self) -> usize {
-        self.sb.len_available()
     }
 
     fn next_n_real(&mut self, batch_size: usize) -> usize {
@@ -2424,6 +2518,30 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
     }
 }
 
+impl<T> LenAvailable for SingleResizingPublisherSequenceBarrier<T> {
+    fn len_available(&self) -> usize {
+        // Don't expose the reserved slot. This ensures the default next_n implementation will wait
+        // correctly in order to maintain the extra slot.
+        self.sb.len_available().saturating_sub(1)
+    }
+}
+
+impl<T> Pollable for SingleResizingPublisherSequenceBarrier<T>
+where
+    T: 'static,
+{
+    fn poll(&mut self) {
+        // If `cached_available` was manually set during a reallocation, calls to this function
+        // shouldn't overwrite it with a lower value.
+        self.sb.cached_available = cmp::max(
+            self.sb.cached_available,
+            self.sb
+                .dependencies
+                .calculate_available(self.sb.sequence.get_owned(), self.sb.capacity()),
+        )
+    }
+}
+
 impl<T> SequenceBarrier for SingleResizingPublisherSequenceBarrier<T>
 where
     T: Default + 'static,
@@ -2436,11 +2554,6 @@ where
     }
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available)
-    }
-    fn len_available(&self) -> usize {
-        // Don't expose the reserved slot. This ensures the default next_n implementation will wait
-        // correctly in order to maintain the extra slot.
-        self.sb.len_available().saturating_sub(1)
     }
     fn release_n_real(&mut self, batch_size: usize) {
         // Similar to SinglePublisherSequenceBarrier::release_n_real.
@@ -2608,6 +2721,24 @@ impl<T> SingleResizingConsumerSequenceBarrier<T> {
     }
 }
 
+impl<T> LenAvailable for SingleResizingConsumerSequenceBarrier<T>
+where
+    T: 'static,
+{
+    fn len_available(&self) -> usize {
+        self.cb.len_available()
+    }
+}
+
+impl<T> Pollable for SingleResizingConsumerSequenceBarrier<T>
+where
+    T: 'static,
+{
+    fn poll(&mut self) {
+        self.cb.poll();
+    }
+}
+
 impl<T> SingleResizingConsumerSequenceBarrier<T>
 where
     T: 'static,
@@ -2695,9 +2826,6 @@ where
     }
     fn set_cached_available(&mut self, available: usize) {
         self.cb.set_cached_available(available)
-    }
-    fn len_available(&self) -> usize {
-        self.cb.len_available()
     }
 
     // Unfortunately, the resizing scheme removes the ability to guarantee that more than one slot
