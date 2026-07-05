@@ -1498,32 +1498,29 @@ pub trait InsertSingleConsumer {
 
 /// A common definition of the fields that are shared between non-concurrent publisher or consumer
 /// pipeline stages.
-struct CommonSingleSequenceBarrier<RB, D, W> {
+struct CommonSingleSequenceBarrier<RB, D> {
     ring_buffer: RB,
     sequence: SequenceOwner,
     dependencies: D,
     /// Contains the number of available items as of the last time the dependent sequence values were
     /// retrieved.
     cached_available: usize,
-    wait_strategy: W,
 }
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types.
-impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W> {
+impl<RB, D> CommonSingleSequenceBarrier<RB, D> {
     fn new(
         ring_buffer: RB,
         sequence: SequenceOwner,
         dependencies: D,
         cached_available: usize,
-        wait_strategy: W,
     ) -> Self {
         Self {
             ring_buffer,
             sequence,
             dependencies,
             cached_available,
-            wait_strategy,
         }
     }
 
@@ -1535,13 +1532,13 @@ impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W> {
     }
 }
 
-impl<RB, D, W> LenAvailable for CommonSingleSequenceBarrier<RB, D, W> {
+impl<RB, D> LenAvailable for CommonSingleSequenceBarrier<RB, D> {
     fn len_available(&self) -> usize {
         self.cached_available
     }
 }
 
-impl<RB, D, W> Pollable for CommonSingleSequenceBarrier<RB, D, W>
+impl<RB, D> Pollable for CommonSingleSequenceBarrier<RB, D>
 where
     D: PollableDependency,
     RB: UnsafeRingBufferOps,
@@ -1555,7 +1552,7 @@ where
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types, where the [`UnsafeRingBufferOps`] trait is required.
-impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W>
+impl<RB, D> CommonSingleSequenceBarrier<RB, D>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1582,7 +1579,7 @@ where
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types, where the [`UnsafeRingBufferOpsTake`] trait is required.
-impl<RB, D, W> CommonSingleSequenceBarrier<RB, D, W>
+impl<RB, D> CommonSingleSequenceBarrier<RB, D>
 where
     RB: UnsafeRingBufferOpsTake,
 {
@@ -1598,7 +1595,8 @@ where
 /// Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
 /// publisher.
 struct SinglePublisherSequenceBarrier<RB, W> {
-    sb: CommonSingleSequenceBarrier<RB, PublisherDependencies, W>,
+    sb: CommonSingleSequenceBarrier<RB, PublisherDependencies>,
+    wait_strategy: W,
 }
 
 impl<RB, W> SinglePublisherSequenceBarrier<RB, W> {
@@ -1609,8 +1607,8 @@ impl<RB, W> SinglePublisherSequenceBarrier<RB, W> {
                 SequenceOwner::new(),
                 PublisherDependencies::default(),
                 0,
-                wait_strategy,
             ),
+            wait_strategy,
         }
     }
 }
@@ -1643,7 +1641,7 @@ impl<RB, W> AsPipelineRef for SinglePublisherSequenceBarrier<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
-    type T = CommonSingleSequenceBarrier<RB, PublisherDependencies, W>;
+    type T = CommonSingleSequenceBarrier<RB, PublisherDependencies>;
 
     fn as_pipeline_ref(&self) -> &Self::T {
         &self.sb
@@ -1669,7 +1667,7 @@ where
 
     fn wait_for_real(&mut self, min_available: usize) -> usize {
         let current_sequence = self.sb.sequence.get_owned();
-        let available = self.sb.wait_strategy.wait_for_dependencies(
+        let available = self.wait_strategy.wait_for_dependencies(
             &self.sb.dependencies,
             current_sequence,
             self.capacity(),
@@ -1682,7 +1680,7 @@ where
         self.sb
             .sequence
             .advance_and_flush(batch_size, self.capacity());
-        self.sb.wait_strategy.notify_all_waiters();
+        self.wait_strategy.notify_all_waiters();
     }
 
     fn capacity(&self) -> usize {
@@ -1762,7 +1760,7 @@ where
             new_sequence,
             dependencies,
             0,
-            self.sb.wait_strategy.clone(),
+            self.wait_strategy.clone(),
             // Our sequence is the publisher's sequence (aka the cursor)
             self.sb.sequence.clone_immut(),
         );
@@ -1780,9 +1778,10 @@ where
 /// consumers, but all consumers will process all events. This is unsuitable for when a
 /// load-balancing arrangement is desired.
 struct SingleConsumerSequenceBarrier<RB, W> {
-    sb: CommonSingleSequenceBarrier<RB, ConsumerDependencies, W>,
+    sb: CommonSingleSequenceBarrier<RB, ConsumerDependencies>,
     /// A reference to the publisher's sequence.
     publisher_availability: PublisherAvailability,
+    wait_strategy: W,
 }
 
 impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
@@ -1800,11 +1799,11 @@ impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
                 SequenceOwner::new_from_sequence(initial_sequence),
                 dependencies,
                 cached_available,
-                wait_strategy,
             ),
             publisher_availability: PublisherAvailability {
                 sequence: publisher_sequence,
             },
+            wait_strategy,
         }
     }
 }
@@ -1813,7 +1812,7 @@ impl<RB, W> AsPipelineRef for SingleConsumerSequenceBarrier<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
-    type T = CommonSingleSequenceBarrier<RB, ConsumerDependencies, W>;
+    type T = CommonSingleSequenceBarrier<RB, ConsumerDependencies>;
 
     fn as_pipeline_ref(&self) -> &Self::T {
         &self.sb
@@ -1839,13 +1838,13 @@ where
 
     fn wait_for_real(&mut self, min_available: usize) -> usize {
         let current_sequence = self.current_sequence();
-        let available = self.sb.wait_strategy.wait_for_publisher(
+        let available = self.wait_strategy.wait_for_publisher(
             &self.publisher_availability,
             current_sequence,
             self.sb.ring_buffer.len(),
             min_available,
         );
-        let a = self.sb.wait_strategy.wait_for_dependencies(
+        let a = self.wait_strategy.wait_for_dependencies(
             &self.sb.dependencies,
             current_sequence,
             self.sb.ring_buffer.len(),
@@ -1899,7 +1898,7 @@ where
             self.sb.sequence.get_owned(),
             new_dependencies,
             self.sb.cached_available,
-            self.sb.wait_strategy.clone(),
+            self.wait_strategy.clone(),
             self.publisher_availability.sequence.clone(),
         );
 
@@ -2497,8 +2496,8 @@ struct SingleResizingPublisherSequenceBarrier<T> {
     sb: CommonSingleSequenceBarrier<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         ResizingPublisherDependencies,
-        TimeoutResizeWaitStrategy,
     >,
+    wait_strategy: TimeoutResizeWaitStrategy,
 }
 
 impl<T> SingleResizingPublisherSequenceBarrier<T> {
@@ -2512,8 +2511,8 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
                 SequenceOwner::new(),
                 ResizingPublisherDependencies::default(),
                 0,
-                wait_strategy,
             ),
+            wait_strategy,
         }
     }
 }
@@ -2560,7 +2559,7 @@ where
         self.sb
             .sequence
             .advance_and_flush(batch_size, self.capacity());
-        self.sb.wait_strategy.notify_all_waiters();
+        self.wait_strategy.notify_all_waiters();
     }
     fn capacity(&self) -> usize {
         self.sb.capacity()
@@ -2587,7 +2586,7 @@ where
         // larger buffer.
         let needed_size = min_available + 1;
         let current_size = self.sb.capacity();
-        let mut available = self.sb.wait_strategy.try_wait_for_consumers(
+        let mut available = self.wait_strategy.try_wait_for_consumers(
             &self.sb.dependencies,
             self.current_sequence(),
             current_size,
@@ -2685,7 +2684,7 @@ where
                 SequenceNumber(SEQUENCE_INITIAL),
                 ConsumerDependencies::from_vec(vec![self.sb.sequence.clone_immut()]),
                 0,
-                self.sb.wait_strategy.clone(),
+                self.wait_strategy.clone(),
                 self.sb.sequence.clone_immut(),
             ));
 
