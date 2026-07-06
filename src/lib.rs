@@ -1377,23 +1377,8 @@ impl fmt::Debug for BlockingWaitStrategy {
     }
 }
 
-/// Responsible for ensuring that the caller does not proceed until one or more dependent sequences
-/// have finished working with the subsequent slots.
-trait SequenceBarrier: LenAvailable {
-    type T;
-
-    /// Get the current value of the sequence associated with this SequenceBarrier.
-    fn current_sequence(&self) -> SequenceNumber;
-
-    // Facilitate the default implementations of next_n and release_n
-    /// Cache the passed in number of available slots for later use in len_available.
-    fn set_cached_available(&mut self, available: usize);
-
-    /// Wait for a single slot to be available.
-    fn wait_for_one_slot(&mut self) {
-        self.wait_for_slots(1)
-    }
-
+/// Defines methods related to waiting for slots to be available on a reference to a pipeline.
+trait WaitForSlots: LenAvailable {
     /// Wait for N slots to be available.
     ///
     /// # Arguments
@@ -1407,6 +1392,24 @@ trait SequenceBarrier: LenAvailable {
     /// always be safe. Alternatively, increase the size of the buffer to support the desired amount
     /// of batching.
     fn wait_for_slots(&mut self, min_available: usize);
+
+    /// Wait for a single slot to be available.
+    fn wait_for_one_slot(&mut self) {
+        self.wait_for_slots(1)
+    }
+}
+
+/// Responsible for ensuring that the caller does not proceed until one or more dependent sequences
+/// have finished working with the subsequent slots.
+trait SequenceBarrier: LenAvailable {
+    type T;
+
+    /// Get the current value of the sequence associated with this SequenceBarrier.
+    fn current_sequence(&self) -> SequenceNumber;
+
+    // Facilitate the default implementations of next_n and release_n
+    /// Cache the passed in number of available slots for later use in len_available.
+    fn set_cached_available(&mut self, available: usize);
 
     /// Release a single slot for downstream consumers.
     fn release(&mut self) {
@@ -1622,10 +1625,21 @@ where
     }
 }
 
+impl<RB, W> WaitForSlots for SinglePublisherSequenceBarrier<RB, W>
+where
+    RB: UnsafeRingBufferOps,
+    W: NotificationWaitStrategy,
+{
+    fn wait_for_slots(&mut self, min_available: usize) {
+        self.wait_strategy
+            .wait_for_dependencies(&mut self.sb, min_available);
+    }
+}
+
 impl<RB, W> SequenceBarrier for SinglePublisherSequenceBarrier<RB, W>
 where
-    W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps,
+    W: NotificationWaitStrategy,
 {
     type T = RB::T;
 
@@ -1634,11 +1648,6 @@ where
     }
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available);
-    }
-
-    fn wait_for_slots(&mut self, min_available: usize) {
-        self.wait_strategy
-            .wait_for_dependencies(&mut self.sb, min_available);
     }
 
     fn release_n_real(&mut self, batch_size: usize) {
@@ -1783,6 +1792,23 @@ where
     }
 }
 
+impl<RB, W> WaitForSlots for SingleConsumerSequenceBarrier<RB, W>
+where
+    W: NotificationWaitStrategy,
+    RB: UnsafeRingBufferOps,
+{
+    fn wait_for_slots(&mut self, min_available: usize) {
+        let current_sequence = self.current_sequence();
+        self.wait_strategy.wait_for_publisher(
+            &mut self
+                .publisher_availability
+                .as_pollable(current_sequence, self.sb.ring_buffer.len()),
+            min_available,
+        );
+        self.wait_strategy
+            .wait_for_dependencies(&mut self.sb, min_available);
+    }
+}
 impl<RB, W> SequenceBarrier for SingleConsumerSequenceBarrier<RB, W>
 where
     W: NotificationWaitStrategy,
@@ -1795,18 +1821,6 @@ where
     }
     fn set_cached_available(&mut self, available: usize) {
         self.sb.set_cached_available(available)
-    }
-
-    fn wait_for_slots(&mut self, min_available: usize) {
-        let current_sequence = self.current_sequence();
-        self.wait_strategy.wait_for_publisher(
-            &mut self
-                .publisher_availability
-                .as_pollable(current_sequence, self.sb.ring_buffer.len()),
-            min_available,
-        );
-        self.wait_strategy
-            .wait_for_dependencies(&mut self.sb, min_available);
     }
 
     fn release_n_real(&mut self, batch_size: usize) {
@@ -1905,7 +1919,7 @@ impl<SB> GenericPublisher<SB> {
 
 impl<SB> GenericPublisher<SB>
 where
-    SB: SequenceBarrier,
+    SB: WaitForSlots + SequenceBarrier,
 {
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
@@ -1951,7 +1965,7 @@ impl<SB> GenericSharedConsumer<SB> {
 
 impl<SB> GenericSharedConsumer<SB>
 where
-    SB: SequenceBarrier,
+    SB: WaitForSlots + SequenceBarrier,
 {
     fn consume<C: FnMut(&SB::T)>(&self, mut consume_callback: C) {
         unsafe {
@@ -2052,7 +2066,7 @@ where
 
 impl<SB> GenericSingleConsumer<SB>
 where
-    SB: SequenceBarrier,
+    SB: WaitForSlots + SequenceBarrier,
 {
     /// See [`GenericSharedConsumer::consume`].
     fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) {
@@ -2062,7 +2076,7 @@ where
 
 impl<SB> GenericSingleConsumer<SB>
 where
-    SB: SequenceBarrierTake,
+    SB: WaitForSlots + SequenceBarrierTake,
 {
     fn take(&self) -> SB::T {
         unsafe {
@@ -2536,7 +2550,12 @@ where
         );
         flag.as_ref().unwrap()
     }
+}
 
+impl<T> WaitForSlots for SingleResizingPublisherSequenceBarrier<T>
+where
+    T: Default + 'static,
+{
     /// Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
     /// policy requests that.
     fn wait_for_slots(&mut self, min_available: usize) {
@@ -2783,6 +2802,23 @@ where
     }
 }
 
+impl<T> WaitForSlots for SingleResizingConsumerSequenceBarrier<T>
+where
+    T: 'static,
+{
+    // Unfortunately, the resizing scheme removes the ability to guarantee that more than one slot
+    // is actually available after polling, because the next slot could be the last one that was
+    // published in the current buffer. This is fixable, but for now, just disable support for
+    // larger batch sizes.
+    fn wait_for_slots(&mut self, min_available: usize) {
+        assert!(
+            min_available == 1,
+            "Batch sizes larger than 1 are currently not supported with resizable buffers."
+        );
+        self.cb.wait_for_slots(1)
+    }
+}
+
 impl<T> SequenceBarrier for SingleResizingConsumerSequenceBarrier<T>
 where
     T: 'static,
@@ -2794,18 +2830,6 @@ where
     }
     fn set_cached_available(&mut self, available: usize) {
         self.cb.set_cached_available(available)
-    }
-
-    // Unfortunately, the resizing scheme removes the ability to guarantee that more than one slot
-    // is actually available after polling, because the next slot could be the last one that was
-    // published in the current buffer. This is fixable, but for now, just disable support for
-    // larger batch sizes.
-    fn wait_for_slots(&mut self, min_available: usize) {
-        assert!(
-            min_available == 1,
-            "Batch sizes larger than 1 are currently not supported with resizable buffers."
-        );
-        self.cb.wait_for_slots(1)
     }
 
     fn release_n_real(&mut self, batch_size: usize) {
