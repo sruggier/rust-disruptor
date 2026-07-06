@@ -957,6 +957,28 @@ where
     }
 }
 
+impl<D> PipelineAccess for D
+where
+    D: AsPipelineRef,
+    D::T: PipelineAccess,
+{
+    type T = <D::T as PipelineAccess>::T;
+
+    unsafe fn get(&mut self) -> &Self::T {
+        unsafe { self.as_pipeline_ref_mut().get() }
+    }
+}
+
+impl<D> PipelineAccessMut for D
+where
+    D: AsPipelineRef,
+    D::T: PipelineAccessMut,
+{
+    unsafe fn set(&mut self, value: Self::T) {
+        unsafe { self.as_pipeline_ref_mut().set(value) }
+    }
+}
+
 /// Extension trait for types that implement PollableDependency, which allows constructing adapters
 /// that take a borrowed reference, along with the required method arguments, and uses them to
 /// implement [`Pollable`].
@@ -1447,11 +1469,7 @@ trait WaitForSlots: LenAvailable {
     }
 }
 
-/// Responsible for ensuring that the caller does not proceed until one or more dependent sequences
-/// have finished working with the subsequent slots.
-trait SequenceBarrier {
-    type T;
-
+trait PipelineAccessMut: PipelineAccess {
     // Ring buffer related operations
 
     /// Stores a value in the sequence barrier's current slot.
@@ -1462,6 +1480,12 @@ trait SequenceBarrier {
     /// occur in cases where multiple barriers are waiting on the same dependency and accessing slots
     /// in parallel.
     unsafe fn set(&mut self, value: Self::T);
+}
+
+/// Provides shared references to elements in a pipeline.
+trait PipelineAccess {
+    /// The type of each element in the pipeline.
+    type T;
 
     /// Gets the value stored in the sequence barrier's current slot, which would have been stored
     /// there by a different task, in most cases). Unsafe: allows data races.
@@ -1470,7 +1494,7 @@ trait SequenceBarrier {
     unsafe fn get(&mut self) -> &Self::T;
 }
 
-trait SequenceBarrierTake: SequenceBarrier {
+trait SequenceBarrierTake: PipelineAccessMut {
     /// Takes the value stored in the sequence barrier's current slot, moving it out of the ring
     /// buffer. Unsafe: allows data races.
     unsafe fn take(&mut self) -> Self::T;
@@ -1568,19 +1592,24 @@ impl<RB, D> CurrentSequence for CommonSingleSequenceBarrier<RB, D> {
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types, where the [`UnsafeRingBufferOps`] trait is required.
-impl<RB, D> CommonSingleSequenceBarrier<RB, D>
+impl<RB, D> PipelineAccessMut for CommonSingleSequenceBarrier<RB, D>
 where
     RB: UnsafeRingBufferOps,
 {
-    /// See [`SequenceBarrier::set`].
     unsafe fn set(&mut self, value: RB::T) {
         unsafe {
             let current_sequence = self.current_sequence();
             self.ring_buffer.set(current_sequence, value)
         }
     }
+}
 
-    /// See [`SequenceBarrier::get`].
+impl<RB, D> PipelineAccess for CommonSingleSequenceBarrier<RB, D>
+where
+    RB: UnsafeRingBufferOps,
+{
+    type T = RB::T;
+
     unsafe fn get(&mut self) -> &RB::T {
         unsafe {
             let current_sequence = self.current_sequence();
@@ -1604,8 +1633,8 @@ where
     }
 }
 
-/// Implements `SequenceBarrier` for publishers in situations where there's only one concurrent
-/// publisher.
+/// A pipeline reference representing a non-concurrent first stage, analogous to a single producer
+/// in a conventional queue.
 struct SinglePublisherSequenceBarrier<RB, W> {
     sb: CommonSingleSequenceBarrier<RB, PublisherDependencies>,
     wait_strategy: W,
@@ -1683,22 +1712,6 @@ where
         // SAFETY: delegated to the caller.
         unsafe { self.sb.release_slots_unchecked(n) };
         self.wait_strategy.notify_all_waiters();
-    }
-}
-
-impl<RB, W> SequenceBarrier for SinglePublisherSequenceBarrier<RB, W>
-where
-    RB: UnsafeRingBufferOps,
-    W: NotificationWaitStrategy,
-{
-    type T = RB::T;
-
-    unsafe fn set(&mut self, value: RB::T) {
-        unsafe { self.sb.set(value) }
-    }
-
-    unsafe fn get(&mut self) -> &RB::T {
-        unsafe { self.sb.get() }
     }
 }
 
@@ -1780,9 +1793,11 @@ where
     }
 }
 
-/// Implements `SequenceBarrier` for consumers. This implementation supports multiple concurrent
-/// consumers, but all consumers will process all events. This is unsuitable for when a
-/// load-balancing arrangement is desired.
+/// A pipeline reference representing a non-concurrent stage after the first stage, analogous to a
+/// single consumer in a queue or channel implementation. Unlike in a conventional queue
+/// implementation, there can be multiple stages of consumers waiting on each other in turn, reusing
+/// the same elements in the same buffer, which may be more efficient than implementing the same
+/// topology using multiple queues or channels.
 struct SingleConsumerSequenceBarrier<RB, W> {
     sb: CommonSingleSequenceBarrier<RB, ConsumerDependencies>,
     /// A reference to the publisher's sequence.
@@ -1847,21 +1862,6 @@ where
 }
 
 impl<RB, W> DelegateReleaseSlots for SingleConsumerSequenceBarrier<RB, W> {}
-
-impl<RB, W> SequenceBarrier for SingleConsumerSequenceBarrier<RB, W>
-where
-    W: NotificationWaitStrategy,
-    RB: UnsafeRingBufferOps,
-{
-    type T = RB::T;
-
-    unsafe fn set(&mut self, value: Self::T) {
-        unsafe { self.sb.set(value) }
-    }
-    unsafe fn get(&mut self) -> &Self::T {
-        unsafe { self.sb.get() }
-    }
-}
 
 impl<RB, W> SequenceBarrierTake for SingleConsumerSequenceBarrier<RB, W>
 where
@@ -1944,7 +1944,7 @@ impl<SB> GenericPublisher<SB> {
 
 impl<SB> GenericPublisher<SB>
 where
-    SB: WaitForSlots + ReleaseSlots + SequenceBarrier,
+    SB: WaitForSlots + ReleaseSlots + PipelineAccessMut,
 {
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
@@ -1994,7 +1994,7 @@ impl<SB> GenericSharedConsumer<SB> {
 
 impl<SB> GenericSharedConsumer<SB>
 where
-    SB: WaitForSlots + ReleaseSlots + SequenceBarrier,
+    SB: WaitForSlots + ReleaseSlots + PipelineAccess,
 {
     fn consume<C: FnMut(&SB::T)>(&self, mut consume_callback: C) {
         // SAFETY:
@@ -2098,7 +2098,7 @@ where
 
 impl<SB> GenericSingleConsumer<SB>
 where
-    SB: WaitForSlots + ReleaseSlots + SequenceBarrier,
+    SB: WaitForSlots + ReleaseSlots + PipelineAccess,
 {
     /// See [`GenericSharedConsumer::consume`].
     fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) {
@@ -2555,16 +2555,22 @@ where
     }
 }
 
-impl<T> SequenceBarrier for SingleResizingPublisherSequenceBarrier<T>
+impl<T> PipelineAccessMut for SingleResizingPublisherSequenceBarrier<T>
 where
     T: Default + 'static,
 {
-    type T = T;
-
     // Inherited functions
     unsafe fn set(&mut self, value: T) {
         unsafe { self.sb.set(ReallocationFlag::Item(value)) }
     }
+}
+
+impl<T> PipelineAccess for SingleResizingPublisherSequenceBarrier<T>
+where
+    T: 'static,
+{
+    type T = T;
+
     unsafe fn get(&mut self) -> &T {
         // Satisfy the borrow checker by performing this call outside the flag variable's lifetime.
         let current_sequence = self.sb.current_sequence();
@@ -2796,12 +2802,6 @@ where
         // The cached availability number has been artificially inflated, at this point, by the
         // publisher's sequence number being unwrapped. It needs to be adjusted to compensate for
         // this.
-        //
-        // Because of this adjustment, batching cannot be supported for consumers without
-        // restructuring the SequenceBarrier trait's usage pattern. However, batching isn't as
-        // important or necessary as it is for publishers, because the consumers are able to
-        // automatically batch both reads of gating sequence values, and atomic updates of their own
-        // sequence value, in between calls.
         let unwrapped_sequence = self.current_sequence().value();
         // Use the real availability value, including the reserved slot
         let current_available = self.cb.len_available();
@@ -2880,15 +2880,20 @@ where
     }
 }
 
-impl<T> SequenceBarrier for SingleResizingConsumerSequenceBarrier<T>
+impl<T> PipelineAccessMut for SingleResizingConsumerSequenceBarrier<T>
+where
+    T: 'static,
+{
+    unsafe fn set(&mut self, value: T) {
+        unsafe { self.cb.set(ReallocationFlag::Item(value)) }
+    }
+}
+
+impl<T> PipelineAccess for SingleResizingConsumerSequenceBarrier<T>
 where
     T: 'static,
 {
     type T = T;
-
-    unsafe fn set(&mut self, value: T) {
-        unsafe { self.cb.set(ReallocationFlag::Item(value)) }
-    }
 
     // The get and take functions check for reallocation events, and adjust the passed in sequence
     // and the barrier's sequence as necessary to match the adjustment to the publisher's sequence
