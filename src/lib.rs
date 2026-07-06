@@ -876,6 +876,14 @@ trait ReleaseSlots: LenAvailable {
     unsafe fn release_slots_unchecked(&mut self, n: usize);
 }
 
+/// Defines a way to see the current sequence number of a reference into a pipeline.
+///
+/// This is generally an implementation detail, so its use should be avoided, where possible.
+trait CurrentSequence {
+    /// Get the current sequence number associated with this reference into a pipeline.
+    fn current_sequence(&self) -> SequenceNumber;
+}
+
 /// A convenience trait that allows a type to implement pipeline-referencing traits, like
 /// [`LenAvailable`], [`Pollable`], and so on, by returning a reference to some other type that
 /// implements it. This can be used to delegate implementation to a field.
@@ -936,6 +944,16 @@ where
     unsafe fn release_slots_unchecked(&mut self, n: usize) {
         // SAFETY: delegated to the caller.
         unsafe { self.as_pipeline_ref_mut().release_slots_unchecked(n) };
+    }
+}
+
+impl<D> CurrentSequence for D
+where
+    D: AsPipelineRef,
+    D::T: CurrentSequence,
+{
+    fn current_sequence(&self) -> SequenceNumber {
+        self.as_pipeline_ref().current_sequence()
     }
 }
 
@@ -1434,9 +1452,6 @@ trait WaitForSlots: LenAvailable {
 trait SequenceBarrier {
     type T;
 
-    /// Get the current value of the sequence associated with this SequenceBarrier.
-    fn current_sequence(&self) -> SequenceNumber;
-
     // Ring buffer related operations
 
     /// Stores a value in the sequence barrier's current slot.
@@ -1499,9 +1514,6 @@ impl<RB, D> CommonSingleSequenceBarrier<RB, D> {
         }
     }
 
-    fn current_sequence(&self) -> SequenceNumber {
-        self.sequence.get_owned()
-    }
     fn set_cached_available(&mut self, available: usize) {
         self.cached_available = available
     }
@@ -1545,6 +1557,12 @@ where
             self.cached_available = self.cached_available.unchecked_sub(n);
         }
         self.sequence.advance_and_flush(n, self.ring_buffer.len());
+    }
+}
+
+impl<RB, D> CurrentSequence for CommonSingleSequenceBarrier<RB, D> {
+    fn current_sequence(&self) -> SequenceNumber {
+        self.sequence.get_owned()
     }
 }
 
@@ -1674,10 +1692,6 @@ where
     W: NotificationWaitStrategy,
 {
     type T = RB::T;
-
-    fn current_sequence(&self) -> SequenceNumber {
-        self.sb.current_sequence()
-    }
 
     unsafe fn set(&mut self, value: RB::T) {
         unsafe { self.sb.set(value) }
@@ -1840,10 +1854,6 @@ where
     RB: UnsafeRingBufferOps,
 {
     type T = RB::T;
-
-    fn current_sequence(&self) -> SequenceNumber {
-        self.sb.current_sequence()
-    }
 
     unsafe fn set(&mut self, value: Self::T) {
         unsafe { self.sb.set(value) }
@@ -2530,6 +2540,12 @@ where
     }
 }
 
+impl<T> CurrentSequence for SingleResizingPublisherSequenceBarrier<T> {
+    fn current_sequence(&self) -> SequenceNumber {
+        self.sb.current_sequence()
+    }
+}
+
 impl<T> PipelineCapacity for SingleResizingPublisherSequenceBarrier<T>
 where
     T: 'static,
@@ -2546,9 +2562,6 @@ where
     type T = T;
 
     // Inherited functions
-    fn current_sequence(&self) -> SequenceNumber {
-        self.sb.current_sequence()
-    }
     unsafe fn set(&mut self, value: T) {
         unsafe { self.sb.set(ReallocationFlag::Item(value)) }
     }
@@ -2737,6 +2750,15 @@ where
     }
 }
 
+impl<T> CurrentSequence for SingleResizingConsumerSequenceBarrier<T>
+where
+    T: 'static,
+{
+    fn current_sequence(&self) -> SequenceNumber {
+        self.cb.current_sequence()
+    }
+}
+
 impl<T> Pollable for SingleResizingConsumerSequenceBarrier<T>
 where
     T: 'static,
@@ -2863,10 +2885,6 @@ where
     T: 'static,
 {
     type T = T;
-
-    fn current_sequence(&self) -> SequenceNumber {
-        self.cb.current_sequence()
-    }
 
     unsafe fn set(&mut self, value: T) {
         unsafe { self.cb.set(ReallocationFlag::Item(value)) }
