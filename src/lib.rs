@@ -864,6 +864,18 @@ trait PipelineCapacity {
     fn capacity(&self) -> usize;
 }
 
+trait ReleaseSlots: LenAvailable {
+    /// Release the given number of slots to downstream stages of the pipeline.
+    ///
+    /// # Safety
+    ///
+    /// 1. `n` must be less than the number of available slots, as expressed by
+    ///    [`Self::len_available`], or [undefined behaviour] will result.
+    ///
+    /// [undefined behaviour]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
+    unsafe fn release_slots_unchecked(&mut self, n: usize);
+}
+
 /// A convenience trait that allows a type to implement pipeline-referencing traits, like
 /// [`LenAvailable`], [`Pollable`], and so on, by returning a reference to some other type that
 /// implements it. This can be used to delegate implementation to a field.
@@ -906,6 +918,24 @@ where
 {
     fn capacity(&self) -> usize {
         self.as_pipeline_ref().capacity()
+    }
+}
+
+/// A trait for types that implement [`AsPipelineRef`]. Implementing the trait opts into a blanket
+/// [`ReleaseSlots`] impl, which reuses the implementation from [`AsPipelineRef::T`].
+trait DelegateReleaseSlots {}
+
+/// Automatic [`Pollable`] impl for types that implement
+/// AsPipelineRef.
+impl<D> ReleaseSlots for D
+where
+    D: AsPipelineRef,
+    D::T: ReleaseSlots,
+    D: DelegateReleaseSlots,
+{
+    unsafe fn release_slots_unchecked(&mut self, n: usize) {
+        // SAFETY: delegated to the caller.
+        unsafe { self.as_pipeline_ref_mut().release_slots_unchecked(n) };
     }
 }
 
@@ -1401,35 +1431,11 @@ trait WaitForSlots: LenAvailable {
 
 /// Responsible for ensuring that the caller does not proceed until one or more dependent sequences
 /// have finished working with the subsequent slots.
-trait SequenceBarrier: LenAvailable {
+trait SequenceBarrier {
     type T;
 
     /// Get the current value of the sequence associated with this SequenceBarrier.
     fn current_sequence(&self) -> SequenceNumber;
-
-    // Facilitate the default implementations of next_n and release_n
-    /// Cache the passed in number of available slots for later use in len_available.
-    fn set_cached_available(&mut self, available: usize);
-
-    /// Release a single slot for downstream consumers.
-    fn release(&mut self) {
-        self.release_n(1);
-    }
-
-    /// Release `batch_size` slots for downstream consumers.
-    fn release_n(&mut self, batch_size: usize) {
-        // Update the cached value to reflect the newly used up slots, then call release_n_real.
-
-        // Subtract batch_size from the cached number of available slots.
-        let available = self.len_available();
-        assert!(available >= batch_size);
-        self.set_cached_available(available - batch_size);
-
-        self.release_n_real(batch_size);
-    }
-
-    /// Same as `release_n`,but without caching. This is called every time release_n is called.
-    fn release_n_real(&mut self, batch_size: usize);
 
     // Ring buffer related operations
 
@@ -1525,6 +1531,20 @@ where
 {
     fn capacity(&self) -> usize {
         self.ring_buffer.len()
+    }
+}
+
+impl<RB, D> ReleaseSlots for CommonSingleSequenceBarrier<RB, D>
+where
+    RB: UnsafeRingBufferOps,
+{
+    unsafe fn release_slots_unchecked(&mut self, n: usize) {
+        debug_assert!(self.cached_available >= n);
+        // SAFETY: the caller has promised this won't overflow.
+        unsafe {
+            self.cached_available = self.cached_available.unchecked_sub(n);
+        }
+        self.sequence.advance_and_flush(n, self.ring_buffer.len());
     }
 }
 
@@ -1636,6 +1656,18 @@ where
     }
 }
 
+impl<RB, W> ReleaseSlots for SinglePublisherSequenceBarrier<RB, W>
+where
+    RB: UnsafeRingBufferOps,
+    W: NotificationWaitStrategy,
+{
+    unsafe fn release_slots_unchecked(&mut self, n: usize) {
+        // SAFETY: delegated to the caller.
+        unsafe { self.sb.release_slots_unchecked(n) };
+        self.wait_strategy.notify_all_waiters();
+    }
+}
+
 impl<RB, W> SequenceBarrier for SinglePublisherSequenceBarrier<RB, W>
 where
     RB: UnsafeRingBufferOps,
@@ -1645,16 +1677,6 @@ where
 
     fn current_sequence(&self) -> SequenceNumber {
         self.sb.current_sequence()
-    }
-    fn set_cached_available(&mut self, available: usize) {
-        self.sb.set_cached_available(available);
-    }
-
-    fn release_n_real(&mut self, batch_size: usize) {
-        self.sb
-            .sequence
-            .advance_and_flush(batch_size, self.capacity());
-        self.wait_strategy.notify_all_waiters();
     }
 
     unsafe fn set(&mut self, value: RB::T) {
@@ -1809,6 +1831,9 @@ where
             .wait_for_dependencies(&mut self.sb, min_available);
     }
 }
+
+impl<RB, W> DelegateReleaseSlots for SingleConsumerSequenceBarrier<RB, W> {}
+
 impl<RB, W> SequenceBarrier for SingleConsumerSequenceBarrier<RB, W>
 where
     W: NotificationWaitStrategy,
@@ -1818,16 +1843,6 @@ where
 
     fn current_sequence(&self) -> SequenceNumber {
         self.sb.current_sequence()
-    }
-    fn set_cached_available(&mut self, available: usize) {
-        self.sb.set_cached_available(available)
-    }
-
-    fn release_n_real(&mut self, batch_size: usize) {
-        self.sb
-            .sequence
-            .advance(batch_size, self.sb.ring_buffer.len());
-        self.sb.sequence.flush();
     }
 
     unsafe fn set(&mut self, value: Self::T) {
@@ -1919,21 +1934,25 @@ impl<SB> GenericPublisher<SB> {
 
 impl<SB> GenericPublisher<SB>
 where
-    SB: WaitForSlots + SequenceBarrier,
+    SB: WaitForSlots + ReleaseSlots + SequenceBarrier,
 {
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
     fn publish(&self, value: SB::T) {
+        // SAFETY:
+        // 1. &Self isn't Send, so access will be single-threaded, in any case.
+        // 2. The reference only exists in the scope of this function, maintaining aliasing rules.
+        let sb = unsafe { &mut *self.sequence_barrier.get() };
+        // Wait for available slot
+        sb.wait_for_one_slot();
+        // SAFETY: calling wait_for_one_slot synchronizes with other threads, ensuring this write
+        // won't create a data race.
         unsafe {
-            let sb = &mut *self.sequence_barrier.get();
-            // Wait for available slot
-            sb.wait_for_one_slot();
-            {
-                sb.set(value);
-            }
-            // Make the item available to downstream consumers
-            sb.release();
+            sb.set(value);
         }
+        // Make the item available to downstream consumers
+        // SAFETY: the above call to wait_for_one ensures this is safe.
+        unsafe { sb.release_slots_unchecked(1) };
     }
 }
 
@@ -1965,18 +1984,21 @@ impl<SB> GenericSharedConsumer<SB> {
 
 impl<SB> GenericSharedConsumer<SB>
 where
-    SB: WaitForSlots + SequenceBarrier,
+    SB: WaitForSlots + ReleaseSlots + SequenceBarrier,
 {
     fn consume<C: FnMut(&SB::T)>(&self, mut consume_callback: C) {
-        unsafe {
-            let sequence_barrier = &mut *self.sequence_barrier.get();
-            sequence_barrier.wait_for_one_slot();
-            {
-                let item = sequence_barrier.get();
-                consume_callback(item);
-            }
-            sequence_barrier.release();
-        }
+        // SAFETY:
+        // 1. &Self isn't Send, so access will be single-threaded, in any case.
+        // 2. The reference only exists in the scope of this function, maintaining aliasing rules.
+        let sequence_barrier = unsafe { &mut *self.sequence_barrier.get() };
+
+        sequence_barrier.wait_for_one_slot();
+        // SAFETY: calling wait_for_one_slot synchronizes with other threads, ensuring this read
+        // won't create a data race.
+        let item = unsafe { sequence_barrier.get() };
+        consume_callback(item);
+        // SAFETY: the above call to wait_for_one ensures this is safe.
+        unsafe { sequence_barrier.release_slots_unchecked(1) };
     }
 }
 
@@ -2066,7 +2088,7 @@ where
 
 impl<SB> GenericSingleConsumer<SB>
 where
-    SB: WaitForSlots + SequenceBarrier,
+    SB: WaitForSlots + ReleaseSlots + SequenceBarrier,
 {
     /// See [`GenericSharedConsumer::consume`].
     fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) {
@@ -2076,19 +2098,20 @@ where
 
 impl<SB> GenericSingleConsumer<SB>
 where
-    SB: WaitForSlots + SequenceBarrierTake,
+    SB: WaitForSlots + ReleaseSlots + SequenceBarrierTake,
 {
     fn take(&self) -> SB::T {
-        unsafe {
-            let sequence_barrier = &mut *self.sc.sequence_barrier.get();
-            sequence_barrier.wait_for_one_slot();
-            let value;
-            {
-                value = sequence_barrier.take();
-            }
-            sequence_barrier.release();
-            value
-        }
+        // SAFETY:
+        // 1. &Self isn't Send, so access will be single-threaded, in any case.
+        // 2. The reference only exists in the scope of this function, maintaining aliasing rules.
+        let sequence_barrier = unsafe { &mut *self.sc.sequence_barrier.get() };
+        sequence_barrier.wait_for_one_slot();
+        // SAFETY: calling wait_for_one_slot synchronizes with other threads, ensuring this read
+        // won't create a data race.
+        let value = unsafe { sequence_barrier.take() };
+        // SAFETY: the above call to wait_for_one ensures this is safe.
+        unsafe { sequence_barrier.release_slots_unchecked(1) };
+        value
     }
 }
 
@@ -2526,16 +2549,6 @@ where
     fn current_sequence(&self) -> SequenceNumber {
         self.sb.current_sequence()
     }
-    fn set_cached_available(&mut self, available: usize) {
-        self.sb.set_cached_available(available)
-    }
-    fn release_n_real(&mut self, batch_size: usize) {
-        // Similar to SinglePublisherSequenceBarrier::release_n_real.
-        self.sb
-            .sequence
-            .advance_and_flush(batch_size, self.capacity());
-        self.wait_strategy.notify_all_waiters();
-    }
     unsafe fn set(&mut self, value: T) {
         unsafe { self.sb.set(ReallocationFlag::Item(value)) }
     }
@@ -2611,6 +2624,21 @@ where
             // buffer, but in doing so, it will continue to avoid wrapping its sequence number.
             self.sb.set_cached_available(new_size);
         }
+    }
+}
+
+impl<T> ReleaseSlots for SingleResizingPublisherSequenceBarrier<T>
+where
+    T: 'static,
+{
+    unsafe fn release_slots_unchecked(&mut self, n: usize) {
+        // Assert this type's modified len_available implementation is also being respected.
+        debug_assert!(self.len_available() >= n);
+
+        // SAFETY: the caller promises this is safe.
+        unsafe { self.sb.release_slots_unchecked(n) };
+
+        self.wait_strategy.notify_all_waiters();
     }
 }
 
@@ -2773,7 +2801,7 @@ where
             original_sequence,
             unwrapped_sequence
         );
-        self.cb.set_cached_available(actual_cached_available);
+        self.cb.sb.set_cached_available(actual_cached_available);
     }
 
     /// Check for a reallocation flag in the slot pointed to by `sequence`. If so, adjust our
@@ -2819,6 +2847,17 @@ where
     }
 }
 
+impl<T> ReleaseSlots for SingleResizingConsumerSequenceBarrier<T>
+where
+    T: 'static,
+{
+    unsafe fn release_slots_unchecked(&mut self, n: usize) {
+        debug_assert!(n <= self.len_available());
+        // SAFETY: delegated to the caller.
+        unsafe { self.cb.release_slots_unchecked(n) };
+    }
+}
+
 impl<T> SequenceBarrier for SingleResizingConsumerSequenceBarrier<T>
 where
     T: 'static,
@@ -2827,13 +2866,6 @@ where
 
     fn current_sequence(&self) -> SequenceNumber {
         self.cb.current_sequence()
-    }
-    fn set_cached_available(&mut self, available: usize) {
-        self.cb.set_cached_available(available)
-    }
-
-    fn release_n_real(&mut self, batch_size: usize) {
-        self.cb.release_n_real(batch_size)
     }
 
     unsafe fn set(&mut self, value: T) {
