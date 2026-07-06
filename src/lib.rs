@@ -859,6 +859,11 @@ pub trait Pollable: LenAvailable {
     fn poll(&mut self);
 }
 
+trait PipelineCapacity {
+    /// Returns the size of the underlying ring buffer.
+    fn capacity(&self) -> usize;
+}
+
 /// A convenience trait that allows a type to implement pipeline-referencing traits, like
 /// [`LenAvailable`], [`Pollable`], and so on, by returning a reference to some other type that
 /// implements it. This can be used to delegate implementation to a field.
@@ -891,6 +896,16 @@ where
 {
     fn poll(&mut self) {
         self.as_pipeline_ref_mut().poll();
+    }
+}
+
+impl<D> PipelineCapacity for D
+where
+    D: AsPipelineRef,
+    D::T: PipelineCapacity,
+{
+    fn capacity(&self) -> usize {
+        self.as_pipeline_ref().capacity()
     }
 }
 
@@ -1415,9 +1430,6 @@ trait SequenceBarrier: LenAvailable {
 
     // Ring buffer related operations
 
-    /// Returns the size of the underlying ring buffer.
-    fn capacity(&self) -> usize;
-
     /// Stores a value in the sequence barrier's current slot.
     ///
     /// # Safety notes
@@ -1504,16 +1516,21 @@ where
     }
 }
 
-/// A common implementation of functions that can be shared between publisher and
-/// consumer types, where the [`UnsafeRingBufferOps`] trait is required.
-impl<RB, D> CommonSingleSequenceBarrier<RB, D>
+impl<RB, D> PipelineCapacity for CommonSingleSequenceBarrier<RB, D>
 where
     RB: UnsafeRingBufferOps,
 {
     fn capacity(&self) -> usize {
         self.ring_buffer.len()
     }
+}
 
+/// A common implementation of functions that can be shared between publisher and
+/// consumer types, where the [`UnsafeRingBufferOps`] trait is required.
+impl<RB, D> CommonSingleSequenceBarrier<RB, D>
+where
+    RB: UnsafeRingBufferOps,
+{
     /// See [`SequenceBarrier::set`].
     unsafe fn set(&mut self, value: RB::T) {
         unsafe {
@@ -1629,10 +1646,6 @@ where
             .sequence
             .advance_and_flush(batch_size, self.capacity());
         self.wait_strategy.notify_all_waiters();
-    }
-
-    fn capacity(&self) -> usize {
-        self.sb.capacity()
     }
 
     unsafe fn set(&mut self, value: RB::T) {
@@ -1803,9 +1816,6 @@ where
         self.sb.sequence.flush();
     }
 
-    fn capacity(&self) -> usize {
-        self.sb.capacity()
-    }
     unsafe fn set(&mut self, value: Self::T) {
         unsafe { self.sb.set(value) }
     }
@@ -2483,6 +2493,15 @@ where
     }
 }
 
+impl<T> PipelineCapacity for SingleResizingPublisherSequenceBarrier<T>
+where
+    T: 'static,
+{
+    fn capacity(&self) -> usize {
+        self.sb.capacity()
+    }
+}
+
 impl<T> SequenceBarrier for SingleResizingPublisherSequenceBarrier<T>
 where
     T: Default + 'static,
@@ -2502,9 +2521,6 @@ where
             .sequence
             .advance_and_flush(batch_size, self.capacity());
         self.wait_strategy.notify_all_waiters();
-    }
-    fn capacity(&self) -> usize {
-        self.sb.capacity()
     }
     unsafe fn set(&mut self, value: T) {
         unsafe { self.sb.set(ReallocationFlag::Item(value)) }
@@ -2665,6 +2681,15 @@ where
     }
 }
 
+impl<T> PipelineCapacity for SingleResizingConsumerSequenceBarrier<T>
+where
+    T: 'static,
+{
+    fn capacity(&self) -> usize {
+        self.cb.capacity()
+    }
+}
+
 impl<T> Pollable for SingleResizingConsumerSequenceBarrier<T>
 where
     T: 'static,
@@ -2786,9 +2811,7 @@ where
     fn release_n_real(&mut self, batch_size: usize) {
         self.cb.release_n_real(batch_size)
     }
-    fn capacity(&self) -> usize {
-        self.cb.capacity()
-    }
+
     unsafe fn set(&mut self, value: T) {
         unsafe { self.cb.set(ReallocationFlag::Item(value)) }
     }
