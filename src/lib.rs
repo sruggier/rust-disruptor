@@ -292,8 +292,9 @@ impl<T, const N: usize> RingBufferArc<T, N>
 where
     T: Default,
 {
-    /// Constructs a new RingBuffer with a capacity of `N` elements. The const parameter `N` must be
-    /// a power of two for the rest of the functionality in this crate to be available for use.
+    /// Constructs a new [`RingBufferData``] with a capacity of `N` elements, and returns a
+    /// reference to it. The const parameter `N` must be a power of two for the rest of the
+    /// functionality in this crate to be available for use.
     fn new() -> RingBufferArc<T, N> {
         let data = RingBufferData::default();
         RingBufferArc {
@@ -419,7 +420,7 @@ trait UnsafeRingBufferOpsTake: UnsafeRingBufferOps {
     unsafe fn take(&mut self, sequence: SequenceNumber) -> Self::T;
 }
 
-/// Blanket impl for UnsafeRingBufferDeref types, where the underlying RingBuffer implements
+/// Blanket impl for UnsafeRingBufferDeref types, where the underlying ring buffer implements
 /// RingBufferOpsTake.
 impl<T, SRB, URB> UnsafeRingBufferOpsTake for URB
 where
@@ -571,7 +572,7 @@ impl SequenceOwner {
 
     // used in the tests below
     #[allow(dead_code)]
-    /// See SequenceReader's get method
+    /// See [`SequenceReader::get`] method
     fn get(&self) -> SequenceNumber {
         common_sequence_owner_get(&self.value_arc)
     }
@@ -718,7 +719,7 @@ impl Clone for SequenceReader {
 #[cfg(test)]
 #[test_log::test]
 fn test_sequencereader() {
-    // For the purposes of this test, it doessn't matter what the buffer size is, as long as it's
+    // For the purposes of this test, it doesn't matter what the buffer size is, as long as it's
     // larger than the tested sequence numbers
     let buffer_size = 8192;
 
@@ -1386,7 +1387,7 @@ trait SequenceBarrier: LenAvailable {
     ///
     /// # Safety notes
     ///
-    /// Note that if N is greater than the size of the RingBuffer minus the total number of slots the
+    /// Note that if N is greater than the size of the ring buffer minus the total number of slots the
     /// rest of the pipeline is waiting for, then this function may deadlock. A size of 1 should
     /// always be safe. Alternatively, increase the size of the buffer to support the desired amount
     /// of batching.
@@ -1434,7 +1435,7 @@ trait SequenceBarrier: LenAvailable {
 }
 
 trait SequenceBarrierTake: SequenceBarrier {
-    /// Takes the value stored in the sequnce barrier's current slot, moving it out of the ring
+    /// Takes the value stored in the sequence barrier's current slot, moving it out of the ring
     /// buffer. Unsafe: allows data races.
     unsafe fn take(&mut self) -> Self::T;
 }
@@ -1862,7 +1863,7 @@ pub trait Publisher<T> {
     fn publish(&self, value: T);
 }
 
-/// Provides access Exposes values that are passing through the the pipeline
+/// Provides access to values that are passing through the pipeline.
 pub trait Consumer<T> {
     /// Waits for a single item to become available, then calls the given function to process the
     /// value.
@@ -1884,7 +1885,7 @@ struct GenericPublisher<SB> {
 }
 
 impl<SB> GenericPublisher<SB> {
-    /// Generic constructor that works with any UnsafeRingBufferOps implemention
+    /// Generic constructor that works with any UnsafeRingBufferOps implementation
     fn new_common(sb: SB) -> GenericPublisher<SB> {
         GenericPublisher {
             sequence_barrier: UnsafeCell::new(sb),
@@ -2043,7 +2044,7 @@ impl<SB> GenericSingleConsumer<SB>
 where
     SB: SequenceBarrier,
 {
-    /// See the GenericConsumer.consume method.
+    /// See [`GenericSharedConsumer::consume`].
     fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) {
         self.sc.consume(consume_callback)
     }
@@ -2242,9 +2243,9 @@ impl<T> RingBufferAsSlice for ResizableRingBufferData<T> {
     }
 }
 
-/// Like RingBuffer, but can also allow publishers to reallocate a larger buffer and expose it to
-/// consumers. The consumers retrieve the remaining items from the old buffer until they reach a
-/// flagged element left by the publisher, which signals to them that they should traverse the
+/// Like [`RingBufferArc`], but can also allow publishers to reallocate a larger buffer and expose
+/// it to consumers. The consumers retrieve the remaining items from the old buffer until they reach
+/// a flagged element left by the publisher, which signals to them that they should traverse the
 /// pointer and retrieve items from the next buffer from now on.
 struct ResizableRingBufferArc<T> {
     d: UncheckedUnsafeArc<ResizableRingBufferData<T>>,
@@ -2270,8 +2271,8 @@ impl<T> ResizableRingBufferArc<T>
 where
     T: Default,
 {
-    /// Construct a new ResizableRingBuffer with a capacity for `size` elements. As with
-    /// RingBuffer, `size` must be a power of two.
+    /// Construct a new [`ResizableRingBufferData`] with a capacity for `size` elements. As with
+    /// [`BoxedRingBufferData`], `size` must be a power of two.
     fn new(size: usize) -> ResizableRingBufferArc<T> {
         ResizableRingBufferArc {
             d: UncheckedUnsafeArc::new(ResizableRingBufferData::new(size)),
@@ -2540,7 +2541,7 @@ where
             // consumer sequence numbers in the other stages of the pipeline. If we allocate a
             // larger buffer and publish into it, then the publisher's sequence can overtake the
             // other sequences in the pipeline, which would break the availability calculations.
-            // Unwrapping the publisher's sequence ensures that availablity calculations remain
+            // Unwrapping the publisher's sequence ensures that availability calculations remain
             // correct throughout the reallocation transition.
             let old_sequence = self.current_sequence();
             self.sb.sequence.unwrap(current_size);
@@ -3089,8 +3090,8 @@ impl<T> SingleResizingPublisher<T>
 where
     T: Default,
 {
-    /// Create a new GenericPublisher using a resizable ring buffer, specifying the timeout after
-    /// which the publisher will allocate a larger buffer to publish items into.
+    /// Create a new publisher using a resizable ring buffer, specifying the timeout after which the
+    /// publisher will allocate a larger buffer to publish items into.
     ///
     /// # Arguments
     ///
