@@ -940,6 +940,41 @@ pub trait NotificationWaitStrategy: PollingWaitStrategy {
     fn notify_all_waiters(&mut self);
 }
 
+/// Spin on a [`PollableDependency`] implementation until either the desired number of elements
+/// becomes available, or a maximum number of retries is reached.
+///
+/// If `None` is passed as an argument for the `max_tries` parameter, this function will spin
+/// forever. If 0 or 1 are passed, it'll try exactly once.
+///
+/// The function `busy_fn` will be called during each iteration, and can be used to implement
+/// various back-off strategies.
+///
+/// # Return value
+///
+/// The number of available items, which may be less than `min_available` if the maximum amount of tries was
+/// reached.
+fn spin_for_dependency_with_retries<F>(
+    pollable: &dyn PollableDependency,
+    waiting_sequence: SequenceNumber,
+    buffer_size: usize,
+    min_available: usize,
+    max_tries: Option<usize>,
+    mut busy_fn: F,
+) -> usize
+where
+    F: FnMut(usize),
+{
+    let mut tries = 0;
+    loop {
+        let available = pollable.calculate_available(waiting_sequence, buffer_size);
+        tries += 1;
+        if available >= min_available || max_tries.is_some_and(|max_tries| tries >= max_tries) {
+            break available;
+        }
+        busy_fn(tries);
+    }
+}
+
 /// Waits using simple busy waiting.
 ///
 /// # Safety notes
@@ -985,41 +1020,6 @@ impl PollingWaitStrategy for SpinWaitStrategy {
             None,
             |_| spin_loop(),
         )
-    }
-}
-
-/// Spin on a [`PollableDependency`] implementation until either the desired number of elements
-/// becomes available, or a maximum number of retries is reached.
-///
-/// If `None` is passed as an argument for the `max_tries` parameter, this function will spin
-/// forever. If 0 or 1 are passed, it'll try exactly once.
-///
-/// The function `busy_fn` will be called during each iteration, and can be used to implement
-/// various back-off strategies.
-///
-/// # Return value
-///
-/// The number of available items, which may be less than `min_available` if the maximum amount of tries was
-/// reached.
-fn spin_for_dependency_with_retries<F>(
-    pollable: &dyn PollableDependency,
-    waiting_sequence: SequenceNumber,
-    buffer_size: usize,
-    min_available: usize,
-    max_tries: Option<usize>,
-    mut busy_fn: F,
-) -> usize
-where
-    F: FnMut(usize),
-{
-    let mut tries = 0;
-    loop {
-        let available = pollable.calculate_available(waiting_sequence, buffer_size);
-        tries += 1;
-        if available >= min_available || max_tries.is_some_and(|max_tries| tries >= max_tries) {
-            break available;
-        }
-        busy_fn(tries);
     }
 }
 
