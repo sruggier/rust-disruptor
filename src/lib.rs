@@ -1760,7 +1760,7 @@ where
     W: Clone,
     RB: UnsafeRingBufferOps + Clone,
 {
-    type SingleConsumer = SingleConsumerSequenceBarrier<RB, W>;
+    type SingleConsumer = SingleWaitableConsumer<RB, W>;
 
     /// Insert a new consumer.
     ///
@@ -1801,7 +1801,7 @@ where
         // my_dependencies is an empty Vec now, to be populated with a reference to the new
         // consumer's sequence.
 
-        let new_consumer = SingleConsumerSequenceBarrier::new(
+        let new_consumer = SingleWaitableConsumer::new(
             self.sb.ring_buffer.clone(),
             new_sequence,
             dependencies,
@@ -1825,14 +1825,14 @@ where
 /// implementation, there can be multiple stages of consumers waiting on each other in turn, reusing
 /// the same elements in the same buffer, which may be more efficient than implementing the same
 /// topology using multiple queues or channels.
-struct SingleConsumerSequenceBarrier<RB, W> {
+struct SingleWaitableConsumer<RB, W> {
     sb: CommonSinglePipelineRef<RB, ConsumerDependencies>,
     /// A reference to the publisher's sequence.
     publisher_availability: PublisherAvailability,
     wait_strategy: W,
 }
 
-impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
+impl<RB, W> SingleWaitableConsumer<RB, W> {
     fn new(
         ring_buffer: RB,
         initial_sequence: SequenceNumber,
@@ -1840,8 +1840,8 @@ impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
         cached_available: usize,
         wait_strategy: W,
         publisher_sequence: SequenceReader,
-    ) -> SingleConsumerSequenceBarrier<RB, W> {
-        SingleConsumerSequenceBarrier {
+    ) -> SingleWaitableConsumer<RB, W> {
+        SingleWaitableConsumer {
             sb: CommonSinglePipelineRef::new(
                 ring_buffer,
                 SequenceOwner::new_from_sequence(initial_sequence),
@@ -1856,7 +1856,7 @@ impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
     }
 }
 
-impl<RB, W> AsPipelineRef for SingleConsumerSequenceBarrier<RB, W>
+impl<RB, W> AsPipelineRef for SingleWaitableConsumer<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1870,13 +1870,13 @@ where
     }
 }
 
-impl<RB, W> DelegateLenAvailable for SingleConsumerSequenceBarrier<RB, W> {}
-impl<RB, W> DelegateReleaseSlots for SingleConsumerSequenceBarrier<RB, W> {}
-impl<RB, W> DelegatePipelineAccess for SingleConsumerSequenceBarrier<RB, W> {}
-impl<RB, W> DelegatePipelineAccessMut for SingleConsumerSequenceBarrier<RB, W> {}
-impl<RB, W> DelegatePollable for SingleConsumerSequenceBarrier<RB, W> {}
+impl<RB, W> DelegateLenAvailable for SingleWaitableConsumer<RB, W> {}
+impl<RB, W> DelegateReleaseSlots for SingleWaitableConsumer<RB, W> {}
+impl<RB, W> DelegatePipelineAccess for SingleWaitableConsumer<RB, W> {}
+impl<RB, W> DelegatePipelineAccessMut for SingleWaitableConsumer<RB, W> {}
+impl<RB, W> DelegatePollable for SingleWaitableConsumer<RB, W> {}
 
-impl<RB, W> WaitForSlots for SingleConsumerSequenceBarrier<RB, W>
+impl<RB, W> WaitForSlots for SingleWaitableConsumer<RB, W>
 where
     W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOps,
@@ -1894,7 +1894,7 @@ where
     }
 }
 
-impl<RB, W> SequenceBarrierTake for SingleConsumerSequenceBarrier<RB, W>
+impl<RB, W> SequenceBarrierTake for SingleWaitableConsumer<RB, W>
 where
     RB: UnsafeRingBufferOpsTake,
     W: NotificationWaitStrategy,
@@ -1904,7 +1904,7 @@ where
     }
 }
 
-impl<RB, W> InsertSingleConsumer for SingleConsumerSequenceBarrier<RB, W>
+impl<RB, W> InsertSingleConsumer for SingleWaitableConsumer<RB, W>
 where
     W: Clone,
     RB: Clone,
@@ -2726,15 +2726,14 @@ where
         // defer implementing a better solution until after other refactoring is carried out, to
         // avoid doing too much in a single step.
 
-        let new_consumer =
-            SingleResizingConsumerSequenceBarrier::new(SingleConsumerSequenceBarrier::new(
-                self.sb.ring_buffer.clone(),
-                SequenceNumber(SEQUENCE_INITIAL),
-                ConsumerDependencies::from_vec(vec![self.sb.sequence.clone_immut()]),
-                0,
-                self.wait_strategy.clone(),
-                self.sb.sequence.clone_immut(),
-            ));
+        let new_consumer = SingleResizingConsumerSequenceBarrier::new(SingleWaitableConsumer::new(
+            self.sb.ring_buffer.clone(),
+            SequenceNumber(SEQUENCE_INITIAL),
+            ConsumerDependencies::from_vec(vec![self.sb.sequence.clone_immut()]),
+            0,
+            self.wait_strategy.clone(),
+            self.sb.sequence.clone_immut(),
+        ));
 
         // my_dependencies is an empty Vec now, to be populated with a reference to the new
         // consumer's sequence.
@@ -2750,8 +2749,8 @@ where
 
 /// Resizing-aware consumer barrier.
 struct SingleResizingConsumerSequenceBarrier<T> {
-    /// Reuse data and constructor from SingleConsumerSequenceBarrier
-    cb: SingleConsumerSequenceBarrier<
+    /// Reuse data and constructor from SingleWaitableConsumer
+    cb: SingleWaitableConsumer<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         TimeoutResizeWaitStrategy,
     >,
@@ -2759,7 +2758,7 @@ struct SingleResizingConsumerSequenceBarrier<T> {
 
 impl<T> SingleResizingConsumerSequenceBarrier<T> {
     fn new(
-        cb: SingleConsumerSequenceBarrier<
+        cb: SingleWaitableConsumer<
             ResizableRingBufferArc<ReallocationFlag<T>>,
             TimeoutResizeWaitStrategy,
         >,
@@ -2769,7 +2768,7 @@ impl<T> SingleResizingConsumerSequenceBarrier<T> {
 }
 
 impl<T> AsPipelineRef for SingleResizingConsumerSequenceBarrier<T> {
-    type T = SingleConsumerSequenceBarrier<
+    type T = SingleWaitableConsumer<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         TimeoutResizeWaitStrategy,
     >;
@@ -3092,11 +3091,11 @@ pub struct SinglePublisher<T, const N: usize, W> {
 }
 
 pub struct SharedConsumer<T, const N: usize, W> {
-    c: GenericSharedConsumer<SingleConsumerSequenceBarrier<RingBufferArc<T, N>, W>>,
+    c: GenericSharedConsumer<SingleWaitableConsumer<RingBufferArc<T, N>, W>>,
 }
 
 pub struct SingleConsumer<T, const N: usize, W> {
-    c: GenericSingleConsumer<SingleConsumerSequenceBarrier<RingBufferArc<T, N>, W>>,
+    c: GenericSingleConsumer<SingleWaitableConsumer<RingBufferArc<T, N>, W>>,
 }
 
 impl<T, const N: usize, W> SinglePublisher<T, N, W>
