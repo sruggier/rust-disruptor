@@ -1663,6 +1663,9 @@ where
     }
 }
 
+/// Polling-only implementation of a single publisher reference into a pipeline.
+type SinglePollablePublisher<RB> = CommonSinglePipelineRef<RB, PublisherDependencies>;
+
 /// Polling-only implementation of a single consumer reference into a pipeline.
 type SinglePollableConsumer<RB> = CommonSinglePipelineRef<RB, ConsumerDependencies>;
 
@@ -1697,14 +1700,14 @@ where
 /// A pipeline reference representing a non-concurrent first stage, analogous to a single producer
 /// in a conventional queue.
 struct SingleWaitablePublisher<RB, W> {
-    pollable: CommonSinglePipelineRef<RB, PublisherDependencies>,
+    pollable: SinglePollablePublisher<RB>,
     wait_strategy: W,
 }
 
 impl<RB, W> SingleWaitablePublisher<RB, W> {
     fn new(ring_buffer: RB, wait_strategy: W) -> Self {
         Self {
-            pollable: CommonSinglePipelineRef::new(
+            pollable: SinglePollablePublisher::new(
                 ring_buffer,
                 SequenceNumber::default(),
                 PublisherDependencies::default(),
@@ -1743,7 +1746,7 @@ impl<RB, W> AsPipelineRef for SingleWaitablePublisher<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
-    type T = CommonSinglePipelineRef<RB, PublisherDependencies>;
+    type T = SinglePollablePublisher<RB>;
 
     fn as_pipeline_ref(&self) -> &Self::T {
         &self.pollable
