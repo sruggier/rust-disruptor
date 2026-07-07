@@ -2521,7 +2521,7 @@ impl PollableDependency for ResizingPublisherDependencies {
 }
 
 /// Resizing variant of SingleWaitablePublisher.
-struct SingleResizingPublisherSequenceBarrier<T> {
+struct SingleWaitableResizingPublisher<T> {
     // Reuse CommonSinglePipelineRef data declarations and constructor
     sb: CommonSinglePipelineRef<
         ResizableRingBufferArc<ReallocationFlag<T>>,
@@ -2530,12 +2530,12 @@ struct SingleResizingPublisherSequenceBarrier<T> {
     wait_strategy: TimeoutResizeWaitStrategy,
 }
 
-impl<T> SingleResizingPublisherSequenceBarrier<T> {
+impl<T> SingleWaitableResizingPublisher<T> {
     fn new(
         ring_buffer: ResizableRingBufferArc<ReallocationFlag<T>>,
         wait_strategy: TimeoutResizeWaitStrategy,
-    ) -> SingleResizingPublisherSequenceBarrier<T> {
-        SingleResizingPublisherSequenceBarrier {
+    ) -> SingleWaitableResizingPublisher<T> {
+        SingleWaitableResizingPublisher {
             sb: CommonSinglePipelineRef::new(
                 ring_buffer,
                 SequenceOwner::new(),
@@ -2547,7 +2547,7 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
     }
 }
 
-impl<T> AsPipelineRef for SingleResizingPublisherSequenceBarrier<T> {
+impl<T> AsPipelineRef for SingleWaitableResizingPublisher<T> {
     type T = CommonSinglePipelineRef<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         ResizingPublisherDependencies,
@@ -2561,7 +2561,7 @@ impl<T> AsPipelineRef for SingleResizingPublisherSequenceBarrier<T> {
     }
 }
 
-impl<T> LenAvailable for SingleResizingPublisherSequenceBarrier<T> {
+impl<T> LenAvailable for SingleWaitableResizingPublisher<T> {
     fn len_available(&self) -> usize {
         // Don't expose the reserved slot. This ensures the default wait_for_slots implementation
         // will wait correctly in order to maintain the extra slot.
@@ -2569,7 +2569,7 @@ impl<T> LenAvailable for SingleResizingPublisherSequenceBarrier<T> {
     }
 }
 
-impl<T> Pollable for SingleResizingPublisherSequenceBarrier<T>
+impl<T> Pollable for SingleWaitableResizingPublisher<T>
 where
     T: 'static,
 {
@@ -2585,7 +2585,7 @@ where
     }
 }
 
-impl<T> PipelineAccessMut for SingleResizingPublisherSequenceBarrier<T>
+impl<T> PipelineAccessMut for SingleWaitableResizingPublisher<T>
 where
     T: Default + 'static,
 {
@@ -2595,7 +2595,7 @@ where
     }
 }
 
-impl<T> PipelineAccess for SingleResizingPublisherSequenceBarrier<T>
+impl<T> PipelineAccess for SingleWaitableResizingPublisher<T>
 where
     T: 'static,
 {
@@ -2614,7 +2614,7 @@ where
     }
 }
 
-impl<T> WaitForSlots for SingleResizingPublisherSequenceBarrier<T>
+impl<T> WaitForSlots for SingleWaitableResizingPublisher<T>
 where
     T: Default + 'static,
 {
@@ -2676,7 +2676,7 @@ where
     }
 }
 
-impl<T> ReleaseSlots for SingleResizingPublisherSequenceBarrier<T>
+impl<T> ReleaseSlots for SingleWaitableResizingPublisher<T>
 where
     T: 'static,
 {
@@ -2691,7 +2691,7 @@ where
     }
 }
 
-impl<T> SequenceBarrierTake for SingleResizingPublisherSequenceBarrier<T>
+impl<T> SequenceBarrierTake for SingleWaitableResizingPublisher<T>
 where
     T: Default + 'static,
 {
@@ -2700,7 +2700,7 @@ where
     }
 }
 
-impl<T> InsertSingleConsumer for SingleResizingPublisherSequenceBarrier<T>
+impl<T> InsertSingleConsumer for SingleWaitableResizingPublisher<T>
 where
     T: 'static,
 {
@@ -3193,7 +3193,7 @@ where
 }
 
 pub struct SingleResizingPublisher<T> {
-    p: GenericPublisher<SingleResizingPublisherSequenceBarrier<T>>,
+    p: GenericPublisher<SingleWaitableResizingPublisher<T>>,
 }
 
 pub struct SharedResizingConsumer<T> {
@@ -3231,7 +3231,7 @@ where
         );
         let wait_strategy =
             TimeoutResizeWaitStrategy::new_with_timeout(resize_timeout, blocking_wait_strategy);
-        let sb = SingleResizingPublisherSequenceBarrier::new(ring_buffer, wait_strategy);
+        let sb = SingleWaitableResizingPublisher::new(ring_buffer, wait_strategy);
         let gp = GenericPublisher::new_common(sb);
         SingleResizingPublisher { p: gp }
     }
