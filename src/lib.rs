@@ -1666,6 +1666,86 @@ where
 /// Polling-only implementation of a single publisher reference into a pipeline.
 type SinglePollablePublisher<RB> = CommonSinglePipelineRef<RB, PublisherDependencies>;
 
+impl<RB> SinglePollablePublisher<RB>
+where
+    RB: UnsafeRingBufferOps,
+{
+    /// Returns the earliest sequence that may not yet be handled by the rest of the pipeline.
+    ///
+    /// This is used in the insertion of new consumers as their initial sequence number.
+    fn calculate_earliest_consumer_sequence(&mut self) -> SequenceNumber {
+        if self.dependencies.sequences.is_empty() {
+            SequenceNumber::default()
+        } else {
+            // Poll dependencies once, to ensure the latest possible information is used in this
+            // calculation.
+            self.poll();
+
+            let slots_in_progress = self.capacity() - self.cached_available;
+            self.sequence
+                .get_owned()
+                .wrapping_sub(slots_in_progress, wrap_boundary(self.capacity()))
+        }
+    }
+}
+
+impl<RB> InsertSingleConsumer for SinglePollablePublisher<RB>
+where
+    RB: UnsafeRingBufferOps + Clone,
+{
+    type SingleConsumer = SinglePollableConsumer<RB>;
+
+    /// Insert a new consumer.
+    ///
+    /// # Behaviour while racing with existing consumers
+    ///
+    /// While most users will want to call this before emitting any events into the pipeline, it's
+    /// safe to call after passing the consumer handles to other threads, even while events are
+    /// partially handled by the rest of the pipeline. However, the behaviour is non-deterministic,
+    /// for now.
+    ///
+    /// Intuitively, the least surprising behaviour would arguably be for the newly inserted
+    /// consumer to only handle events that are inserted after the consumer was inserted. However,
+    /// that's not supported by the current availability calculation algorithm.
+    ///
+    /// Instead, the implementation settles for the next best thing, by reducing the sequence just
+    /// enough to guarantee that it'll be less than or equal to the sequence(s) of the previous
+    /// stage in the pipeline. This means that the newly inserted consumer will process any items
+    /// that were previously inserted into the pipeline, but not yet observed by the publisher to
+    /// be fully handled as of when the new consumer is inserted.
+    ///
+    /// It's possible to block until the pipeline is flushed, if there's a use case that would
+    /// benefit from that, or it may be possible to make the availability calculation a bit more
+    /// complicated in order to make this work.
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        let new_sequence = self.calculate_earliest_consumer_sequence();
+
+        let my_dependencies = &mut self.dependencies;
+        let sequences = if my_dependencies.sequences.is_empty() {
+            // This is the first addition to the pipeline, so use this publisher's sequence as its
+            // dependency.
+            vec![self.sequence.clone_immut()]
+        } else {
+            // A newly inserted consumer needs to wait for what was previously the last stage in the
+            // pipeline, so give the new consumer the existing dependency list.
+            std::mem::take(&mut my_dependencies.sequences)
+        };
+        let dependencies = ConsumerDependencies::from_vec(sequences);
+        // my_dependencies is an empty Vec now, to be populated with a reference to the new
+        // consumer's sequence.
+
+        let new_consumer =
+            Self::SingleConsumer::new(self.ring_buffer.clone(), new_sequence, dependencies, 0);
+
+        my_dependencies.sequences.reserve_exact(1);
+        my_dependencies
+            .sequences
+            .push(new_consumer.sequence.clone_immut());
+
+        new_consumer
+    }
+}
+
 /// Polling-only implementation of a single consumer reference into a pipeline.
 type SinglePollableConsumer<RB> = CommonSinglePipelineRef<RB, ConsumerDependencies>;
 
@@ -1714,29 +1794,6 @@ impl<RB, W> SingleWaitablePublisher<RB, W> {
                 0,
             ),
             wait_strategy,
-        }
-    }
-}
-
-impl<RB> SinglePollablePublisher<RB>
-where
-    RB: UnsafeRingBufferOps,
-{
-    /// Returns the earliest sequence that may not yet be handled by the rest of the pipeline.
-    ///
-    /// This is used in the insertion of new consumers as their initial sequence number.
-    fn calculate_earliest_consumer_sequence(&mut self) -> SequenceNumber {
-        if self.dependencies.sequences.is_empty() {
-            SequenceNumber::default()
-        } else {
-            // Poll dependencies once, to ensure the latest possible information is used in this
-            // calculation.
-            self.poll();
-
-            let slots_in_progress = self.capacity() - self.cached_available;
-            self.sequence
-                .get_owned()
-                .wrapping_sub(slots_in_progress, wrap_boundary(self.capacity()))
         }
     }
 }
@@ -1810,63 +1867,6 @@ where
             // Our sequence is the publisher's sequence (aka the cursor)
             self.pollable.sequence.clone_immut(),
         )
-    }
-}
-
-impl<RB> InsertSingleConsumer for SinglePollablePublisher<RB>
-where
-    RB: UnsafeRingBufferOps + Clone,
-{
-    type SingleConsumer = SinglePollableConsumer<RB>;
-
-    /// Insert a new consumer.
-    ///
-    /// # Behaviour while racing with existing consumers
-    ///
-    /// While most users will want to call this before emitting any events into the pipeline, it's
-    /// safe to call after passing the consumer handles to other threads, even while events are
-    /// partially handled by the rest of the pipeline. However, the behaviour is non-deterministic,
-    /// for now.
-    ///
-    /// Intuitively, the least surprising behaviour would arguably be for the newly inserted
-    /// consumer to only handle events that are inserted after the consumer was inserted. However,
-    /// that's not supported by the current availability calculation algorithm.
-    ///
-    /// Instead, the implementation settles for the next best thing, by reducing the sequence just
-    /// enough to guarantee that it'll be less than or equal to the sequence(s) of the previous
-    /// stage in the pipeline. This means that the newly inserted consumer will process any items
-    /// that were previously inserted into the pipeline, but not yet observed by the publisher to
-    /// be fully handled as of when the new consumer is inserted.
-    ///
-    /// It's possible to block until the pipeline is flushed, if there's a use case that would
-    /// benefit from that, or it may be possible to make the availability calculation a bit more
-    /// complicated in order to make this work.
-    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
-        let new_sequence = self.calculate_earliest_consumer_sequence();
-
-        let my_dependencies = &mut self.dependencies;
-        let sequences = if my_dependencies.sequences.is_empty() {
-            // This is the first addition to the pipeline, so use this publisher's sequence as its
-            // dependency.
-            vec![self.sequence.clone_immut()]
-        } else {
-            // A newly inserted consumer needs to wait for what was previously the last stage in the
-            // pipeline, so give the new consumer the existing dependency list.
-            std::mem::take(&mut my_dependencies.sequences)
-        };
-        let dependencies = ConsumerDependencies::from_vec(sequences);
-        // my_dependencies is an empty Vec now, to be populated with a reference to the new
-        // consumer's sequence.
-
-        let new_consumer =
-            Self::SingleConsumer::new(self.ring_buffer.clone(), new_sequence, dependencies, 0);
-
-        my_dependencies.sequences.reserve_exact(1);
-        my_dependencies
-            .sequences
-            .push(new_consumer.sequence.clone_immut());
-
-        new_consumer
     }
 }
 
