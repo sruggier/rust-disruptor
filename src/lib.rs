@@ -1534,7 +1534,7 @@ pub trait InsertSingleConsumer {
 
 /// A common definition of the fields that are shared between non-concurrent publisher or consumer
 /// pipeline stages.
-struct CommonSingleSequenceBarrier<RB, D> {
+struct CommonSinglePipelineRef<RB, D> {
     ring_buffer: RB,
     sequence: SequenceOwner,
     dependencies: D,
@@ -1545,7 +1545,7 @@ struct CommonSingleSequenceBarrier<RB, D> {
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types.
-impl<RB, D> CommonSingleSequenceBarrier<RB, D> {
+impl<RB, D> CommonSinglePipelineRef<RB, D> {
     fn new(
         ring_buffer: RB,
         sequence: SequenceOwner,
@@ -1565,13 +1565,13 @@ impl<RB, D> CommonSingleSequenceBarrier<RB, D> {
     }
 }
 
-impl<RB, D> LenAvailable for CommonSingleSequenceBarrier<RB, D> {
+impl<RB, D> LenAvailable for CommonSinglePipelineRef<RB, D> {
     fn len_available(&self) -> usize {
         self.cached_available
     }
 }
 
-impl<RB, D> Pollable for CommonSingleSequenceBarrier<RB, D>
+impl<RB, D> Pollable for CommonSinglePipelineRef<RB, D>
 where
     D: PollableDependency,
     RB: UnsafeRingBufferOps,
@@ -1583,7 +1583,7 @@ where
     }
 }
 
-impl<RB, D> PipelineCapacity for CommonSingleSequenceBarrier<RB, D>
+impl<RB, D> PipelineCapacity for CommonSinglePipelineRef<RB, D>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1592,7 +1592,7 @@ where
     }
 }
 
-impl<RB, D> ReleaseSlots for CommonSingleSequenceBarrier<RB, D>
+impl<RB, D> ReleaseSlots for CommonSinglePipelineRef<RB, D>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1606,7 +1606,7 @@ where
     }
 }
 
-impl<RB, D> CurrentSequence for CommonSingleSequenceBarrier<RB, D> {
+impl<RB, D> CurrentSequence for CommonSinglePipelineRef<RB, D> {
     fn current_sequence(&self) -> SequenceNumber {
         self.sequence.get_owned()
     }
@@ -1614,7 +1614,7 @@ impl<RB, D> CurrentSequence for CommonSingleSequenceBarrier<RB, D> {
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types, where the [`UnsafeRingBufferOps`] trait is required.
-impl<RB, D> PipelineAccessMut for CommonSingleSequenceBarrier<RB, D>
+impl<RB, D> PipelineAccessMut for CommonSinglePipelineRef<RB, D>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1626,7 +1626,7 @@ where
     }
 }
 
-impl<RB, D> PipelineAccess for CommonSingleSequenceBarrier<RB, D>
+impl<RB, D> PipelineAccess for CommonSinglePipelineRef<RB, D>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1642,7 +1642,7 @@ where
 
 /// A common implementation of functions that can be shared between publisher and
 /// consumer types, where the [`UnsafeRingBufferOpsTake`] trait is required.
-impl<RB, D> CommonSingleSequenceBarrier<RB, D>
+impl<RB, D> CommonSinglePipelineRef<RB, D>
 where
     RB: UnsafeRingBufferOpsTake,
 {
@@ -1658,14 +1658,14 @@ where
 /// A pipeline reference representing a non-concurrent first stage, analogous to a single producer
 /// in a conventional queue.
 struct SingleWaitablePublisher<RB, W> {
-    sb: CommonSingleSequenceBarrier<RB, PublisherDependencies>,
+    sb: CommonSinglePipelineRef<RB, PublisherDependencies>,
     wait_strategy: W,
 }
 
 impl<RB, W> SingleWaitablePublisher<RB, W> {
     fn new(ring_buffer: RB, wait_strategy: W) -> Self {
         Self {
-            sb: CommonSingleSequenceBarrier::new(
+            sb: CommonSinglePipelineRef::new(
                 ring_buffer,
                 SequenceOwner::new(),
                 PublisherDependencies::default(),
@@ -1704,7 +1704,7 @@ impl<RB, W> AsPipelineRef for SingleWaitablePublisher<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
-    type T = CommonSingleSequenceBarrier<RB, PublisherDependencies>;
+    type T = CommonSinglePipelineRef<RB, PublisherDependencies>;
 
     fn as_pipeline_ref(&self) -> &Self::T {
         &self.sb
@@ -1826,7 +1826,7 @@ where
 /// the same elements in the same buffer, which may be more efficient than implementing the same
 /// topology using multiple queues or channels.
 struct SingleConsumerSequenceBarrier<RB, W> {
-    sb: CommonSingleSequenceBarrier<RB, ConsumerDependencies>,
+    sb: CommonSinglePipelineRef<RB, ConsumerDependencies>,
     /// A reference to the publisher's sequence.
     publisher_availability: PublisherAvailability,
     wait_strategy: W,
@@ -1842,7 +1842,7 @@ impl<RB, W> SingleConsumerSequenceBarrier<RB, W> {
         publisher_sequence: SequenceReader,
     ) -> SingleConsumerSequenceBarrier<RB, W> {
         SingleConsumerSequenceBarrier {
-            sb: CommonSingleSequenceBarrier::new(
+            sb: CommonSinglePipelineRef::new(
                 ring_buffer,
                 SequenceOwner::new_from_sequence(initial_sequence),
                 dependencies,
@@ -1860,7 +1860,7 @@ impl<RB, W> AsPipelineRef for SingleConsumerSequenceBarrier<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
-    type T = CommonSingleSequenceBarrier<RB, ConsumerDependencies>;
+    type T = CommonSinglePipelineRef<RB, ConsumerDependencies>;
 
     fn as_pipeline_ref(&self) -> &Self::T {
         &self.sb
@@ -2522,8 +2522,8 @@ impl PollableDependency for ResizingPublisherDependencies {
 
 /// Resizing variant of SingleWaitablePublisher.
 struct SingleResizingPublisherSequenceBarrier<T> {
-    // Reuse CommonSingleSequenceBarrier data declarations and constructor
-    sb: CommonSingleSequenceBarrier<
+    // Reuse CommonSinglePipelineRef data declarations and constructor
+    sb: CommonSinglePipelineRef<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         ResizingPublisherDependencies,
     >,
@@ -2536,7 +2536,7 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
         wait_strategy: TimeoutResizeWaitStrategy,
     ) -> SingleResizingPublisherSequenceBarrier<T> {
         SingleResizingPublisherSequenceBarrier {
-            sb: CommonSingleSequenceBarrier::new(
+            sb: CommonSinglePipelineRef::new(
                 ring_buffer,
                 SequenceOwner::new(),
                 ResizingPublisherDependencies::default(),
@@ -2548,7 +2548,7 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
 }
 
 impl<T> AsPipelineRef for SingleResizingPublisherSequenceBarrier<T> {
-    type T = CommonSingleSequenceBarrier<
+    type T = CommonSinglePipelineRef<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         ResizingPublisherDependencies,
     >;
@@ -2623,8 +2623,8 @@ where
     fn wait_for_slots(&mut self, min_available: usize) {
         let current_size = self.sb.capacity();
 
-        // This uses the CommonSingleSequenceBarrier implementations of poll and len_available
-        // (pending future refactoring), so adjust min_available accordingly.
+        // This uses the CommonSinglePipelineRef implementations of poll and len_available (pending
+        // future refactoring), so adjust min_available accordingly.
         self.wait_strategy
             .try_wait_for_consumers(&mut self.sb, min_available + 1);
 
