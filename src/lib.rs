@@ -1657,12 +1657,12 @@ where
 
 /// A pipeline reference representing a non-concurrent first stage, analogous to a single producer
 /// in a conventional queue.
-struct SinglePublisherSequenceBarrier<RB, W> {
+struct SingleWaitablePublisher<RB, W> {
     sb: CommonSingleSequenceBarrier<RB, PublisherDependencies>,
     wait_strategy: W,
 }
 
-impl<RB, W> SinglePublisherSequenceBarrier<RB, W> {
+impl<RB, W> SingleWaitablePublisher<RB, W> {
     fn new(ring_buffer: RB, wait_strategy: W) -> Self {
         Self {
             sb: CommonSingleSequenceBarrier::new(
@@ -1676,7 +1676,7 @@ impl<RB, W> SinglePublisherSequenceBarrier<RB, W> {
     }
 }
 
-impl<RB, W> SinglePublisherSequenceBarrier<RB, W>
+impl<RB, W> SingleWaitablePublisher<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1700,7 +1700,7 @@ where
     }
 }
 
-impl<RB, W> AsPipelineRef for SinglePublisherSequenceBarrier<RB, W>
+impl<RB, W> AsPipelineRef for SingleWaitablePublisher<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1714,12 +1714,12 @@ where
     }
 }
 
-impl<RB, W> DelegateLenAvailable for SinglePublisherSequenceBarrier<RB, W> {}
-impl<RB, W> DelegatePipelineAccess for SinglePublisherSequenceBarrier<RB, W> {}
-impl<RB, W> DelegatePipelineAccessMut for SinglePublisherSequenceBarrier<RB, W> {}
-impl<RB, W> DelegatePollable for SinglePublisherSequenceBarrier<RB, W> {}
+impl<RB, W> DelegateLenAvailable for SingleWaitablePublisher<RB, W> {}
+impl<RB, W> DelegatePipelineAccess for SingleWaitablePublisher<RB, W> {}
+impl<RB, W> DelegatePipelineAccessMut for SingleWaitablePublisher<RB, W> {}
+impl<RB, W> DelegatePollable for SingleWaitablePublisher<RB, W> {}
 
-impl<RB, W> WaitForSlots for SinglePublisherSequenceBarrier<RB, W>
+impl<RB, W> WaitForSlots for SingleWaitablePublisher<RB, W>
 where
     RB: UnsafeRingBufferOps,
     W: NotificationWaitStrategy,
@@ -1730,7 +1730,7 @@ where
     }
 }
 
-impl<RB, W> ReleaseSlots for SinglePublisherSequenceBarrier<RB, W>
+impl<RB, W> ReleaseSlots for SingleWaitablePublisher<RB, W>
 where
     RB: UnsafeRingBufferOps,
     W: NotificationWaitStrategy,
@@ -1742,7 +1742,7 @@ where
     }
 }
 
-impl<RB, W> SequenceBarrierTake for SinglePublisherSequenceBarrier<RB, W>
+impl<RB, W> SequenceBarrierTake for SingleWaitablePublisher<RB, W>
 where
     W: NotificationWaitStrategy,
     RB: UnsafeRingBufferOpsTake,
@@ -1755,7 +1755,7 @@ where
     }
 }
 
-impl<RB, W> InsertSingleConsumer for SinglePublisherSequenceBarrier<RB, W>
+impl<RB, W> InsertSingleConsumer for SingleWaitablePublisher<RB, W>
 where
     W: Clone,
     RB: UnsafeRingBufferOps + Clone,
@@ -2520,9 +2520,9 @@ impl PollableDependency for ResizingPublisherDependencies {
     }
 }
 
-/// Resizing variant of SinglePublisherSequenceBarrier.
+/// Resizing variant of SingleWaitablePublisher.
 struct SingleResizingPublisherSequenceBarrier<T> {
-    // Reuse SinglePublisherSequenceBarrier data declarations and constructor
+    // Reuse CommonSingleSequenceBarrier data declarations and constructor
     sb: CommonSingleSequenceBarrier<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         ResizingPublisherDependencies,
@@ -2721,9 +2721,9 @@ where
             "The create_consumer_pipeline method can only be called once."
         );
 
-        // Similar to SinglePublisherSequenceBarrier::insert_single_consumer, but the limitations on
-        // when this is called result in a simpler implementation, for now. This makes it possible
-        // to defer implementing a better solution until after other refactoring is carried out, to
+        // Similar to SingleWaitablePublisher::insert_single_consumer, but the limitations on when
+        // this is called result in a simpler implementation, for now. This makes it possible to
+        // defer implementing a better solution until after other refactoring is carried out, to
         // avoid doing too much in a single step.
 
         let new_consumer =
@@ -3088,7 +3088,7 @@ impl fmt::Debug for TimeoutResizeWaitStrategy {
 }
 
 pub struct SinglePublisher<T, const N: usize, W> {
-    p: GenericPublisher<SinglePublisherSequenceBarrier<RingBufferArc<T, N>, W>>,
+    p: GenericPublisher<SingleWaitablePublisher<RingBufferArc<T, N>, W>>,
 }
 
 pub struct SharedConsumer<T, const N: usize, W> {
@@ -3107,7 +3107,7 @@ where
     /// SinglePublisher object.
     pub fn new(wait_strategy: W) -> SinglePublisher<T, N, W> {
         let ring_buffer = RingBufferArc::new();
-        let sb = SinglePublisherSequenceBarrier::new(ring_buffer, wait_strategy);
+        let sb = SingleWaitablePublisher::new(ring_buffer, wait_strategy);
         let gp = GenericPublisher::new_common(sb);
         SinglePublisher { p: gp }
     }
