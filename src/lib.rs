@@ -2547,6 +2547,20 @@ impl<T> SingleResizingPublisherSequenceBarrier<T> {
     }
 }
 
+impl<T> AsPipelineRef for SingleResizingPublisherSequenceBarrier<T> {
+    type T = CommonSingleSequenceBarrier<
+        ResizableRingBufferArc<ReallocationFlag<T>>,
+        ResizingPublisherDependencies,
+    >;
+
+    fn as_pipeline_ref(&self) -> &Self::T {
+        &self.sb
+    }
+    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
+        &mut self.sb
+    }
+}
+
 impl<T> LenAvailable for SingleResizingPublisherSequenceBarrier<T> {
     fn len_available(&self) -> usize {
         // Don't expose the reserved slot. This ensures the default wait_for_slots implementation
@@ -2568,21 +2582,6 @@ where
                 .dependencies
                 .calculate_available(self.sb.sequence.get_owned(), self.sb.capacity()),
         )
-    }
-}
-
-impl<T> CurrentSequence for SingleResizingPublisherSequenceBarrier<T> {
-    fn current_sequence(&self) -> SequenceNumber {
-        self.sb.current_sequence()
-    }
-}
-
-impl<T> PipelineCapacity for SingleResizingPublisherSequenceBarrier<T>
-where
-    T: 'static,
-{
-    fn capacity(&self) -> usize {
-        self.sb.capacity()
     }
 }
 
@@ -2769,32 +2768,20 @@ impl<T> SingleResizingConsumerSequenceBarrier<T> {
     }
 }
 
-impl<T> LenAvailable for SingleResizingConsumerSequenceBarrier<T>
-where
-    T: 'static,
-{
-    fn len_available(&self) -> usize {
-        self.cb.len_available()
+impl<T> AsPipelineRef for SingleResizingConsumerSequenceBarrier<T> {
+    type T = SingleConsumerSequenceBarrier<
+        ResizableRingBufferArc<ReallocationFlag<T>>,
+        TimeoutResizeWaitStrategy,
+    >;
+    fn as_pipeline_ref(&self) -> &Self::T {
+        &self.cb
+    }
+    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
+        &mut self.cb
     }
 }
 
-impl<T> PipelineCapacity for SingleResizingConsumerSequenceBarrier<T>
-where
-    T: 'static,
-{
-    fn capacity(&self) -> usize {
-        self.cb.capacity()
-    }
-}
-
-impl<T> CurrentSequence for SingleResizingConsumerSequenceBarrier<T>
-where
-    T: 'static,
-{
-    fn current_sequence(&self) -> SequenceNumber {
-        self.cb.current_sequence()
-    }
-}
+impl<T> DelegateLenAvailable for SingleResizingConsumerSequenceBarrier<T> {}
 
 impl<T> Pollable for SingleResizingConsumerSequenceBarrier<T>
 where
