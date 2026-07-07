@@ -2680,10 +2680,8 @@ where
     fn wait_for_slots(&mut self, min_available: usize) {
         let current_size = self.pollable.capacity();
 
-        // This uses the CommonSinglePipelineRef implementations of poll and len_available (pending
-        // future refactoring), so adjust min_available accordingly.
         self.wait_strategy
-            .try_wait_for_consumers(&mut self.pollable.pollable, min_available + 1);
+            .try_wait_for_consumers(&mut self.pollable, min_available);
 
         if self.len_available() < min_available {
             // The wait strategy timed out, so allocate a new buffer here.
