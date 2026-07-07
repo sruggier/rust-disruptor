@@ -2705,6 +2705,50 @@ where
     }
 }
 
+impl<T> SinglePollableResizingPublisher<T>
+where
+    T: Default + 'static,
+{
+    fn reallocate(&mut self, new_size: usize) {
+        debug_assert!(new_size.is_power_of_two());
+
+        let current_size = self.capacity();
+
+        // If the sequence has been wrapped, then it is temporarily going to be less than
+        // consumer sequence numbers in the other stages of the pipeline. If we allocate a
+        // larger buffer and publish into it, then the publisher's sequence can overtake the
+        // other sequences in the pipeline, which would break the availability calculations.
+        // Unwrapping the publisher's sequence ensures that availability calculations remain
+        // correct throughout the reallocation transition.
+        let old_sequence = self.current_sequence();
+        self.pollable.sequence.unwrap(current_size);
+        let unwrapped_sequence = self.current_sequence();
+
+        debug!(
+            "sequence: {}, unwrapped sequence: {}",
+            old_sequence.value(),
+            unwrapped_sequence.value()
+        );
+
+        unsafe {
+            // Signal to consumers that there's a larger buffer to transition to.
+            self.pollable.set(ReallocationFlag::BufferReallocated);
+            self.pollable.ring_buffer.reallocate(new_size);
+        }
+
+        // Modify the cached availability value to facilitate usage of the entire newly
+        // allocated buffer. The safety of this change depends on knowing that the publisher can
+        // only reach the wrap boundary after the rest of the pipeline has transitioned to the
+        // larger buffer. To facilitate this constraint, the wrap_boundary is 4 times the buffer
+        // size, and the unwrap function leaves the sequence value in between 2 and 2.5 times
+        // the new buffer size. Thus, the publisher will only wrap after publishing more than
+        // buffer_size items, and that will require it to wait for consumers to catch up.
+        // Alternatively, if consumers don't catch up, the publisher may reallocate another
+        // buffer, but in doing so, it will continue to avoid wrapping its sequence number.
+        self.pollable.set_cached_available(new_size);
+    }
+}
+
 /// Resizing variant of SingleWaitablePublisher.
 struct SingleWaitableResizingPublisher<T> {
     pollable: SinglePollableResizingPublisher<T>,
@@ -2754,49 +2798,15 @@ where
         if self.len_available() < min_available {
             // The wait strategy timed out, so allocate a new buffer here.
 
-            // Make the new buffer twice as large
             let new_size = 2 * current_size;
-
-            // If the sequence has been wrapped, then it is temporarily going to be less than
-            // consumer sequence numbers in the other stages of the pipeline. If we allocate a
-            // larger buffer and publish into it, then the publisher's sequence can overtake the
-            // other sequences in the pipeline, which would break the availability calculations.
-            // Unwrapping the publisher's sequence ensures that availability calculations remain
-            // correct throughout the reallocation transition.
-            let old_sequence = self.current_sequence();
-            self.pollable.pollable.sequence.unwrap(current_size);
-            let unwrapped_sequence = self.current_sequence();
-
             // Resizing shouldn't be a normal part of a program's operation. Alert the user, so that
             // they can consider fixing the issue.
             error!(
                 "Possible deadlock detected, allocating a larger buffer for disruptor events. Current buffer size: {}, new size: {}, batch size: {}",
                 current_size, new_size, min_available
             );
-            debug!(
-                "sequence: {}, unwrapped sequence: {}",
-                old_sequence.value(),
-                unwrapped_sequence.value()
-            );
 
-            unsafe {
-                // Signal to consumers that there's a larger buffer to transition to.
-                self.pollable
-                    .pollable
-                    .set(ReallocationFlag::BufferReallocated);
-                self.pollable.pollable.ring_buffer.reallocate(new_size);
-            }
-
-            // Modify the cached availability value to facilitate usage of the entire newly
-            // allocated buffer. The safety of this change depends on knowing that the publisher can
-            // only reach the wrap boundary after the rest of the pipeline has transitioned to the
-            // larger buffer. To facilitate this constraint, the wrap_boundary is 4 times the buffer
-            // size, and the unwrap function leaves the sequence value in between 2 and 2.5 times
-            // the new buffer size. Thus, the publisher will only wrap after publishing more than
-            // buffer_size items, and that will require it to wait for consumers to catch up.
-            // Alternatively, if consumers don't catch up, the publisher may reallocate another
-            // buffer, but in doing so, it will continue to avoid wrapping its sequence number.
-            self.pollable.pollable.set_cached_available(new_size);
+            self.pollable.reallocate(2 * current_size);
         }
     }
 }
