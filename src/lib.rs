@@ -2546,14 +2546,34 @@ impl PollableDependency for ResizingPublisherDependencies {
     }
 }
 
-/// Resizing variant of SingleWaitablePublisher.
-struct SingleWaitableResizingPublisher<T> {
+/// Resizing publisher specialization of CommonSinglePipelineRef.
+struct SinglePollableResizingPublisher<T> {
     // Reuse CommonSinglePipelineRef data declarations and constructor
     pollable: CommonSinglePipelineRef<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         ResizingPublisherDependencies,
     >,
+}
+
+/// Resizing variant of SingleWaitablePublisher.
+struct SingleWaitableResizingPublisher<T> {
+    pollable: SinglePollableResizingPublisher<T>,
     wait_strategy: TimeoutResizeWaitStrategy,
+}
+
+impl<T> SinglePollableResizingPublisher<T> {
+    fn new(
+        ring_buffer: ResizableRingBufferArc<ReallocationFlag<T>>,
+    ) -> SinglePollableResizingPublisher<T> {
+        SinglePollableResizingPublisher {
+            pollable: CommonSinglePipelineRef::new(
+                ring_buffer,
+                SequenceNumber::default(),
+                ResizingPublisherDependencies::default(),
+                0,
+            ),
+        }
+    }
 }
 
 impl<T> SingleWaitableResizingPublisher<T> {
@@ -2562,18 +2582,13 @@ impl<T> SingleWaitableResizingPublisher<T> {
         wait_strategy: TimeoutResizeWaitStrategy,
     ) -> SingleWaitableResizingPublisher<T> {
         SingleWaitableResizingPublisher {
-            pollable: CommonSinglePipelineRef::new(
-                ring_buffer,
-                SequenceNumber::default(),
-                ResizingPublisherDependencies::default(),
-                0,
-            ),
+            pollable: SinglePollableResizingPublisher::new(ring_buffer),
             wait_strategy,
         }
     }
 }
 
-impl<T> AsPipelineRef for SingleWaitableResizingPublisher<T> {
+impl<T> AsPipelineRef for SinglePollableResizingPublisher<T> {
     type T = CommonSinglePipelineRef<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         ResizingPublisherDependencies,
@@ -2587,7 +2602,7 @@ impl<T> AsPipelineRef for SingleWaitableResizingPublisher<T> {
     }
 }
 
-impl<T> LenAvailable for SingleWaitableResizingPublisher<T> {
+impl<T> LenAvailable for SinglePollableResizingPublisher<T> {
     fn len_available(&self) -> usize {
         // Don't expose the reserved slot. This ensures the default wait_for_slots implementation
         // will wait correctly in order to maintain the extra slot.
@@ -2595,7 +2610,7 @@ impl<T> LenAvailable for SingleWaitableResizingPublisher<T> {
     }
 }
 
-impl<T> Pollable for SingleWaitableResizingPublisher<T>
+impl<T> Pollable for SinglePollableResizingPublisher<T>
 where
     T: 'static,
 {
@@ -2611,7 +2626,7 @@ where
     }
 }
 
-impl<T> PipelineAccessMut for SingleWaitableResizingPublisher<T>
+impl<T> PipelineAccessMut for SinglePollableResizingPublisher<T>
 where
     T: Default + 'static,
 {
@@ -2621,7 +2636,7 @@ where
     }
 }
 
-impl<T> PipelineAccess for SingleWaitableResizingPublisher<T>
+impl<T> PipelineAccess for SinglePollableResizingPublisher<T>
 where
     T: 'static,
 {
@@ -2640,6 +2655,22 @@ where
     }
 }
 
+impl<T> AsPipelineRef for SingleWaitableResizingPublisher<T> {
+    type T = SinglePollableResizingPublisher<T>;
+
+    fn as_pipeline_ref(&self) -> &Self::T {
+        &self.pollable
+    }
+    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
+        &mut self.pollable
+    }
+}
+
+impl<T> DelegateLenAvailable for SingleWaitableResizingPublisher<T> {}
+impl<T> DelegatePollable for SingleWaitableResizingPublisher<T> {}
+impl<T> DelegatePipelineAccess for SingleWaitableResizingPublisher<T> {}
+impl<T> DelegatePipelineAccessMut for SingleWaitableResizingPublisher<T> {}
+
 impl<T> WaitForSlots for SingleWaitableResizingPublisher<T>
 where
     T: Default + 'static,
@@ -2652,7 +2683,7 @@ where
         // This uses the CommonSinglePipelineRef implementations of poll and len_available (pending
         // future refactoring), so adjust min_available accordingly.
         self.wait_strategy
-            .try_wait_for_consumers(&mut self.pollable, min_available + 1);
+            .try_wait_for_consumers(&mut self.pollable.pollable, min_available + 1);
 
         if self.len_available() < min_available {
             // The wait strategy timed out, so allocate a new buffer here.
@@ -2667,7 +2698,7 @@ where
             // Unwrapping the publisher's sequence ensures that availability calculations remain
             // correct throughout the reallocation transition.
             let old_sequence = self.current_sequence();
-            self.pollable.sequence.unwrap(current_size);
+            self.pollable.pollable.sequence.unwrap(current_size);
             let unwrapped_sequence = self.current_sequence();
 
             // Resizing shouldn't be a normal part of a program's operation. Alert the user, so that
@@ -2684,8 +2715,10 @@ where
 
             unsafe {
                 // Signal to consumers that there's a larger buffer to transition to.
-                self.pollable.set(ReallocationFlag::BufferReallocated);
-                self.pollable.ring_buffer.reallocate(new_size);
+                self.pollable
+                    .pollable
+                    .set(ReallocationFlag::BufferReallocated);
+                self.pollable.pollable.ring_buffer.reallocate(new_size);
             }
 
             // Modify the cached availability value to facilitate usage of the entire newly
@@ -2697,12 +2730,12 @@ where
             // buffer_size items, and that will require it to wait for consumers to catch up.
             // Alternatively, if consumers don't catch up, the publisher may reallocate another
             // buffer, but in doing so, it will continue to avoid wrapping its sequence number.
-            self.pollable.set_cached_available(new_size);
+            self.pollable.pollable.set_cached_available(new_size);
         }
     }
 }
 
-impl<T> ReleaseSlots for SingleWaitableResizingPublisher<T>
+impl<T> ReleaseSlots for SinglePollableResizingPublisher<T>
 where
     T: 'static,
 {
@@ -2712,17 +2745,73 @@ where
 
         // SAFETY: the caller promises this is safe.
         unsafe { self.pollable.release_slots_unchecked(n) };
+    }
+}
+
+impl<T> ReleaseSlots for SingleWaitableResizingPublisher<T>
+where
+    T: 'static,
+{
+    unsafe fn release_slots_unchecked(&mut self, n: usize) {
+        // SAFETY: the caller promises this is safe.
+        unsafe { self.pollable.release_slots_unchecked(n) };
 
         self.wait_strategy.notify_all_waiters();
     }
 }
 
-impl<T> SequenceBarrierTake for SingleWaitableResizingPublisher<T>
+impl<T> SequenceBarrierTake for SinglePollableResizingPublisher<T>
 where
     T: Default + 'static,
 {
     unsafe fn take(&mut self) -> T {
         unsafe { self.pollable.take().unwrap() }
+    }
+}
+
+impl<T> InsertSingleConsumer for SinglePollableResizingPublisher<T>
+where
+    T: 'static,
+{
+    type SingleConsumer = SinglePollableResizingConsumer<T>;
+
+    /// See [`InsertSingleConsumer::insert_single_consumer`].
+    ///
+    /// # Panics
+    ///
+    /// For now, [this type](Self) only supports a single call to this function, before any items
+    /// have been published, and will trigger a panic if called multiple times, or after any items
+    /// are released.
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        // Prevent this from executing during a transition between buffers, unless/until the
+        // implementation is reworked to make support for that possible.
+        assert!(
+            self.pollable.dependencies.sequences.is_empty()
+                && self.pollable.sequence.get_owned().value() == 0,
+            "The create_consumer_pipeline method can only be called once."
+        );
+
+        // Similar to SingleWaitablePublisher::insert_single_consumer, but the limitations on when
+        // this is called result in a simpler implementation, for now. This makes it possible to
+        // defer implementing a better solution until after other refactoring is carried out, to
+        // avoid doing too much in a single step.
+
+        let new_consumer = Self::SingleConsumer::new(SinglePollableResizingConsumerData::new(
+            self.pollable.ring_buffer.clone(),
+            SequenceNumber::default(),
+            ConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
+            0,
+        ));
+
+        // my_dependencies is an empty Vec now, to be populated with a reference to the new
+        // consumer's sequence.
+        self.pollable.dependencies.sequences.reserve_exact(1);
+        self.pollable
+            .dependencies
+            .sequences
+            .push(new_consumer.common_ref.sequence.clone_immut());
+
+        new_consumer
     }
 }
 
@@ -2739,44 +2828,12 @@ where
     /// For now, [this type](Self) only supports a single call to this function, before any items
     /// have been published, and will trigger a panic if called multiple times, or after any items
     /// are released.
-    fn insert_single_consumer(&mut self) -> SingleWaitableResizingConsumer<T> {
-        // Prevent this from executing during a transition between buffers, unless/until the
-        // implementation is reworked to make support for that possible.
-        assert!(
-            self.pollable.dependencies.sequences.is_empty()
-                && self.pollable.sequence.get_owned().value() == 0,
-            "The create_consumer_pipeline method can only be called once."
-        );
-
-        // Similar to SingleWaitablePublisher::insert_single_consumer, but the limitations on when
-        // this is called result in a simpler implementation, for now. This makes it possible to
-        // defer implementing a better solution until after other refactoring is carried out, to
-        // avoid doing too much in a single step.
-
-        let new_consumer = SingleWaitableResizingConsumer::new(SingleWaitableConsumer::new(
-            SinglePollableResizingConsumer::new(SinglePollableConsumer::new(
-                self.pollable.ring_buffer.clone(),
-                SequenceNumber::default(),
-                ConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
-                0,
-            )),
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        Self::SingleConsumer::new(SingleWaitableConsumer::new(
+            self.pollable.insert_single_consumer(),
             self.wait_strategy.clone(),
-            self.pollable.sequence.clone_immut(),
-        ));
-
-        // my_dependencies is an empty Vec now, to be populated with a reference to the new
-        // consumer's sequence.
-        self.pollable.dependencies.sequences.reserve_exact(1);
-        self.pollable.dependencies.sequences.push(
-            new_consumer
-                .waitable_consumer
-                .pollable
-                .common_ref
-                .sequence
-                .clone_immut(),
-        );
-
-        new_consumer
+            self.pollable.pollable.sequence.clone_immut(),
+        ))
     }
 }
 
