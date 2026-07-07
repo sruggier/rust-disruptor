@@ -554,7 +554,7 @@ struct SequenceOwner {
 }
 
 impl Default for SequenceOwner {
-    /// Calls Self::new()
+    /// Allocates a new sequence.
     fn default() -> Self {
         Self::new_from_sequence(SequenceNumber::default())
     }
@@ -569,11 +569,6 @@ fn common_sequence_owner_get(
 }
 
 impl SequenceOwner {
-    /// Allocates a new sequence.
-    fn new() -> Self {
-        Self::default()
-    }
-
     fn new_from_sequence(sequence: SequenceNumber) -> Self {
         SequenceOwner {
             value_arc: UncheckedUnsafeArc::new(CachePadded::new(AtomicUsize::new(
@@ -685,7 +680,7 @@ fn test_sequence_overflow() {
     let exp = log2(wrap_boundary(1));
     let max_buffer_size = 1 << (std::mem::size_of::<usize>() * 8 - exp);
 
-    let mut s = SequenceOwner::new();
+    let mut s = SequenceOwner::default();
     assert_eq!(s.get(), SequenceNumber::default());
 
     // Add 1
@@ -736,7 +731,7 @@ fn test_sequencereader() {
     // larger than the tested sequence numbers
     let buffer_size = 8192;
 
-    let mut sequence = SequenceOwner::new();
+    let mut sequence = SequenceOwner::default();
     let reader = sequence.clone_immut();
     assert!(0 == reader.get().value());
     sequence.advance_and_flush(1, buffer_size);
@@ -1680,7 +1675,7 @@ impl<RB, W> SingleWaitablePublisher<RB, W> {
         Self {
             pollable: CommonSinglePipelineRef::new(
                 ring_buffer,
-                SequenceOwner::new(),
+                SequenceOwner::default(),
                 PublisherDependencies::default(),
                 0,
             ),
@@ -2554,7 +2549,7 @@ impl<T> SingleWaitableResizingPublisher<T> {
         SingleWaitableResizingPublisher {
             pollable: CommonSinglePipelineRef::new(
                 ring_buffer,
-                SequenceOwner::new(),
+                SequenceOwner::default(),
                 ResizingPublisherDependencies::default(),
                 0,
             ),
