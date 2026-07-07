@@ -1663,6 +1663,34 @@ where
     }
 }
 
+impl<RB> InsertSingleConsumer for CommonSinglePipelineRef<RB, ConsumerDependencies>
+where
+    RB: Clone,
+{
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self {
+        // Reuse self's dependencies, and populate its replacement below, after constructing the new
+        // consumer.
+        let new_dependencies = std::mem::take(&mut self.dependencies);
+        let new_consumer = Self::new(
+            self.ring_buffer.clone(),
+            self.sequence.get_owned(),
+            new_dependencies,
+            self.cached_available,
+        );
+
+        // Wait for the new consumer to process the events that would otherwise have been available
+        // to self.
+        self.dependencies.sequences.reserve_exact(1);
+        self.dependencies
+            .sequences
+            .push(new_consumer.sequence.clone_immut());
+        self.cached_available = 0;
+        new_consumer
+    }
+}
+
 /// A pipeline reference representing a non-concurrent first stage, analogous to a single producer
 /// in a conventional queue.
 struct SingleWaitablePublisher<RB, W> {
@@ -1914,29 +1942,11 @@ where
     type SingleConsumer = Self;
 
     fn insert_single_consumer(&mut self) -> Self {
-        // Reuse self's dependencies, and populate its replacement below, after constructing the new
-        // consumer.
-        let new_dependencies = std::mem::take(&mut self.pollable.dependencies);
-        let new_consumer = Self::new(
-            CommonSinglePipelineRef::new(
-                self.pollable.ring_buffer.clone(),
-                self.pollable.sequence.get_owned(),
-                new_dependencies,
-                self.pollable.cached_available,
-            ),
+        Self::new(
+            self.pollable.insert_single_consumer(),
             self.wait_strategy.clone(),
             self.publisher_availability.sequence.clone(),
-        );
-
-        // Wait for the new consumer to process the events that would otherwise have been available
-        // to self.
-        self.pollable.dependencies.sequences.reserve_exact(1);
-        self.pollable
-            .dependencies
-            .sequences
-            .push(new_consumer.pollable.sequence.clone_immut());
-        self.pollable.cached_available = 0;
-        new_consumer
+        )
     }
 }
 
