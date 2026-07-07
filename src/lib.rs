@@ -2704,7 +2704,7 @@ impl<T> InsertSingleConsumer for SingleWaitableResizingPublisher<T>
 where
     T: 'static,
 {
-    type SingleConsumer = SingleResizingConsumerSequenceBarrier<T>;
+    type SingleConsumer = SingleWaitableResizingConsumer<T>;
 
     /// See [`InsertSingleConsumer::insert_single_consumer`].
     ///
@@ -2713,7 +2713,7 @@ where
     /// For now, [this type](Self) only supports a single call to this function, before any items
     /// have been published, and will trigger a panic if called multiple times, or after any items
     /// are released.
-    fn insert_single_consumer(&mut self) -> SingleResizingConsumerSequenceBarrier<T> {
+    fn insert_single_consumer(&mut self) -> SingleWaitableResizingConsumer<T> {
         // Prevent this from executing during a transition between buffers, unless/until the
         // implementation is reworked to make support for that possible.
         assert!(
@@ -2726,7 +2726,7 @@ where
         // defer implementing a better solution until after other refactoring is carried out, to
         // avoid doing too much in a single step.
 
-        let new_consumer = SingleResizingConsumerSequenceBarrier::new(SingleWaitableConsumer::new(
+        let new_consumer = SingleWaitableResizingConsumer::new(SingleWaitableConsumer::new(
             self.sb.ring_buffer.clone(),
             SequenceNumber(SEQUENCE_INITIAL),
             ConsumerDependencies::from_vec(vec![self.sb.sequence.clone_immut()]),
@@ -2748,7 +2748,7 @@ where
 }
 
 /// Resizing-aware consumer barrier.
-struct SingleResizingConsumerSequenceBarrier<T> {
+struct SingleWaitableResizingConsumer<T> {
     /// Reuse data and constructor from SingleWaitableConsumer
     cb: SingleWaitableConsumer<
         ResizableRingBufferArc<ReallocationFlag<T>>,
@@ -2756,18 +2756,18 @@ struct SingleResizingConsumerSequenceBarrier<T> {
     >,
 }
 
-impl<T> SingleResizingConsumerSequenceBarrier<T> {
+impl<T> SingleWaitableResizingConsumer<T> {
     fn new(
         cb: SingleWaitableConsumer<
             ResizableRingBufferArc<ReallocationFlag<T>>,
             TimeoutResizeWaitStrategy,
         >,
-    ) -> SingleResizingConsumerSequenceBarrier<T> {
-        SingleResizingConsumerSequenceBarrier { cb }
+    ) -> SingleWaitableResizingConsumer<T> {
+        SingleWaitableResizingConsumer { cb }
     }
 }
 
-impl<T> AsPipelineRef for SingleResizingConsumerSequenceBarrier<T> {
+impl<T> AsPipelineRef for SingleWaitableResizingConsumer<T> {
     type T = SingleWaitableConsumer<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         TimeoutResizeWaitStrategy,
@@ -2780,9 +2780,9 @@ impl<T> AsPipelineRef for SingleResizingConsumerSequenceBarrier<T> {
     }
 }
 
-impl<T> DelegateLenAvailable for SingleResizingConsumerSequenceBarrier<T> {}
+impl<T> DelegateLenAvailable for SingleWaitableResizingConsumer<T> {}
 
-impl<T> Pollable for SingleResizingConsumerSequenceBarrier<T>
+impl<T> Pollable for SingleWaitableResizingConsumer<T>
 where
     T: 'static,
 {
@@ -2799,7 +2799,7 @@ where
     }
 }
 
-impl<T> SingleResizingConsumerSequenceBarrier<T>
+impl<T> SingleWaitableResizingConsumer<T>
 where
     T: 'static,
 {
@@ -2869,7 +2869,7 @@ where
     }
 }
 
-impl<T> WaitForSlots for SingleResizingConsumerSequenceBarrier<T>
+impl<T> WaitForSlots for SingleWaitableResizingConsumer<T>
 where
     T: 'static,
 {
@@ -2886,7 +2886,7 @@ where
     }
 }
 
-impl<T> ReleaseSlots for SingleResizingConsumerSequenceBarrier<T>
+impl<T> ReleaseSlots for SingleWaitableResizingConsumer<T>
 where
     T: 'static,
 {
@@ -2897,7 +2897,7 @@ where
     }
 }
 
-impl<T> PipelineAccessMut for SingleResizingConsumerSequenceBarrier<T>
+impl<T> PipelineAccessMut for SingleWaitableResizingConsumer<T>
 where
     T: 'static,
 {
@@ -2906,7 +2906,7 @@ where
     }
 }
 
-impl<T> PipelineAccess for SingleResizingConsumerSequenceBarrier<T>
+impl<T> PipelineAccess for SingleWaitableResizingConsumer<T>
 where
     T: 'static,
 {
@@ -2936,7 +2936,7 @@ where
     }
 }
 
-impl<T> SequenceBarrierTake for SingleResizingConsumerSequenceBarrier<T>
+impl<T> SequenceBarrierTake for SingleWaitableResizingConsumer<T>
 where
     T: Default + 'static,
 {
@@ -2954,7 +2954,7 @@ where
     }
 }
 
-impl<T> InsertSingleConsumer for SingleResizingConsumerSequenceBarrier<T> {
+impl<T> InsertSingleConsumer for SingleWaitableResizingConsumer<T> {
     type SingleConsumer = Self;
 
     fn insert_single_consumer(&mut self) -> Self {
@@ -3197,11 +3197,11 @@ pub struct SingleResizingPublisher<T> {
 }
 
 pub struct SharedResizingConsumer<T> {
-    c: GenericSharedConsumer<SingleResizingConsumerSequenceBarrier<T>>,
+    c: GenericSharedConsumer<SingleWaitableResizingConsumer<T>>,
 }
 
 pub struct SingleResizingConsumer<T> {
-    c: GenericSingleConsumer<SingleResizingConsumerSequenceBarrier<T>>,
+    c: GenericSingleConsumer<SingleWaitableResizingConsumer<T>>,
 }
 
 /// Specialization for resizable ring buffer.
