@@ -2879,7 +2879,13 @@ impl<T> AsPipelineRef for SinglePollableResizingConsumer<T> {
     }
 }
 
-impl<T> DelegateLenAvailable for SinglePollableResizingConsumer<T> {}
+impl<T> LenAvailable for SinglePollableResizingConsumer<T> {
+    fn len_available(&self) -> usize {
+        // For now, until smarter transition handling is implemented, force callers to access and
+        // release slots one at a time.
+        cmp::min(self.common_ref.len_available(), 1)
+    }
+}
 
 impl<T> Pollable for SinglePollableResizingConsumer<T>
 where
