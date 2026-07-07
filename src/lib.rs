@@ -2730,9 +2730,17 @@ where
             unwrapped_sequence.value()
         );
 
+        // Signal to consumers that there's a larger buffer to transition to.
+        //
+        // SAFETY: This type keeps an extra slot reserved at all times, so it should always be
+        // possible to write the flag to the current slot.
+        debug_assert!(self.pollable.len_available() >= 1);
         unsafe {
-            // Signal to consumers that there's a larger buffer to transition to.
             self.pollable.set(ReallocationFlag::BufferReallocated);
+        }
+        // SAFETY: this is the only line of code that calls reallocate, in a type that doesn't allow
+        // itself to be cloned, so there can't be any concurrent calls.
+        unsafe {
             self.pollable.ring_buffer.reallocate(new_size);
         }
 
