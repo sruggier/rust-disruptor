@@ -1556,13 +1556,13 @@ struct CommonSinglePipelineRef<RB, D> {
 impl<RB, D> CommonSinglePipelineRef<RB, D> {
     fn new(
         ring_buffer: RB,
-        sequence: SequenceOwner,
+        sequence: SequenceNumber,
         dependencies: D,
         cached_available: usize,
     ) -> Self {
         Self {
             ring_buffer,
-            sequence,
+            sequence: SequenceOwner::new_from_sequence(sequence),
             dependencies,
             cached_available,
         }
@@ -1675,7 +1675,7 @@ impl<RB, W> SingleWaitablePublisher<RB, W> {
         Self {
             pollable: CommonSinglePipelineRef::new(
                 ring_buffer,
-                SequenceOwner::default(),
+                SequenceNumber::default(),
                 PublisherDependencies::default(),
                 0,
             ),
@@ -1852,7 +1852,7 @@ impl<RB, W> SingleWaitableConsumer<RB, W> {
         SingleWaitableConsumer {
             pollable: CommonSinglePipelineRef::new(
                 ring_buffer,
-                SequenceOwner::new_from_sequence(initial_sequence),
+                initial_sequence,
                 dependencies,
                 cached_available,
             ),
@@ -2549,7 +2549,7 @@ impl<T> SingleWaitableResizingPublisher<T> {
         SingleWaitableResizingPublisher {
             pollable: CommonSinglePipelineRef::new(
                 ring_buffer,
-                SequenceOwner::default(),
+                SequenceNumber::default(),
                 ResizingPublisherDependencies::default(),
                 0,
             ),
