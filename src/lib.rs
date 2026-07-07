@@ -1810,10 +1810,12 @@ where
         // consumer's sequence.
 
         let new_consumer = SingleWaitableConsumer::new(
-            self.pollable.ring_buffer.clone(),
-            new_sequence,
-            dependencies,
-            0,
+            CommonSinglePipelineRef::new(
+                self.pollable.ring_buffer.clone(),
+                new_sequence,
+                dependencies,
+                0,
+            ),
             self.wait_strategy.clone(),
             // Our sequence is the publisher's sequence (aka the cursor)
             self.pollable.sequence.clone_immut(),
@@ -1842,20 +1844,12 @@ struct SingleWaitableConsumer<RB, W> {
 
 impl<RB, W> SingleWaitableConsumer<RB, W> {
     fn new(
-        ring_buffer: RB,
-        initial_sequence: SequenceNumber,
-        dependencies: ConsumerDependencies,
-        cached_available: usize,
+        pollable: CommonSinglePipelineRef<RB, ConsumerDependencies>,
         wait_strategy: W,
         publisher_sequence: SequenceReader,
     ) -> SingleWaitableConsumer<RB, W> {
         SingleWaitableConsumer {
-            pollable: CommonSinglePipelineRef::new(
-                ring_buffer,
-                initial_sequence,
-                dependencies,
-                cached_available,
-            ),
+            pollable,
             publisher_availability: PublisherAvailability {
                 sequence: publisher_sequence,
             },
@@ -1924,10 +1918,12 @@ where
         // consumer.
         let new_dependencies = std::mem::take(&mut self.pollable.dependencies);
         let new_consumer = Self::new(
-            self.pollable.ring_buffer.clone(),
-            self.pollable.sequence.get_owned(),
-            new_dependencies,
-            self.pollable.cached_available,
+            CommonSinglePipelineRef::new(
+                self.pollable.ring_buffer.clone(),
+                self.pollable.sequence.get_owned(),
+                new_dependencies,
+                self.pollable.cached_available,
+            ),
             self.wait_strategy.clone(),
             self.publisher_availability.sequence.clone(),
         );
@@ -2739,10 +2735,12 @@ where
         // avoid doing too much in a single step.
 
         let new_consumer = SingleWaitableResizingConsumer::new(SingleWaitableConsumer::new(
-            self.pollable.ring_buffer.clone(),
-            SequenceNumber::default(),
-            ConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
-            0,
+            CommonSinglePipelineRef::new(
+                self.pollable.ring_buffer.clone(),
+                SequenceNumber::default(),
+                ConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
+                0,
+            ),
             self.wait_strategy.clone(),
             self.pollable.sequence.clone_immut(),
         ));
