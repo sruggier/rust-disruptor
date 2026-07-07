@@ -2799,36 +2799,6 @@ impl<T> AsPipelineRef for SinglePollableResizingConsumer<T> {
 
 impl<T> DelegateLenAvailable for SinglePollableResizingConsumer<T> {}
 
-/// Resizing-variant of [`SingleWaitableConsumer`].
-struct SingleWaitableResizingConsumer<T> {
-    /// Reuse data and constructor from SingleWaitableConsumer
-    waitable_consumer:
-        SingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>,
-}
-
-impl<T> SingleWaitableResizingConsumer<T> {
-    fn new(
-        waitable_consumer: SingleWaitableConsumer<
-            SinglePollableResizingConsumer<T>,
-            TimeoutResizeWaitStrategy,
-        >,
-    ) -> SingleWaitableResizingConsumer<T> {
-        SingleWaitableResizingConsumer { waitable_consumer }
-    }
-}
-
-impl<T> AsPipelineRef for SingleWaitableResizingConsumer<T> {
-    type T = SingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>;
-    fn as_pipeline_ref(&self) -> &Self::T {
-        &self.waitable_consumer
-    }
-    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
-        &mut self.waitable_consumer
-    }
-}
-
-impl<T> DelegateLenAvailable for SingleWaitableResizingConsumer<T> {}
-
 impl<T> Pollable for SinglePollableResizingConsumer<T>
 where
     T: 'static,
@@ -2844,7 +2814,84 @@ where
         );
     }
 }
-impl<T> DelegatePollable for SingleWaitableResizingConsumer<T> {}
+
+impl<T> ReleaseSlots for SinglePollableResizingConsumer<T>
+where
+    T: 'static,
+{
+    unsafe fn release_slots_unchecked(&mut self, n: usize) {
+        debug_assert!(n <= self.len_available());
+        // SAFETY: delegated to the caller.
+        unsafe { self.common_ref.release_slots_unchecked(n) };
+    }
+}
+
+impl<T> PipelineAccess for SinglePollableResizingConsumer<T>
+where
+    T: 'static,
+{
+    type T = T;
+
+    // The get and take functions check for reallocation events, and adjust the passed in sequence
+    // and the barrier's sequence as necessary to match the adjustment to the publisher's sequence
+    // that occurred at the time of reallocation.
+
+    unsafe fn get(&mut self) -> &T {
+        // SAFETY: the caller has established that at least one slot is available.
+        let flag = unsafe { self.common_ref.get() };
+        let reallocation_occurred = !flag.is_item();
+        if reallocation_occurred {
+            // SAFETY: the caller has established a happens-before relationship with the flag being
+            // set, while the value of the flag establishes that a reallocation has already
+            // occurred.
+            unsafe {
+                self.try_switch_next();
+            }
+        }
+
+        // Retrieve the value a second time here, to satisfy the borrow checker.
+        // SAFETY: same as the first time.
+        let flag = unsafe { self.common_ref.get() };
+        flag.as_ref().unwrap()
+    }
+}
+
+impl<T> PipelineAccessMut for SinglePollableResizingConsumer<T>
+where
+    T: 'static,
+{
+    unsafe fn set(&mut self, value: T) {
+        unsafe { self.common_ref.set(ReallocationFlag::Item(value)) }
+    }
+}
+
+impl<T> SequenceBarrierTake for SinglePollableResizingConsumer<T>
+where
+    T: Default + 'static,
+{
+    unsafe fn take(&mut self) -> T {
+        // SAFETY: caller has established that at least one item is available.
+        unsafe {
+            self.try_switch_next();
+        }
+        // SAFETY: caller has established that at least one item is available, and this type doesn't
+        // allow shared access to slots at its pipeline stage.
+        let flag = unsafe { self.common_ref.take() };
+        // After calling try_switch_next, it should be guaranteed that flag holds a real value,
+        // whether or not the slot in the buffer was indicating that a reallocation occurred.
+        flag.unwrap()
+    }
+}
+
+impl<T> InsertSingleConsumer for SinglePollableResizingConsumer<T> {
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self {
+        Self {
+            common_ref: self.common_ref.insert_single_consumer(),
+        }
+    }
+}
 
 impl<T> SinglePollableResizingConsumer<T>
 where
@@ -2917,6 +2964,40 @@ where
     }
 }
 
+/// Resizing-variant of [`SingleWaitableConsumer`].
+struct SingleWaitableResizingConsumer<T> {
+    /// Reuse data and constructor from SingleWaitableConsumer
+    waitable_consumer:
+        SingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>,
+}
+
+impl<T> SingleWaitableResizingConsumer<T> {
+    fn new(
+        waitable_consumer: SingleWaitableConsumer<
+            SinglePollableResizingConsumer<T>,
+            TimeoutResizeWaitStrategy,
+        >,
+    ) -> SingleWaitableResizingConsumer<T> {
+        SingleWaitableResizingConsumer { waitable_consumer }
+    }
+}
+
+impl<T> AsPipelineRef for SingleWaitableResizingConsumer<T> {
+    type T = SingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>;
+    fn as_pipeline_ref(&self) -> &Self::T {
+        &self.waitable_consumer
+    }
+    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
+        &mut self.waitable_consumer
+    }
+}
+
+impl<T> DelegateLenAvailable for SingleWaitableResizingConsumer<T> {}
+impl<T> DelegatePollable for SingleWaitableResizingConsumer<T> {}
+impl<T> DelegateReleaseSlots for SingleWaitableResizingConsumer<T> {}
+impl<T> DelegatePipelineAccess for SingleWaitableResizingConsumer<T> {}
+impl<T> DelegatePipelineAccessMut for SingleWaitableResizingConsumer<T> {}
+
 impl<T> WaitForSlots for SingleWaitableResizingConsumer<T>
 where
     T: 'static,
@@ -2934,94 +3015,12 @@ where
     }
 }
 
-impl<T> ReleaseSlots for SinglePollableResizingConsumer<T>
-where
-    T: 'static,
-{
-    unsafe fn release_slots_unchecked(&mut self, n: usize) {
-        debug_assert!(n <= self.len_available());
-        // SAFETY: delegated to the caller.
-        unsafe { self.common_ref.release_slots_unchecked(n) };
-    }
-}
-impl<T> DelegateReleaseSlots for SingleWaitableResizingConsumer<T> {}
-
-impl<T> PipelineAccessMut for SinglePollableResizingConsumer<T>
-where
-    T: 'static,
-{
-    unsafe fn set(&mut self, value: T) {
-        unsafe { self.common_ref.set(ReallocationFlag::Item(value)) }
-    }
-}
-
-impl<T> PipelineAccess for SinglePollableResizingConsumer<T>
-where
-    T: 'static,
-{
-    type T = T;
-
-    // The get and take functions check for reallocation events, and adjust the passed in sequence
-    // and the barrier's sequence as necessary to match the adjustment to the publisher's sequence
-    // that occurred at the time of reallocation.
-
-    unsafe fn get(&mut self) -> &T {
-        // SAFETY: the caller has established that at least one slot is available.
-        let flag = unsafe { self.common_ref.get() };
-        let reallocation_occurred = !flag.is_item();
-        if reallocation_occurred {
-            // SAFETY: the caller has established a happens-before relationship with the flag being
-            // set, while the value of the flag establishes that a reallocation has already
-            // occurred.
-            unsafe {
-                self.try_switch_next();
-            }
-        }
-
-        // Retrieve the value a second time here, to satisfy the borrow checker.
-        // SAFETY: same as the first time.
-        let flag = unsafe { self.common_ref.get() };
-        flag.as_ref().unwrap()
-    }
-}
-
-impl<T> DelegatePipelineAccess for SingleWaitableResizingConsumer<T> {}
-impl<T> DelegatePipelineAccessMut for SingleWaitableResizingConsumer<T> {}
-
-impl<T> SequenceBarrierTake for SinglePollableResizingConsumer<T>
-where
-    T: Default + 'static,
-{
-    unsafe fn take(&mut self) -> T {
-        // SAFETY: caller has established that at least one item is available.
-        unsafe {
-            self.try_switch_next();
-        }
-        // SAFETY: caller has established that at least one item is available, and this type doesn't
-        // allow shared access to slots at its pipeline stage.
-        let flag = unsafe { self.common_ref.take() };
-        // After calling try_switch_next, it should be guaranteed that flag holds a real value,
-        // whether or not the slot in the buffer was indicating that a reallocation occurred.
-        flag.unwrap()
-    }
-}
-
 impl<T> SequenceBarrierTake for SingleWaitableResizingConsumer<T>
 where
     T: Default + 'static,
 {
     unsafe fn take(&mut self) -> T {
         unsafe { self.waitable_consumer.take() }
-    }
-}
-
-impl<T> InsertSingleConsumer for SinglePollableResizingConsumer<T> {
-    type SingleConsumer = Self;
-
-    fn insert_single_consumer(&mut self) -> Self {
-        Self {
-            common_ref: self.common_ref.insert_single_consumer(),
-        }
     }
 }
 
