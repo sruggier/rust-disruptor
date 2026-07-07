@@ -1663,7 +1663,10 @@ where
     }
 }
 
-impl<RB> InsertSingleConsumer for CommonSinglePipelineRef<RB, ConsumerDependencies>
+/// Polling-only implementation of a single consumer reference into a pipeline.
+type SinglePollableConsumer<RB> = CommonSinglePipelineRef<RB, ConsumerDependencies>;
+
+impl<RB> InsertSingleConsumer for SinglePollableConsumer<RB>
 where
     RB: Clone,
 {
@@ -1838,7 +1841,7 @@ where
         // consumer's sequence.
 
         let new_consumer = SingleWaitableConsumer::new(
-            CommonSinglePipelineRef::new(
+            SinglePollableConsumer::new(
                 self.pollable.ring_buffer.clone(),
                 new_sequence,
                 dependencies,
@@ -1890,7 +1893,7 @@ impl<RB, W> AsPipelineRef for SingleWaitableConsumer<RB, W>
 where
     RB: UnsafeRingBufferOps,
 {
-    type T = CommonSinglePipelineRef<RB, ConsumerDependencies>;
+    type T = SinglePollableConsumer<RB>;
 
     fn as_pipeline_ref(&self) -> &Self::T {
         &self.pollable
@@ -2745,7 +2748,7 @@ where
         // avoid doing too much in a single step.
 
         let new_consumer = SingleWaitableResizingConsumer::new(SingleWaitableConsumer::new(
-            CommonSinglePipelineRef::new(
+            SinglePollableConsumer::new(
                 self.pollable.ring_buffer.clone(),
                 SequenceNumber::default(),
                 ConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
