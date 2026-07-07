@@ -897,9 +897,13 @@ trait AsPipelineRef {
     fn as_pipeline_ref_mut(&mut self) -> &mut Self::T;
 }
 
+/// Types that implement both this trait and [`AsPipelineRef`] opt into a blanket impl of
+/// [`LenAvailable`], which reuses the implementation from [`AsPipelineRef::T`].
+trait DelegateLenAvailable {}
+
 impl<D> LenAvailable for D
 where
-    D: AsPipelineRef,
+    D: AsPipelineRef + DelegateLenAvailable,
     D::T: LenAvailable,
 {
     fn len_available(&self) -> usize {
@@ -907,11 +911,15 @@ where
     }
 }
 
+/// Types that implement both this trait and [`AsPipelineRef`] opt into a blanket impl of
+/// [`Pollable`], which reuses the implementation from [`AsPipelineRef::T`].
+trait DelegatePollable {}
+
 /// Automatic [`Pollable`] impl for types that implement
 /// AsPipelineRef.
 impl<D> Pollable for D
 where
-    D: AsPipelineRef,
+    D: AsPipelineRef + LenAvailable + DelegatePollable,
     D::T: Pollable,
 {
     fn poll(&mut self) {
@@ -929,9 +937,15 @@ where
     }
 }
 
-/// A trait for types that implement [`AsPipelineRef`]. Implementing the trait opts into a blanket
-/// [`ReleaseSlots`] impl, which reuses the implementation from [`AsPipelineRef::T`].
-trait DelegateReleaseSlots {}
+/// Types that implement both this trait and [`AsPipelineRef`] opt into a blanket impl of
+/// [`ReleaseSlots`], which reuses the implementation from [`AsPipelineRef::T`].
+///
+/// # Safety
+///
+/// Types that specialize [`LenAvailable`] should also define their own implementation of this
+/// trait, to ensure invariants are maintained correctly, so DelegateLenAvailable is defined as a
+/// mandatory trait bound.
+trait DelegateReleaseSlots: DelegateLenAvailable {}
 
 /// Automatic [`Pollable`] impl for types that implement
 /// AsPipelineRef.
@@ -957,9 +971,13 @@ where
     }
 }
 
+/// Types that implement both this trait and [`AsPipelineRef`] opt into a blanket impl of
+/// [`PipelineAccess`], which reuses the implementation from [`AsPipelineRef::T`].
+trait DelegatePipelineAccess {}
+
 impl<D> PipelineAccess for D
 where
-    D: AsPipelineRef,
+    D: AsPipelineRef + DelegatePipelineAccess,
     D::T: PipelineAccess,
 {
     type T = <D::T as PipelineAccess>::T;
@@ -969,9 +987,13 @@ where
     }
 }
 
+/// Types that implement both this trait and [`AsPipelineRef`] opt into a blanket impl of
+/// [`PipelineAccessMut`], which reuses the implementation from [`AsPipelineRef::T`].
+trait DelegatePipelineAccessMut: DelegatePipelineAccess {}
+
 impl<D> PipelineAccessMut for D
 where
-    D: AsPipelineRef,
+    D: AsPipelineRef + DelegatePipelineAccessMut,
     D::T: PipelineAccessMut,
 {
     unsafe fn set(&mut self, value: Self::T) {
@@ -1692,6 +1714,11 @@ where
     }
 }
 
+impl<RB, W> DelegateLenAvailable for SinglePublisherSequenceBarrier<RB, W> {}
+impl<RB, W> DelegatePipelineAccess for SinglePublisherSequenceBarrier<RB, W> {}
+impl<RB, W> DelegatePipelineAccessMut for SinglePublisherSequenceBarrier<RB, W> {}
+impl<RB, W> DelegatePollable for SinglePublisherSequenceBarrier<RB, W> {}
+
 impl<RB, W> WaitForSlots for SinglePublisherSequenceBarrier<RB, W>
 where
     RB: UnsafeRingBufferOps,
@@ -1843,6 +1870,12 @@ where
     }
 }
 
+impl<RB, W> DelegateLenAvailable for SingleConsumerSequenceBarrier<RB, W> {}
+impl<RB, W> DelegateReleaseSlots for SingleConsumerSequenceBarrier<RB, W> {}
+impl<RB, W> DelegatePipelineAccess for SingleConsumerSequenceBarrier<RB, W> {}
+impl<RB, W> DelegatePipelineAccessMut for SingleConsumerSequenceBarrier<RB, W> {}
+impl<RB, W> DelegatePollable for SingleConsumerSequenceBarrier<RB, W> {}
+
 impl<RB, W> WaitForSlots for SingleConsumerSequenceBarrier<RB, W>
 where
     W: NotificationWaitStrategy,
@@ -1860,8 +1893,6 @@ where
             .wait_for_dependencies(&mut self.sb, min_available);
     }
 }
-
-impl<RB, W> DelegateReleaseSlots for SingleConsumerSequenceBarrier<RB, W> {}
 
 impl<RB, W> SequenceBarrierTake for SingleConsumerSequenceBarrier<RB, W>
 where
