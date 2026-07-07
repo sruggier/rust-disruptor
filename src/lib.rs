@@ -1718,7 +1718,7 @@ impl<RB, W> SingleWaitablePublisher<RB, W> {
     }
 }
 
-impl<RB, W> SingleWaitablePublisher<RB, W>
+impl<RB> SinglePollablePublisher<RB>
 where
     RB: UnsafeRingBufferOps,
 {
@@ -1726,18 +1726,17 @@ where
     ///
     /// This is used in the insertion of new consumers as their initial sequence number.
     fn calculate_earliest_consumer_sequence(&mut self) -> SequenceNumber {
-        if self.pollable.dependencies.sequences.is_empty() {
+        if self.dependencies.sequences.is_empty() {
             SequenceNumber::default()
         } else {
             // Poll dependencies once, to ensure the latest possible information is used in this
             // calculation.
-            self.pollable.poll();
+            self.poll();
 
-            let slots_in_progress = self.pollable.capacity() - self.pollable.cached_available;
-            self.pollable
-                .sequence
+            let slots_in_progress = self.capacity() - self.cached_available;
+            self.sequence
                 .get_owned()
-                .wrapping_sub(slots_in_progress, wrap_boundary(self.pollable.capacity()))
+                .wrapping_sub(slots_in_progress, wrap_boundary(self.capacity()))
         }
     }
 }
@@ -1804,6 +1803,22 @@ where
 {
     type SingleConsumer = SingleWaitableConsumer<SinglePollableConsumer<RB>, W>;
 
+    fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
+        Self::SingleConsumer::new(
+            self.pollable.insert_single_consumer(),
+            self.wait_strategy.clone(),
+            // Our sequence is the publisher's sequence (aka the cursor)
+            self.pollable.sequence.clone_immut(),
+        )
+    }
+}
+
+impl<RB> InsertSingleConsumer for SinglePollablePublisher<RB>
+where
+    RB: UnsafeRingBufferOps + Clone,
+{
+    type SingleConsumer = SinglePollableConsumer<RB>;
+
     /// Insert a new consumer.
     ///
     /// # Behaviour while racing with existing consumers
@@ -1829,11 +1844,11 @@ where
     fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
         let new_sequence = self.calculate_earliest_consumer_sequence();
 
-        let my_dependencies = &mut self.pollable.dependencies;
+        let my_dependencies = &mut self.dependencies;
         let sequences = if my_dependencies.sequences.is_empty() {
             // This is the first addition to the pipeline, so use this publisher's sequence as its
             // dependency.
-            vec![self.pollable.sequence.clone_immut()]
+            vec![self.sequence.clone_immut()]
         } else {
             // A newly inserted consumer needs to wait for what was previously the last stage in the
             // pipeline, so give the new consumer the existing dependency list.
@@ -1843,22 +1858,13 @@ where
         // my_dependencies is an empty Vec now, to be populated with a reference to the new
         // consumer's sequence.
 
-        let new_consumer = SingleWaitableConsumer::new(
-            SinglePollableConsumer::new(
-                self.pollable.ring_buffer.clone(),
-                new_sequence,
-                dependencies,
-                0,
-            ),
-            self.wait_strategy.clone(),
-            // Our sequence is the publisher's sequence (aka the cursor)
-            self.pollable.sequence.clone_immut(),
-        );
+        let new_consumer =
+            Self::SingleConsumer::new(self.ring_buffer.clone(), new_sequence, dependencies, 0);
 
         my_dependencies.sequences.reserve_exact(1);
         my_dependencies
             .sequences
-            .push(new_consumer.pollable.sequence.clone_immut());
+            .push(new_consumer.sequence.clone_immut());
 
         new_consumer
     }
