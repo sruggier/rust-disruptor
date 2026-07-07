@@ -13,6 +13,7 @@ use std::clone::Clone;
 use std::cmp;
 use std::fmt;
 use std::hint::spin_loop;
+use std::ops::Add;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::option::Option;
@@ -74,7 +75,7 @@ where
 /// current slot being processed. A value of 1 means that slot 0 has been released for processing by
 /// downstream consumers, while a value of 18 would mean that slots 0-17 are available for
 /// processing.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SequenceNumber(usize);
 
 fn assert_power_of_two(buffer_size: usize) {
@@ -86,9 +87,6 @@ fn assert_power_of_two(buffer_size: usize) {
         buffer_size
     );
 }
-
-/// Represents an initial state where no slots have been published or consumed.
-const SEQUENCE_INITIAL: usize = 0;
 
 impl SequenceNumber {
     /// Returns self modulo `buffer_size`, exploiting the assumption that the size will always be a
@@ -116,6 +114,21 @@ impl SequenceNumber {
         // use a normal subtraction here, opting into overflow checks in debug mode.
         value = value.wrapping_sub(rhs);
         SequenceNumber(value)
+    }
+}
+
+impl Default for SequenceNumber {
+    /// Represents an initial state where no slots have been published or consumed.
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
+impl Add<usize> for SequenceNumber {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        SequenceNumber(self.value() + rhs)
     }
 }
 
@@ -543,7 +556,7 @@ struct SequenceOwner {
 impl Default for SequenceOwner {
     /// Calls Self::new()
     fn default() -> Self {
-        Self::new()
+        Self::new_from_sequence(SequenceNumber::default())
     }
 }
 
@@ -558,7 +571,7 @@ fn common_sequence_owner_get(
 impl SequenceOwner {
     /// Allocates a new sequence.
     fn new() -> Self {
-        Self::new_from_sequence(SequenceNumber(SEQUENCE_INITIAL))
+        Self::default()
     }
 
     fn new_from_sequence(sequence: SequenceNumber) -> Self {
@@ -673,15 +686,15 @@ fn test_sequence_overflow() {
     let max_buffer_size = 1 << (std::mem::size_of::<usize>() * 8 - exp);
 
     let mut s = SequenceOwner::new();
-    assert_eq!(s.get().value(), SEQUENCE_INITIAL);
+    assert_eq!(s.get(), SequenceNumber::default());
 
     // Add 1
     s.advance_and_flush(1, max_buffer_size);
-    let incremented_value = s.get().value();
-    assert_eq!(incremented_value, SEQUENCE_INITIAL + 1);
+    let incremented_value = s.get();
+    assert_eq!(incremented_value, SequenceNumber::default() + 1);
 
     // Advance to max_buffer_size
-    s.advance_and_flush(max_buffer_size - incremented_value, max_buffer_size);
+    s.advance_and_flush(max_buffer_size - incremented_value.value(), max_buffer_size);
     assert_eq!(s.get().value(), max_buffer_size);
 
     // Overflow to 4*max_buffer_size + 1 and confirm that it wrapped to 1
@@ -1685,7 +1698,7 @@ where
     /// This is used in the insertion of new consumers as their initial sequence number.
     fn calculate_earliest_consumer_sequence(&mut self) -> SequenceNumber {
         if self.pollable.dependencies.sequences.is_empty() {
-            SequenceNumber(SEQUENCE_INITIAL)
+            SequenceNumber::default()
         } else {
             // Poll dependencies once, to ensure the latest possible information is used in this
             // calculation.
@@ -2732,7 +2745,7 @@ where
 
         let new_consumer = SingleWaitableResizingConsumer::new(SingleWaitableConsumer::new(
             self.pollable.ring_buffer.clone(),
-            SequenceNumber(SEQUENCE_INITIAL),
+            SequenceNumber::default(),
             ConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
             0,
             self.wait_strategy.clone(),
