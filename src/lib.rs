@@ -1658,14 +1658,14 @@ where
 /// A pipeline reference representing a non-concurrent first stage, analogous to a single producer
 /// in a conventional queue.
 struct SingleWaitablePublisher<RB, W> {
-    sb: CommonSinglePipelineRef<RB, PublisherDependencies>,
+    pollable: CommonSinglePipelineRef<RB, PublisherDependencies>,
     wait_strategy: W,
 }
 
 impl<RB, W> SingleWaitablePublisher<RB, W> {
     fn new(ring_buffer: RB, wait_strategy: W) -> Self {
         Self {
-            sb: CommonSinglePipelineRef::new(
+            pollable: CommonSinglePipelineRef::new(
                 ring_buffer,
                 SequenceOwner::new(),
                 PublisherDependencies::default(),
@@ -1684,18 +1684,18 @@ where
     ///
     /// This is used in the insertion of new consumers as their initial sequence number.
     fn calculate_earliest_consumer_sequence(&mut self) -> SequenceNumber {
-        if self.sb.dependencies.sequences.is_empty() {
+        if self.pollable.dependencies.sequences.is_empty() {
             SequenceNumber(SEQUENCE_INITIAL)
         } else {
             // Poll dependencies once, to ensure the latest possible information is used in this
             // calculation.
-            self.sb.poll();
+            self.pollable.poll();
 
-            let slots_in_progress = self.sb.capacity() - self.sb.cached_available;
-            self.sb
+            let slots_in_progress = self.pollable.capacity() - self.pollable.cached_available;
+            self.pollable
                 .sequence
                 .get_owned()
-                .wrapping_sub(slots_in_progress, wrap_boundary(self.sb.capacity()))
+                .wrapping_sub(slots_in_progress, wrap_boundary(self.pollable.capacity()))
         }
     }
 }
@@ -1707,10 +1707,10 @@ where
     type T = CommonSinglePipelineRef<RB, PublisherDependencies>;
 
     fn as_pipeline_ref(&self) -> &Self::T {
-        &self.sb
+        &self.pollable
     }
     fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
-        &mut self.sb
+        &mut self.pollable
     }
 }
 
@@ -1726,7 +1726,7 @@ where
 {
     fn wait_for_slots(&mut self, min_available: usize) {
         self.wait_strategy
-            .wait_for_dependencies(&mut self.sb, min_available);
+            .wait_for_dependencies(&mut self.pollable, min_available);
     }
 }
 
@@ -1737,7 +1737,7 @@ where
 {
     unsafe fn release_slots_unchecked(&mut self, n: usize) {
         // SAFETY: delegated to the caller.
-        unsafe { self.sb.release_slots_unchecked(n) };
+        unsafe { self.pollable.release_slots_unchecked(n) };
         self.wait_strategy.notify_all_waiters();
     }
 }
@@ -1750,7 +1750,7 @@ where
     unsafe fn take(&mut self) -> RB::T {
         unsafe {
             let current_sequence = self.current_sequence();
-            self.sb.ring_buffer.take(current_sequence)
+            self.pollable.ring_buffer.take(current_sequence)
         }
     }
 }
@@ -1787,11 +1787,11 @@ where
     fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
         let new_sequence = self.calculate_earliest_consumer_sequence();
 
-        let my_dependencies = &mut self.sb.dependencies;
+        let my_dependencies = &mut self.pollable.dependencies;
         let sequences = if my_dependencies.sequences.is_empty() {
             // This is the first addition to the pipeline, so use this publisher's sequence as its
             // dependency.
-            vec![self.sb.sequence.clone_immut()]
+            vec![self.pollable.sequence.clone_immut()]
         } else {
             // A newly inserted consumer needs to wait for what was previously the last stage in the
             // pipeline, so give the new consumer the existing dependency list.
@@ -1802,19 +1802,19 @@ where
         // consumer's sequence.
 
         let new_consumer = SingleWaitableConsumer::new(
-            self.sb.ring_buffer.clone(),
+            self.pollable.ring_buffer.clone(),
             new_sequence,
             dependencies,
             0,
             self.wait_strategy.clone(),
             // Our sequence is the publisher's sequence (aka the cursor)
-            self.sb.sequence.clone_immut(),
+            self.pollable.sequence.clone_immut(),
         );
 
         my_dependencies.sequences.reserve_exact(1);
         my_dependencies
             .sequences
-            .push(new_consumer.sb.sequence.clone_immut());
+            .push(new_consumer.pollable.sequence.clone_immut());
 
         new_consumer
     }
@@ -1826,7 +1826,7 @@ where
 /// the same elements in the same buffer, which may be more efficient than implementing the same
 /// topology using multiple queues or channels.
 struct SingleWaitableConsumer<RB, W> {
-    sb: CommonSinglePipelineRef<RB, ConsumerDependencies>,
+    pollable: CommonSinglePipelineRef<RB, ConsumerDependencies>,
     /// A reference to the publisher's sequence.
     publisher_availability: PublisherAvailability,
     wait_strategy: W,
@@ -1842,7 +1842,7 @@ impl<RB, W> SingleWaitableConsumer<RB, W> {
         publisher_sequence: SequenceReader,
     ) -> SingleWaitableConsumer<RB, W> {
         SingleWaitableConsumer {
-            sb: CommonSinglePipelineRef::new(
+            pollable: CommonSinglePipelineRef::new(
                 ring_buffer,
                 SequenceOwner::new_from_sequence(initial_sequence),
                 dependencies,
@@ -1863,10 +1863,10 @@ where
     type T = CommonSinglePipelineRef<RB, ConsumerDependencies>;
 
     fn as_pipeline_ref(&self) -> &Self::T {
-        &self.sb
+        &self.pollable
     }
     fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
-        &mut self.sb
+        &mut self.pollable
     }
 }
 
@@ -1886,11 +1886,11 @@ where
         self.wait_strategy.wait_for_publisher(
             &mut self
                 .publisher_availability
-                .as_pollable(current_sequence, self.sb.ring_buffer.len()),
+                .as_pollable(current_sequence, self.pollable.ring_buffer.len()),
             min_available,
         );
         self.wait_strategy
-            .wait_for_dependencies(&mut self.sb, min_available);
+            .wait_for_dependencies(&mut self.pollable, min_available);
     }
 }
 
@@ -1900,7 +1900,7 @@ where
     W: NotificationWaitStrategy,
 {
     unsafe fn take(&mut self) -> Self::T {
-        unsafe { self.sb.take() }
+        unsafe { self.pollable.take() }
     }
 }
 
@@ -1914,24 +1914,24 @@ where
     fn insert_single_consumer(&mut self) -> Self {
         // Reuse self's dependencies, and populate its replacement below, after constructing the new
         // consumer.
-        let new_dependencies = std::mem::take(&mut self.sb.dependencies);
+        let new_dependencies = std::mem::take(&mut self.pollable.dependencies);
         let new_consumer = Self::new(
-            self.sb.ring_buffer.clone(),
-            self.sb.sequence.get_owned(),
+            self.pollable.ring_buffer.clone(),
+            self.pollable.sequence.get_owned(),
             new_dependencies,
-            self.sb.cached_available,
+            self.pollable.cached_available,
             self.wait_strategy.clone(),
             self.publisher_availability.sequence.clone(),
         );
 
         // Wait for the new consumer to process the events that would otherwise have been available
         // to self.
-        self.sb.dependencies.sequences.reserve_exact(1);
-        self.sb
+        self.pollable.dependencies.sequences.reserve_exact(1);
+        self.pollable
             .dependencies
             .sequences
-            .push(new_consumer.sb.sequence.clone_immut());
-        self.sb.cached_available = 0;
+            .push(new_consumer.pollable.sequence.clone_immut());
+        self.pollable.cached_available = 0;
         new_consumer
     }
 }
@@ -1960,86 +1960,86 @@ pub trait ConsumerMut<T>: Consumer<T> {
 
 /// Allows callers to wire up dependencies, then send values down the pipeline
 /// of dependent consumers.
-struct GenericPublisher<SB> {
-    sequence_barrier: UnsafeCell<SB>,
+struct GenericPublisher<R> {
+    waitable_ref: UnsafeCell<R>,
 }
 
-impl<SB> GenericPublisher<SB> {
+impl<P> GenericPublisher<P> {
     /// Generic constructor that works with any UnsafeRingBufferOps implementation
-    fn new_common(sb: SB) -> GenericPublisher<SB> {
+    fn new_common(waitable_publisher: P) -> GenericPublisher<P> {
         GenericPublisher {
-            sequence_barrier: UnsafeCell::new(sb),
+            waitable_ref: UnsafeCell::new(waitable_publisher),
         }
     }
 }
 
-impl<SB> GenericPublisher<SB>
+impl<R> GenericPublisher<R>
 where
-    SB: WaitForSlots + ReleaseSlots + PipelineAccessMut,
+    R: WaitForSlots + ReleaseSlots + PipelineAccessMut,
 {
     // In the worst case (minimal microbenchmarking), call overhead is significant.
     #[inline]
-    fn publish(&self, value: SB::T) {
+    fn publish(&self, value: R::T) {
         // SAFETY:
         // 1. &Self isn't Send, so access will be single-threaded, in any case.
         // 2. The reference only exists in the scope of this function, maintaining aliasing rules.
-        let sb = unsafe { &mut *self.sequence_barrier.get() };
+        let waitable_ref = unsafe { &mut *self.waitable_ref.get() };
         // Wait for available slot
-        sb.wait_for_one_slot();
+        waitable_ref.wait_for_one_slot();
         // SAFETY: calling wait_for_one_slot synchronizes with other threads, ensuring this write
         // won't create a data race.
         unsafe {
-            sb.set(value);
+            waitable_ref.set(value);
         }
         // Make the item available to downstream consumers
         // SAFETY: the above call to wait_for_one ensures this is safe.
-        unsafe { sb.release_slots_unchecked(1) };
+        unsafe { waitable_ref.release_slots_unchecked(1) };
     }
 }
 
-impl<SB> InsertSingleConsumer for GenericPublisher<SB>
+impl<R> InsertSingleConsumer for GenericPublisher<R>
 where
-    SB: InsertSingleConsumer,
+    R: InsertSingleConsumer,
 {
-    type SingleConsumer = GenericSingleConsumer<SB::SingleConsumer>;
+    type SingleConsumer = GenericSingleConsumer<R::SingleConsumer>;
 
     fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
         GenericSingleConsumer::new(GenericSharedConsumer::new(
-            self.sequence_barrier.get_mut().insert_single_consumer(),
+            self.waitable_ref.get_mut().insert_single_consumer(),
         ))
     }
 }
 
 /// Allows callers to retrieve values from upstream tasks in the pipeline.
-struct GenericSharedConsumer<SB> {
-    sequence_barrier: UnsafeCell<SB>,
+struct GenericSharedConsumer<R> {
+    waitable_ref: UnsafeCell<R>,
 }
 
-impl<SB> GenericSharedConsumer<SB> {
-    fn new(sb: SB) -> GenericSharedConsumer<SB> {
+impl<R> GenericSharedConsumer<R> {
+    fn new(waitable_ref: R) -> GenericSharedConsumer<R> {
         GenericSharedConsumer {
-            sequence_barrier: UnsafeCell::new(sb),
+            waitable_ref: UnsafeCell::new(waitable_ref),
         }
     }
 }
 
-impl<SB> GenericSharedConsumer<SB>
+impl<R> GenericSharedConsumer<R>
 where
-    SB: WaitForSlots + ReleaseSlots + PipelineAccess,
+    R: WaitForSlots + ReleaseSlots + PipelineAccess,
 {
-    fn consume<C: FnMut(&SB::T)>(&self, mut consume_callback: C) {
+    fn consume<C: FnMut(&R::T)>(&self, mut consume_callback: C) {
         // SAFETY:
         // 1. &Self isn't Send, so access will be single-threaded, in any case.
         // 2. The reference only exists in the scope of this function, maintaining aliasing rules.
-        let sequence_barrier = unsafe { &mut *self.sequence_barrier.get() };
+        let waitable_ref = unsafe { &mut *self.waitable_ref.get() };
 
-        sequence_barrier.wait_for_one_slot();
+        waitable_ref.wait_for_one_slot();
         // SAFETY: calling wait_for_one_slot synchronizes with other threads, ensuring this read
         // won't create a data race.
-        let item = unsafe { sequence_barrier.get() };
+        let item = unsafe { waitable_ref.get() };
         consume_callback(item);
         // SAFETY: the above call to wait_for_one ensures this is safe.
-        unsafe { sequence_barrier.release_slots_unchecked(1) };
+        unsafe { waitable_ref.release_slots_unchecked(1) };
     }
 }
 
@@ -2100,58 +2100,61 @@ mod generic_publisher_tests {
 
 /// A consumer in the pipeline that doesn't share its stage with any concurrent consumers, allowing
 /// it to have mutable access to the elements it processes.
-struct GenericSingleConsumer<SB> {
-    sc: GenericSharedConsumer<SB>,
+struct GenericSingleConsumer<R> {
+    shared_consumer: GenericSharedConsumer<R>,
 }
 
-impl<SB> GenericSingleConsumer<SB> {
+impl<R> GenericSingleConsumer<R> {
     /// Return a new instance wrapped around a given GenericSharedConsumer instance. In addition to
     /// existing features, it also allows the caller to take ownership of the items it accesses.
-    fn new(sc: GenericSharedConsumer<SB>) -> GenericSingleConsumer<SB> {
-        GenericSingleConsumer { sc }
+    fn new(shared_consumer: GenericSharedConsumer<R>) -> GenericSingleConsumer<R> {
+        GenericSingleConsumer { shared_consumer }
     }
 }
 
-impl<SB> InsertSingleConsumer for GenericSingleConsumer<SB>
+impl<R> InsertSingleConsumer for GenericSingleConsumer<R>
 where
-    SB: InsertSingleConsumer<SingleConsumer = SB>,
+    R: InsertSingleConsumer<SingleConsumer = R>,
 {
     type SingleConsumer = Self;
 
     fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
         Self {
-            sc: GenericSharedConsumer::new(
-                self.sc.sequence_barrier.get_mut().insert_single_consumer(),
+            shared_consumer: GenericSharedConsumer::new(
+                self.shared_consumer
+                    .waitable_ref
+                    .get_mut()
+                    .insert_single_consumer(),
             ),
         }
     }
 }
 
-impl<SB> GenericSingleConsumer<SB>
+impl<R> GenericSingleConsumer<R>
 where
-    SB: WaitForSlots + ReleaseSlots + PipelineAccess,
+    R: WaitForSlots + ReleaseSlots + PipelineAccess,
 {
     /// See [`GenericSharedConsumer::consume`].
-    fn consume<C: FnMut(&SB::T)>(&self, consume_callback: C) {
-        self.sc.consume(consume_callback)
+    fn consume<C: FnMut(&R::T)>(&self, consume_callback: C) {
+        self.shared_consumer.consume(consume_callback)
     }
 }
 
-impl<SB> GenericSingleConsumer<SB>
+impl<R> GenericSingleConsumer<R>
 where
-    SB: WaitForSlots + ReleaseSlots + SequenceBarrierTake,
+    R: WaitForSlots + ReleaseSlots + SequenceBarrierTake,
 {
-    fn take(&self) -> SB::T {
+    fn take(&self) -> R::T {
         // SAFETY:
         // 1. &Self isn't Send, so access will be single-threaded, in any case.
         // 2. The reference only exists in the scope of this function, maintaining aliasing rules.
-        let sequence_barrier = unsafe { &mut *self.sc.sequence_barrier.get() };
-        sequence_barrier.wait_for_one_slot();
+        let waitable_ref = unsafe { &mut *self.shared_consumer.waitable_ref.get() };
+        waitable_ref.wait_for_one_slot();
         // SAFETY: calling wait_for_one_slot synchronizes with other threads, ensuring this read
         // won't create a data race.
-        let value = unsafe { sequence_barrier.take() };
+        let value = unsafe { waitable_ref.take() };
         // SAFETY: the above call to wait_for_one ensures this is safe.
-        unsafe { sequence_barrier.release_slots_unchecked(1) };
+        unsafe { waitable_ref.release_slots_unchecked(1) };
         value
     }
 }
@@ -2523,7 +2526,7 @@ impl PollableDependency for ResizingPublisherDependencies {
 /// Resizing variant of SingleWaitablePublisher.
 struct SingleWaitableResizingPublisher<T> {
     // Reuse CommonSinglePipelineRef data declarations and constructor
-    sb: CommonSinglePipelineRef<
+    pollable: CommonSinglePipelineRef<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         ResizingPublisherDependencies,
     >,
@@ -2536,7 +2539,7 @@ impl<T> SingleWaitableResizingPublisher<T> {
         wait_strategy: TimeoutResizeWaitStrategy,
     ) -> SingleWaitableResizingPublisher<T> {
         SingleWaitableResizingPublisher {
-            sb: CommonSinglePipelineRef::new(
+            pollable: CommonSinglePipelineRef::new(
                 ring_buffer,
                 SequenceOwner::new(),
                 ResizingPublisherDependencies::default(),
@@ -2554,10 +2557,10 @@ impl<T> AsPipelineRef for SingleWaitableResizingPublisher<T> {
     >;
 
     fn as_pipeline_ref(&self) -> &Self::T {
-        &self.sb
+        &self.pollable
     }
     fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
-        &mut self.sb
+        &mut self.pollable
     }
 }
 
@@ -2565,7 +2568,7 @@ impl<T> LenAvailable for SingleWaitableResizingPublisher<T> {
     fn len_available(&self) -> usize {
         // Don't expose the reserved slot. This ensures the default wait_for_slots implementation
         // will wait correctly in order to maintain the extra slot.
-        self.sb.len_available().saturating_sub(1)
+        self.pollable.len_available().saturating_sub(1)
     }
 }
 
@@ -2576,11 +2579,11 @@ where
     fn poll(&mut self) {
         // If `cached_available` was manually set during a reallocation, calls to this function
         // shouldn't overwrite it with a lower value.
-        self.sb.cached_available = cmp::max(
-            self.sb.cached_available,
-            self.sb
+        self.pollable.cached_available = cmp::max(
+            self.pollable.cached_available,
+            self.pollable
                 .dependencies
-                .calculate_available(self.sb.sequence.get_owned(), self.sb.capacity()),
+                .calculate_available(self.pollable.sequence.get_owned(), self.pollable.capacity()),
         )
     }
 }
@@ -2591,7 +2594,7 @@ where
 {
     // Inherited functions
     unsafe fn set(&mut self, value: T) {
-        unsafe { self.sb.set(ReallocationFlag::Item(value)) }
+        unsafe { self.pollable.set(ReallocationFlag::Item(value)) }
     }
 }
 
@@ -2603,8 +2606,8 @@ where
 
     unsafe fn get(&mut self) -> &T {
         // Satisfy the borrow checker by performing this call outside the flag variable's lifetime.
-        let current_sequence = self.sb.current_sequence();
-        let flag = unsafe { self.sb.get() };
+        let current_sequence = self.pollable.current_sequence();
+        let flag = unsafe { self.pollable.get() };
         debug_assert!(
             flag.is_item(),
             "Attempted borrow of `ReallocationFlag::BufferReallocated` at sequence: {}",
@@ -2621,12 +2624,12 @@ where
     /// Wait for N slots to be available, or reallocate a larger buffer to hold it, if the resizing
     /// policy requests that.
     fn wait_for_slots(&mut self, min_available: usize) {
-        let current_size = self.sb.capacity();
+        let current_size = self.pollable.capacity();
 
         // This uses the CommonSinglePipelineRef implementations of poll and len_available (pending
         // future refactoring), so adjust min_available accordingly.
         self.wait_strategy
-            .try_wait_for_consumers(&mut self.sb, min_available + 1);
+            .try_wait_for_consumers(&mut self.pollable, min_available + 1);
 
         if self.len_available() < min_available {
             // The wait strategy timed out, so allocate a new buffer here.
@@ -2641,7 +2644,7 @@ where
             // Unwrapping the publisher's sequence ensures that availability calculations remain
             // correct throughout the reallocation transition.
             let old_sequence = self.current_sequence();
-            self.sb.sequence.unwrap(current_size);
+            self.pollable.sequence.unwrap(current_size);
             let unwrapped_sequence = self.current_sequence();
 
             // Resizing shouldn't be a normal part of a program's operation. Alert the user, so that
@@ -2658,8 +2661,8 @@ where
 
             unsafe {
                 // Signal to consumers that there's a larger buffer to transition to.
-                self.sb.set(ReallocationFlag::BufferReallocated);
-                self.sb.ring_buffer.reallocate(new_size);
+                self.pollable.set(ReallocationFlag::BufferReallocated);
+                self.pollable.ring_buffer.reallocate(new_size);
             }
 
             // Modify the cached availability value to facilitate usage of the entire newly
@@ -2671,7 +2674,7 @@ where
             // buffer_size items, and that will require it to wait for consumers to catch up.
             // Alternatively, if consumers don't catch up, the publisher may reallocate another
             // buffer, but in doing so, it will continue to avoid wrapping its sequence number.
-            self.sb.set_cached_available(new_size);
+            self.pollable.set_cached_available(new_size);
         }
     }
 }
@@ -2685,7 +2688,7 @@ where
         debug_assert!(self.len_available() >= n);
 
         // SAFETY: the caller promises this is safe.
-        unsafe { self.sb.release_slots_unchecked(n) };
+        unsafe { self.pollable.release_slots_unchecked(n) };
 
         self.wait_strategy.notify_all_waiters();
     }
@@ -2696,7 +2699,7 @@ where
     T: Default + 'static,
 {
     unsafe fn take(&mut self) -> T {
-        unsafe { self.sb.take().unwrap() }
+        unsafe { self.pollable.take().unwrap() }
     }
 }
 
@@ -2717,7 +2720,8 @@ where
         // Prevent this from executing during a transition between buffers, unless/until the
         // implementation is reworked to make support for that possible.
         assert!(
-            self.sb.dependencies.sequences.is_empty() && self.sb.sequence.get_owned().value() == 0,
+            self.pollable.dependencies.sequences.is_empty()
+                && self.pollable.sequence.get_owned().value() == 0,
             "The create_consumer_pipeline method can only be called once."
         );
 
@@ -2727,21 +2731,24 @@ where
         // avoid doing too much in a single step.
 
         let new_consumer = SingleWaitableResizingConsumer::new(SingleWaitableConsumer::new(
-            self.sb.ring_buffer.clone(),
+            self.pollable.ring_buffer.clone(),
             SequenceNumber(SEQUENCE_INITIAL),
-            ConsumerDependencies::from_vec(vec![self.sb.sequence.clone_immut()]),
+            ConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
             0,
             self.wait_strategy.clone(),
-            self.sb.sequence.clone_immut(),
+            self.pollable.sequence.clone_immut(),
         ));
 
         // my_dependencies is an empty Vec now, to be populated with a reference to the new
         // consumer's sequence.
-        self.sb.dependencies.sequences.reserve_exact(1);
-        self.sb
-            .dependencies
-            .sequences
-            .push(new_consumer.cb.sb.sequence.clone_immut());
+        self.pollable.dependencies.sequences.reserve_exact(1);
+        self.pollable.dependencies.sequences.push(
+            new_consumer
+                .waitable_consumer
+                .pollable
+                .sequence
+                .clone_immut(),
+        );
 
         new_consumer
     }
@@ -2750,7 +2757,7 @@ where
 /// Resizing-aware consumer barrier.
 struct SingleWaitableResizingConsumer<T> {
     /// Reuse data and constructor from SingleWaitableConsumer
-    cb: SingleWaitableConsumer<
+    waitable_consumer: SingleWaitableConsumer<
         ResizableRingBufferArc<ReallocationFlag<T>>,
         TimeoutResizeWaitStrategy,
     >,
@@ -2758,12 +2765,12 @@ struct SingleWaitableResizingConsumer<T> {
 
 impl<T> SingleWaitableResizingConsumer<T> {
     fn new(
-        cb: SingleWaitableConsumer<
+        waitable_consumer: SingleWaitableConsumer<
             ResizableRingBufferArc<ReallocationFlag<T>>,
             TimeoutResizeWaitStrategy,
         >,
     ) -> SingleWaitableResizingConsumer<T> {
-        SingleWaitableResizingConsumer { cb }
+        SingleWaitableResizingConsumer { waitable_consumer }
     }
 }
 
@@ -2773,10 +2780,10 @@ impl<T> AsPipelineRef for SingleWaitableResizingConsumer<T> {
         TimeoutResizeWaitStrategy,
     >;
     fn as_pipeline_ref(&self) -> &Self::T {
-        &self.cb
+        &self.waitable_consumer
     }
     fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
-        &mut self.cb
+        &mut self.waitable_consumer
     }
 }
 
@@ -2789,10 +2796,10 @@ where
     fn poll(&mut self) {
         // If `cached_available` was manually set during a reallocation, calls to this function
         // shouldn't overwrite it with a lower value.
-        self.cb.sb.cached_available = cmp::max(
-            self.cb.sb.cached_available,
-            self.cb
-                .sb
+        self.waitable_consumer.pollable.cached_available = cmp::max(
+            self.waitable_consumer.pollable.cached_available,
+            self.waitable_consumer
+                .pollable
                 .dependencies
                 .calculate_available(self.current_sequence(), self.capacity()),
         );
@@ -2814,14 +2821,17 @@ where
     fn unwrap_sequence(&mut self, old_buffer_size: usize) {
         let original_sequence = self.current_sequence().value();
 
-        self.cb.sb.sequence.unwrap(old_buffer_size);
+        self.waitable_consumer
+            .pollable
+            .sequence
+            .unwrap(old_buffer_size);
 
         // The cached availability number has been artificially inflated, at this point, by the
         // publisher's sequence number being unwrapped. It needs to be adjusted to compensate for
         // this.
         let unwrapped_sequence = self.current_sequence().value();
         // Use the real availability value, including the reserved slot
-        let current_available = self.cb.len_available();
+        let current_available = self.waitable_consumer.len_available();
         let unwrap_difference = unwrapped_sequence - original_sequence;
         let mut actual_cached_available = current_available.wrapping_sub(unwrap_difference);
         // The current cached availability value may be less than the difference if the consumer's
@@ -2840,7 +2850,9 @@ where
             original_sequence,
             unwrapped_sequence
         );
-        self.cb.sb.set_cached_available(actual_cached_available);
+        self.waitable_consumer
+            .pollable
+            .set_cached_available(actual_cached_available);
     }
 
     /// Check for a reallocation flag in the slot pointed to by `sequence`. If so, adjust our
@@ -2851,12 +2863,13 @@ where
         let old_sequence = self.current_sequence();
         // SAFETY: the caller is responsible for ensuring at least one slot is available before
         // calling this.
-        let flag = unsafe { self.cb.get() };
+        let flag = unsafe { self.waitable_consumer.get() };
         if !flag.is_item() {
             // Switch to newly allocated buffer
             // SAFETY: the flag has established that the buffer was reallocated. If the caller
             // called this correctly, then a happens-before relationship has been established.
-            self.cb.sb.ring_buffer = unsafe { self.cb.sb.ring_buffer.get_next() };
+            self.waitable_consumer.pollable.ring_buffer =
+                unsafe { self.waitable_consumer.pollable.ring_buffer.get_next() };
             // This is necessary to dereference the same slots that the publisher has written to.
             // In other words, downstream consumers must retrace the publisher's steps.
             self.unwrap_sequence(old_buffer_size);
@@ -2882,7 +2895,7 @@ where
             min_available == 1,
             "Batch sizes larger than 1 are currently not supported with resizable buffers."
         );
-        self.cb.wait_for_slots(1)
+        self.waitable_consumer.wait_for_slots(1)
     }
 }
 
@@ -2893,7 +2906,7 @@ where
     unsafe fn release_slots_unchecked(&mut self, n: usize) {
         debug_assert!(n <= self.len_available());
         // SAFETY: delegated to the caller.
-        unsafe { self.cb.release_slots_unchecked(n) };
+        unsafe { self.waitable_consumer.release_slots_unchecked(n) };
     }
 }
 
@@ -2902,7 +2915,7 @@ where
     T: 'static,
 {
     unsafe fn set(&mut self, value: T) {
-        unsafe { self.cb.set(ReallocationFlag::Item(value)) }
+        unsafe { self.waitable_consumer.set(ReallocationFlag::Item(value)) }
     }
 }
 
@@ -2918,7 +2931,7 @@ where
 
     unsafe fn get(&mut self) -> &T {
         // SAFETY: the caller has established that at least one slot is available.
-        let flag = unsafe { self.cb.get() };
+        let flag = unsafe { self.waitable_consumer.get() };
         let reallocation_occurred = !flag.is_item();
         if reallocation_occurred {
             // SAFETY: the caller has established a happens-before relationship with the flag being
@@ -2931,7 +2944,7 @@ where
 
         // Retrieve the value a second time here, to satisfy the borrow checker.
         // SAFETY: same as the first time.
-        let flag = unsafe { self.cb.get() };
+        let flag = unsafe { self.waitable_consumer.get() };
         flag.as_ref().unwrap()
     }
 }
@@ -2947,7 +2960,7 @@ where
         }
         // SAFETY: caller has established that at least one item is available, and this type doesn't
         // allow shared access to slots at its pipeline stage.
-        let flag = unsafe { self.cb.take() };
+        let flag = unsafe { self.waitable_consumer.take() };
         // After calling try_switch_next, it should be guaranteed that flag holds a real value,
         // whether or not the slot in the buffer was indicating that a reallocation occurred.
         flag.unwrap()
@@ -2959,7 +2972,7 @@ impl<T> InsertSingleConsumer for SingleWaitableResizingConsumer<T> {
 
     fn insert_single_consumer(&mut self) -> Self {
         Self {
-            cb: self.cb.insert_single_consumer(),
+            waitable_consumer: self.waitable_consumer.insert_single_consumer(),
         }
     }
 }
@@ -3106,8 +3119,8 @@ where
     /// SinglePublisher object.
     pub fn new(wait_strategy: W) -> SinglePublisher<T, N, W> {
         let ring_buffer = RingBufferArc::new();
-        let sb = SingleWaitablePublisher::new(ring_buffer, wait_strategy);
-        let gp = GenericPublisher::new_common(sb);
+        let swp = SingleWaitablePublisher::new(ring_buffer, wait_strategy);
+        let gp = GenericPublisher::new_common(swp);
         SinglePublisher { p: gp }
     }
 }
@@ -3231,8 +3244,8 @@ where
         );
         let wait_strategy =
             TimeoutResizeWaitStrategy::new_with_timeout(resize_timeout, blocking_wait_strategy);
-        let sb = SingleWaitableResizingPublisher::new(ring_buffer, wait_strategy);
-        let gp = GenericPublisher::new_common(sb);
+        let swrp = SingleWaitableResizingPublisher::new(ring_buffer, wait_strategy);
+        let gp = GenericPublisher::new_common(swrp);
         SingleResizingPublisher { p: gp }
     }
 
