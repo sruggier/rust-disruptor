@@ -2878,13 +2878,13 @@ where
     /// have been published, and will trigger a panic if called multiple times, or after any items
     /// are released.
     fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
-        Self::SingleConsumer::new(SingleWaitableResizingConsumerData::new(
+        Self::SingleConsumer::new(
             self.pollable.insert_single_consumer(),
             self.wait_strategy.clone(),
             ResizingPublisherAvailability {
                 sequence: self.pollable.pollable.sequence.clone_immut(),
             },
-        ))
+        )
     }
 }
 
@@ -3199,77 +3199,12 @@ where
     }
 }
 
-/// Reuses data and constructor from SingleWaitableConsumer.
-type SingleWaitableResizingConsumerData<T> = CommonSingleWaitableConsumer<
+/// Resizing-variant of [`SingleWaitableConsumer`].
+type SingleWaitableResizingConsumer<T> = CommonSingleWaitableConsumer<
     SinglePollableResizingConsumer<T>,
     ResizingPublisherAvailability,
     TimeoutResizeWaitStrategy,
 >;
-
-/// Resizing-variant of [`SingleWaitableConsumer`].
-struct SingleWaitableResizingConsumer<T> {
-    waitable_consumer: SingleWaitableResizingConsumerData<T>,
-}
-
-impl<T> SingleWaitableResizingConsumer<T> {
-    fn new(
-        waitable_consumer: SingleWaitableResizingConsumerData<T>,
-    ) -> SingleWaitableResizingConsumer<T> {
-        SingleWaitableResizingConsumer { waitable_consumer }
-    }
-}
-
-impl<T> AsPipelineRef for SingleWaitableResizingConsumer<T> {
-    type T = SingleWaitableResizingConsumerData<T>;
-    fn as_pipeline_ref(&self) -> &Self::T {
-        &self.waitable_consumer
-    }
-    fn as_pipeline_ref_mut(&mut self) -> &mut Self::T {
-        &mut self.waitable_consumer
-    }
-}
-
-impl<T> DelegateLenAvailable for SingleWaitableResizingConsumer<T> {}
-impl<T> DelegatePollable for SingleWaitableResizingConsumer<T> {}
-impl<T> DelegateReleaseSlots for SingleWaitableResizingConsumer<T> {}
-impl<T> DelegatePipelineAccess for SingleWaitableResizingConsumer<T> {}
-impl<T> DelegatePipelineAccessMut for SingleWaitableResizingConsumer<T> {}
-
-impl<T> WaitForSlots for SingleWaitableResizingConsumer<T>
-where
-    T: 'static,
-{
-    // Unfortunately, the resizing scheme removes the ability to guarantee that more than one slot
-    // is actually available after polling, because the next slot could be the last one that was
-    // published in the current buffer. This is fixable, but for now, just disable support for
-    // larger batch sizes.
-    fn wait_for_slots(&mut self, min_available: usize) {
-        assert!(
-            min_available == 1,
-            "Batch sizes larger than 1 are currently not supported with resizable buffers."
-        );
-        self.waitable_consumer.wait_for_slots(1)
-    }
-}
-
-impl<T> SequenceBarrierTake for SingleWaitableResizingConsumer<T>
-where
-    T: Default + 'static,
-{
-    unsafe fn take(&mut self) -> T {
-        unsafe { self.waitable_consumer.take() }
-    }
-}
-
-impl<T> InsertSingleConsumer for SingleWaitableResizingConsumer<T> {
-    type SingleConsumer = Self;
-
-    fn insert_single_consumer(&mut self) -> Self {
-        Self {
-            waitable_consumer: self.waitable_consumer.insert_single_consumer(),
-        }
-    }
-}
 
 /// Default timeout, in milliseconds, after which publishers will allocate a new ring buffer instead
 /// of continuing to wait. This value was chosen with a strong preference for avoiding false
@@ -3878,7 +3813,6 @@ mod resizing_tests {
                     .shared_consumer
                     .waitable_ref
                     .get_mut()
-                    .waitable_consumer
                     .pollable
                     .release_slots_unchecked(to_skip);
             }
