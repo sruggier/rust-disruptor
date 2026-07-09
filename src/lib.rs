@@ -3509,8 +3509,8 @@ where
 #[cfg(test)]
 mod resizing_tests {
     use crate::{
-        Consumer, ConsumerMut, InsertSingleConsumer, Publisher, SingleResizingPublisher,
-        wrap_boundary,
+        Consumer, ConsumerMut, InsertSingleConsumer, LenAvailable, Publisher,
+        SingleResizingPublisher, wrap_boundary,
     };
 
     #[test_log::test]
@@ -3547,6 +3547,39 @@ mod resizing_tests {
         // Also test wrapping in publisher availability calculation, at some level, by running all
         // three stages in lockstep with each other.
         for _ in 0..wrap_boundary(MAX_CAPACITY) {
+            publisher.publish(next_item_publish);
+            next_item_publish += 1;
+            consumer.consume(|item| {
+                assert!(*item == next_item_consume);
+                next_item_consume += 1;
+            });
+            assert!(next_item_take == final_consumer.take());
+            next_item_take += 1;
+        }
+
+        // Now fill the buffer and do it again, to cover wrapping handling in
+        // calculate_available_publisher_resizing. The two omitted slots are for the reallocation
+        // flag (reserved by SinglePollableResizingPublisher) and the loop below.
+        for _ in 0..MAX_CAPACITY - 2 {
+            publisher.publish(next_item_publish);
+            next_item_publish += 1;
+        }
+        for _ in 0..wrap_boundary(MAX_CAPACITY) {
+            publisher.publish(next_item_publish);
+            next_item_publish += 1;
+
+            // One slot is reserved for the reallocation flag, and the other 63 should now be full.
+            assert!(publisher.p.waitable_ref.get_mut().pollable.len_available() == 0);
+
+            consumer.consume(|item| {
+                assert!(*item == next_item_consume);
+                next_item_consume += 1;
+            });
+            assert!(next_item_take == final_consumer.take());
+            next_item_take += 1;
+        }
+        // Empty the buffer
+        for _ in 0..wrap_boundary(MAX_CAPACITY) - 1 {
             publisher.publish(next_item_publish);
             next_item_publish += 1;
             consumer.consume(|item| {
