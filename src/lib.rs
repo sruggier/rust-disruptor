@@ -2933,7 +2933,7 @@ where
             // set, while the value of the flag establishes that a reallocation has already
             // occurred.
             unsafe {
-                self.try_switch_next();
+                self.try_switch_next_unchecked();
             }
         }
 
@@ -2960,7 +2960,7 @@ where
     unsafe fn take(&mut self) -> T {
         // SAFETY: caller has established that at least one item is available.
         unsafe {
-            self.try_switch_next();
+            self.try_switch_next_unchecked();
         }
         // SAFETY: caller has established that at least one item is available, and this type doesn't
         // allow shared access to slots at its pipeline stage.
@@ -3029,7 +3029,7 @@ where
     /// Check for a reallocation flag in the slot pointed to by `sequence`. If so, adjust our
     /// sequence to match the change that would have happened to the publisher's sequence, and
     /// adjust the cached availability value to compensate for that jump.
-    unsafe fn try_switch_next(&mut self) {
+    unsafe fn try_switch_next_unchecked(&mut self) {
         let old_buffer_size = self.capacity();
         let old_sequence = self.current_sequence();
         // SAFETY: the caller is responsible for ensuring at least one slot is available before
