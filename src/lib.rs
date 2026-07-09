@@ -2927,7 +2927,7 @@ where
     unsafe fn get(&mut self) -> &T {
         // SAFETY: the caller has established that at least one slot is available.
         unsafe {
-            self.try_switch_next_unchecked();
+            self.try_switch_next_unchecked(0);
         }
 
         // Retrieve the value a second time here, to satisfy the borrow checker.
@@ -2953,7 +2953,7 @@ where
     unsafe fn take(&mut self) -> T {
         // SAFETY: caller has established that at least one item is available.
         unsafe {
-            self.try_switch_next_unchecked();
+            self.try_switch_next_unchecked(0);
         }
         // SAFETY: caller has established that at least one item is available, and this type doesn't
         // allow shared access to slots at its pipeline stage.
@@ -3019,13 +3019,24 @@ where
             .set_cached_available(actual_cached_available);
     }
 
-    /// Check for a reallocation flag in the slot pointed to by `sequence`. If so, adjust our
-    /// sequence to match the change that would have happened to the publisher's sequence, and
-    /// adjust the cached availability value to compensate for that jump.
-    unsafe fn try_switch_next_unchecked(&mut self) {
-        // SAFETY: the caller is responsible for ensuring at least one slot is available before
-        // calling this.
-        let flag = unsafe { self.common_ref.get() };
+    /// Check for a reallocation flag in the slot pointed to by `offset`, and transition to the new
+    /// buffer, if applicable.
+    ///
+    /// # Safety
+    ///
+    /// The caller promises that `offset` is less than number of available slots returned by
+    /// [`Self::len_available`], otherwise [undefined behaviour] will result.
+    ///
+    /// [undefined behaviour]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
+    unsafe fn try_switch_next_unchecked(&mut self, offset: usize) {
+        let sequence = self.current_sequence() + offset;
+        // SAFETY: the caller promises that offset points at an available slot.
+        let flag = unsafe {
+            <ResizableRingBufferArc<ReallocationFlag<T>> as UnsafeRingBufferOps>::get(
+                &self.common_ref.ring_buffer,
+                sequence,
+            )
+        };
         let reallocation_occurred = !flag.is_item();
         if reallocation_occurred {
             // SAFETY: established by finding a reallocation flag above.
