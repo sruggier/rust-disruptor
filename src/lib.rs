@@ -3030,25 +3030,43 @@ where
     /// sequence to match the change that would have happened to the publisher's sequence, and
     /// adjust the cached availability value to compensate for that jump.
     unsafe fn try_switch_next_unchecked(&mut self) {
-        let old_buffer_size = self.capacity();
-        let old_sequence = self.current_sequence();
         // SAFETY: the caller is responsible for ensuring at least one slot is available before
         // calling this.
         let flag = unsafe { self.common_ref.get() };
         if !flag.is_item() {
-            // Switch to newly allocated buffer
-            // SAFETY: the flag has established that the buffer was reallocated. If the caller
-            // called this correctly, then a happens-before relationship has been established.
-            self.common_ref.ring_buffer = unsafe { self.common_ref.ring_buffer.get_next() };
-            // This is necessary to dereference the same slots that the publisher has written to.
-            // In other words, downstream consumers must retrace the publisher's steps.
-            self.unwrap_sequence(old_buffer_size);
-            debug!(
-                "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
-                old_sequence,
-                self.current_sequence()
-            );
+            // SAFETY: established by finding a reallocation flag above.
+            unsafe { self.switch_next_unchecked() };
         }
+    }
+
+    /// Handle a transition to a reallocated buffer.
+    ///
+    /// Specifically, this adjusts the sequence to match the change that would have happened to the
+    /// publisher's sequence, and adjusts the cached availability value to compensate for that jump.
+    ///
+    /// # Safety
+    ///
+    /// The caller promises to call this only after finding a ReallocationFlag in one of the
+    /// available slots in the buffer.
+    ///
+    /// This establishes the needed happens-before relationship with the reallocation, which has
+    /// written a pointer to the new buffer into
+    /// [`ResizableRingBufferData::next`], a non-atomic option.
+    #[cold]
+    unsafe fn switch_next_unchecked(&mut self) {
+        let old_buffer_size = self.capacity();
+        let old_sequence = self.current_sequence();
+        // SAFETY: The caller promises that a happens-before relationship has been established
+        // correctly, as described above.
+        self.common_ref.ring_buffer = unsafe { self.common_ref.ring_buffer.get_next() };
+        // This is necessary to dereference the same slots that the publisher has written to.
+        // In other words, downstream consumers must retrace the publisher's steps.
+        self.unwrap_sequence(old_buffer_size);
+        debug!(
+            "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
+            old_sequence,
+            self.current_sequence()
+        );
     }
 }
 
