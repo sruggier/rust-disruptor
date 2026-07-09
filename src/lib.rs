@@ -2926,15 +2926,8 @@ where
 
     unsafe fn get(&mut self) -> &T {
         // SAFETY: the caller has established that at least one slot is available.
-        let flag = unsafe { self.common_ref.get() };
-        let reallocation_occurred = !flag.is_item();
-        if reallocation_occurred {
-            // SAFETY: the caller has established a happens-before relationship with the flag being
-            // set, while the value of the flag establishes that a reallocation has already
-            // occurred.
-            unsafe {
-                self.try_switch_next_unchecked();
-            }
+        unsafe {
+            self.try_switch_next_unchecked();
         }
 
         // Retrieve the value a second time here, to satisfy the borrow checker.
@@ -3033,7 +3026,8 @@ where
         // SAFETY: the caller is responsible for ensuring at least one slot is available before
         // calling this.
         let flag = unsafe { self.common_ref.get() };
-        if !flag.is_item() {
+        let reallocation_occurred = !flag.is_item();
+        if reallocation_occurred {
             // SAFETY: established by finding a reallocation flag above.
             unsafe { self.switch_next_unchecked() };
         }
