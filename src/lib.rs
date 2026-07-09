@@ -3528,7 +3528,6 @@ mod resizing_tests {
         // Test several simultaneously pending reallocations
         const MAX_CAPACITY: usize = CAPACITY * 2 * 2 * 2;
         const ITEMS_IN_FLIGHT: usize = MAX_CAPACITY + 1;
-        #[allow(clippy::explicit_counter_loop)]
         for _ in 0..ITEMS_IN_FLIGHT {
             publisher.publish(next_item_publish);
             next_item_publish += 1;
