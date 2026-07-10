@@ -2845,7 +2845,7 @@ where
     /// have been published, and will trigger a panic if called multiple times, or after any items
     /// are released.
     fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
-        Self::SingleConsumer::new(SingleWaitableConsumer::new(
+        Self::SingleConsumer::new(SingleWaitableResizingConsumerData::new(
             self.pollable.insert_single_consumer(),
             self.wait_strategy.clone(),
             self.pollable.pollable.sequence.clone_immut(),
@@ -3075,26 +3075,25 @@ where
     }
 }
 
+/// Reuses data and constructor from SingleWaitableConsumer.
+type SingleWaitableResizingConsumerData<T> =
+    SingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>;
+
 /// Resizing-variant of [`SingleWaitableConsumer`].
 struct SingleWaitableResizingConsumer<T> {
-    /// Reuse data and constructor from SingleWaitableConsumer
-    waitable_consumer:
-        SingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>,
+    waitable_consumer: SingleWaitableResizingConsumerData<T>,
 }
 
 impl<T> SingleWaitableResizingConsumer<T> {
     fn new(
-        waitable_consumer: SingleWaitableConsumer<
-            SinglePollableResizingConsumer<T>,
-            TimeoutResizeWaitStrategy,
-        >,
+        waitable_consumer: SingleWaitableResizingConsumerData<T>,
     ) -> SingleWaitableResizingConsumer<T> {
         SingleWaitableResizingConsumer { waitable_consumer }
     }
 }
 
 impl<T> AsPipelineRef for SingleWaitableResizingConsumer<T> {
-    type T = SingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>;
+    type T = SingleWaitableResizingConsumerData<T>;
     fn as_pipeline_ref(&self) -> &Self::T {
         &self.waitable_consumer
     }
