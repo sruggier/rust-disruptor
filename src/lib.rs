@@ -859,8 +859,8 @@ pub trait LenAvailable {
 pub trait Pollable: LenAvailable {
     /// Synchronize with dependencies to gain an updated view of how many slots in the buffer are
     /// available for the owner to reference. A call to this method may increase the number of
-    /// elements returned by the [`len_available`](Self::len_available) method, and can be retried
-    /// indefinitely until that happens.
+    /// elements returned by the [`len_available`](LenAvailable::len_available) method, and can be
+    /// retried indefinitely until that happens.
     ///
     /// # Performance
     ///
@@ -887,7 +887,7 @@ trait ReleaseSlots: LenAvailable {
     /// # Safety
     ///
     /// 1. `n` must be less than the number of available slots, as expressed by
-    ///    [`Self::len_available`], or [undefined behaviour] will result.
+    ///    [`LenAvailable::len_available`], or [undefined behaviour] will result.
     ///
     /// [undefined behaviour]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
     unsafe fn release_slots_unchecked(&mut self, n: usize);
@@ -910,7 +910,7 @@ trait AsPipelineRef {
 
     /// Return a reference to the value whose implementation of Pollable should be reused.
     fn as_pipeline_ref(&self) -> &Self::T;
-    /// Mutable variant of [`Self::as_pollable`].
+    /// Mutable variant of [`Self::as_pipeline_ref`].
     fn as_pipeline_ref_mut(&mut self) -> &mut Self::T;
 }
 
