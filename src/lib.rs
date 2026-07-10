@@ -469,16 +469,18 @@ fn calculate_available_consumer(
 ) -> usize {
     let SequenceNumber(mut gating) = gating_sequence;
     let SequenceNumber(waiting) = waiting_sequence;
-    // Handle wrapping. Also, if the publisher has reallocated a larger buffer, it won't wrap until
-    // all consumers have reached the largest buffer, so we can be sure that this code path won't be
-    // hit while the consumer is working with the old buffer size.
+    // Handle wrapping by reversing it.
     if gating < waiting {
         gating += wrap_boundary(buffer_size);
     }
     let available = gating - waiting;
-    // No longer a valid assumption, given the possibility of resizable buffers
-    // assert!(available <= buffer_size, "available: {}, gating: {}, waiting: {}", available, gating, waiting);
-    #[allow(clippy::let_and_return)]
+    debug_assert!(
+        available <= buffer_size,
+        "available: {}, gating: {}, waiting: {}",
+        available,
+        gating,
+        waiting
+    );
     available
 }
 
@@ -794,13 +796,19 @@ impl PollableDependency for PublisherDependencies {
     }
 }
 
+/// Common constructor for consumer dependencies
+trait PollableDependencyFromVec {
+    /// Constructs an instance from the given list of sequences
+    fn from_vec(sequences: Vec<SequenceReader>) -> Self;
+}
+
 // A list of publisher or consumer sequences, used by consumer stages to calculate availability.
 #[derive(Clone, Debug, Default)]
 struct ConsumerDependencies {
     sequences: Vec<SequenceReader>,
 }
 
-impl ConsumerDependencies {
+impl PollableDependencyFromVec for ConsumerDependencies {
     fn from_vec(sequences: Vec<SequenceReader>) -> Self {
         ConsumerDependencies { sequences }
     }
@@ -1750,13 +1758,13 @@ where
 /// Polling-only implementation of a single consumer reference into a pipeline.
 type SinglePollableConsumer<RB> = CommonSinglePipelineRef<RB, ConsumerDependencies>;
 
-impl<RB> InsertSingleConsumer for SinglePollableConsumer<RB>
+impl<RB, D> CommonSinglePipelineRef<RB, D>
 where
     RB: Clone,
+    D: Clone + Default + PollableDependencyFromVec,
 {
-    type SingleConsumer = Self;
-
-    fn insert_single_consumer(&mut self) -> Self {
+    /// Common implementation for consumer types
+    fn common_insert_single_consumer(&mut self) -> Self {
         // Reuse self's dependencies, and populate its replacement below, after constructing the new
         // consumer.
         let new_dependencies = std::mem::take(&mut self.dependencies);
@@ -1769,12 +1777,20 @@ where
 
         // Wait for the new consumer to process the events that would otherwise have been available
         // to self.
-        self.dependencies.sequences.reserve_exact(1);
-        self.dependencies
-            .sequences
-            .push(new_consumer.sequence.clone_immut());
+        self.dependencies = D::from_vec(vec![new_consumer.sequence.clone_immut()]);
         self.cached_available = 0;
         new_consumer
+    }
+}
+
+impl<RB> InsertSingleConsumer for SinglePollableConsumer<RB>
+where
+    RB: Clone,
+{
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self {
+        self.common_insert_single_consumer()
     }
 }
 
@@ -2696,7 +2712,7 @@ where
         let new_consumer = Self::SingleConsumer::new(SinglePollableResizingConsumerData::new(
             self.pollable.ring_buffer.clone(),
             SequenceNumber::default(),
-            ConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
+            ResizingConsumerDependencies::from_vec(vec![self.pollable.sequence.clone_immut()]),
             0,
         ));
 
@@ -2855,16 +2871,87 @@ where
         Self::SingleConsumer::new(SingleWaitableResizingConsumerData::new(
             self.pollable.insert_single_consumer(),
             self.wait_strategy.clone(),
-            PublisherAvailability {
+            ResizingPublisherAvailability {
                 sequence: self.pollable.pollable.sequence.clone_immut(),
             },
         ))
     }
 }
 
+/// Resizing-specific variant of calculate_available_consumer.
+///
+/// The only difference, in practice, is the removal of the assertion comparing the number of
+/// available slots to the known buffer size, because it no longer applies when the publisher can
+/// allocate another buffer and continue emitting items.
+fn calculate_available_consumer_resizing(
+    gating_sequence: SequenceNumber,
+    waiting_sequence: SequenceNumber,
+    buffer_size: usize,
+) -> usize {
+    let SequenceNumber(mut gating) = gating_sequence;
+    let SequenceNumber(waiting) = waiting_sequence;
+
+    // Reallocation related logic requires knowledge of when the reallocation happened, so it's the
+    // caller's responsibility.
+
+    // Handle wrapping. If the publisher has reallocated a larger buffer, it won't wrap until
+    // all consumers have reached the largest buffer, so we can be sure that this code path won't be
+    // hit while the consumer is working with the old buffer size.
+    if gating < waiting {
+        gating += wrap_boundary(buffer_size);
+    }
+
+    gating - waiting
+}
+
+/// Resizing-specific variant of [`ConsumerDependencies`].
+#[derive(Clone, Debug, Default)]
+struct ResizingConsumerDependencies {
+    sequences: Vec<SequenceReader>,
+}
+
+impl PollableDependencyFromVec for ResizingConsumerDependencies {
+    fn from_vec(sequences: Vec<SequenceReader>) -> Self {
+        ResizingConsumerDependencies { sequences }
+    }
+}
+
+impl PollableDependency for ResizingConsumerDependencies {
+    fn calculate_available(&self, waiting_sequence: SequenceNumber, buffer_size: usize) -> usize {
+        calculate_available_list(
+            waiting_sequence,
+            self.sequences.as_slice(),
+            buffer_size,
+            &calculate_available_consumer_resizing,
+        )
+    }
+}
+
+/// Resizing-specific variant of [`PublisherAvailability`]
+#[derive(Clone)]
+struct ResizingPublisherAvailability {
+    sequence: SequenceReader,
+}
+
+impl PollableDependency for ResizingPublisherAvailability {
+    fn calculate_available(&self, waiting_sequence: SequenceNumber, buffer_size: usize) -> usize {
+        calculate_available_consumer_resizing(self.sequence.get(), waiting_sequence, buffer_size)
+    }
+}
+
 /// Defined to reduce boilerplate and simplify repeated use.
-type SinglePollableResizingConsumerData<T> =
-    SinglePollableConsumer<ResizableRingBufferArc<ReallocationFlag<T>>>;
+type SinglePollableResizingConsumerData<T> = CommonSinglePipelineRef<
+    ResizableRingBufferArc<ReallocationFlag<T>>,
+    ResizingConsumerDependencies,
+>;
+
+impl<T> InsertSingleConsumer for SinglePollableResizingConsumerData<T> {
+    type SingleConsumer = Self;
+
+    fn insert_single_consumer(&mut self) -> Self {
+        self.common_insert_single_consumer()
+    }
+}
 
 /// Resizing variant of [`SinglePollableConsumer`].
 struct SinglePollableResizingConsumer<T> {
@@ -3087,7 +3174,7 @@ where
 /// Reuses data and constructor from SingleWaitableConsumer.
 type SingleWaitableResizingConsumerData<T> = CommonSingleWaitableConsumer<
     SinglePollableResizingConsumer<T>,
-    PublisherAvailability,
+    ResizingPublisherAvailability,
     TimeoutResizeWaitStrategy,
 >;
 
