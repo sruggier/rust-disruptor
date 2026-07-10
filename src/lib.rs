@@ -1858,7 +1858,7 @@ where
     W: Clone,
     RB: UnsafeRingBufferOps + Clone,
 {
-    type SingleConsumer = SingleWaitableConsumer<SinglePollableConsumer<RB>, W>;
+    type SingleConsumer = SingleWaitableConsumer<RB, W>;
 
     fn insert_single_consumer(&mut self) -> Self::SingleConsumer {
         Self::SingleConsumer::new(
@@ -1875,20 +1875,20 @@ where
 /// implementation, there can be multiple stages of consumers waiting on each other in turn, reusing
 /// the same elements in the same buffer, which may be more efficient than implementing the same
 /// topology using multiple queues or channels.
-struct SingleWaitableConsumer<P, W> {
+struct CommonSingleWaitableConsumer<P, W> {
     pollable: P,
     /// A reference to the publisher's sequence.
     publisher_availability: PublisherAvailability,
     wait_strategy: W,
 }
 
-impl<P, W> SingleWaitableConsumer<P, W> {
+impl<P, W> CommonSingleWaitableConsumer<P, W> {
     fn new(
         pollable: P,
         wait_strategy: W,
         publisher_sequence: SequenceReader,
-    ) -> SingleWaitableConsumer<P, W> {
-        SingleWaitableConsumer {
+    ) -> CommonSingleWaitableConsumer<P, W> {
+        CommonSingleWaitableConsumer {
             pollable,
             publisher_availability: PublisherAvailability {
                 sequence: publisher_sequence,
@@ -1898,7 +1898,7 @@ impl<P, W> SingleWaitableConsumer<P, W> {
     }
 }
 
-impl<P, W> AsPipelineRef for SingleWaitableConsumer<P, W> {
+impl<P, W> AsPipelineRef for CommonSingleWaitableConsumer<P, W> {
     type T = P;
 
     fn as_pipeline_ref(&self) -> &Self::T {
@@ -1909,13 +1909,13 @@ impl<P, W> AsPipelineRef for SingleWaitableConsumer<P, W> {
     }
 }
 
-impl<P, W> DelegateLenAvailable for SingleWaitableConsumer<P, W> {}
-impl<P, W> DelegateReleaseSlots for SingleWaitableConsumer<P, W> {}
-impl<P, W> DelegatePipelineAccess for SingleWaitableConsumer<P, W> {}
-impl<P, W> DelegatePipelineAccessMut for SingleWaitableConsumer<P, W> {}
-impl<P, W> DelegatePollable for SingleWaitableConsumer<P, W> {}
+impl<P, W> DelegateLenAvailable for CommonSingleWaitableConsumer<P, W> {}
+impl<P, W> DelegateReleaseSlots for CommonSingleWaitableConsumer<P, W> {}
+impl<P, W> DelegatePipelineAccess for CommonSingleWaitableConsumer<P, W> {}
+impl<P, W> DelegatePipelineAccessMut for CommonSingleWaitableConsumer<P, W> {}
+impl<P, W> DelegatePollable for CommonSingleWaitableConsumer<P, W> {}
 
-impl<P, W> WaitForSlots for SingleWaitableConsumer<P, W>
+impl<P, W> WaitForSlots for CommonSingleWaitableConsumer<P, W>
 where
     W: NotificationWaitStrategy,
     P: Pollable + CurrentSequence + PipelineCapacity,
@@ -1933,7 +1933,7 @@ where
     }
 }
 
-impl<P, W> SequenceBarrierTake for SingleWaitableConsumer<P, W>
+impl<P, W> SequenceBarrierTake for CommonSingleWaitableConsumer<P, W>
 where
     P: SequenceBarrierTake,
     W: NotificationWaitStrategy,
@@ -1943,7 +1943,7 @@ where
     }
 }
 
-impl<P, W> InsertSingleConsumer for SingleWaitableConsumer<P, W>
+impl<P, W> InsertSingleConsumer for CommonSingleWaitableConsumer<P, W>
 where
     W: Clone,
     P: InsertSingleConsumer<SingleConsumer = P>,
@@ -1958,6 +1958,9 @@ where
         )
     }
 }
+
+/// Non-resizing specialization of CommonSingleWaitableConsumer.
+type SingleWaitableConsumer<RB, W> = CommonSingleWaitableConsumer<SinglePollableConsumer<RB>, W>;
 
 /// Allows callers to send items through a disruptor pipeline.
 pub trait Publisher<T> {
@@ -3077,7 +3080,7 @@ where
 
 /// Reuses data and constructor from SingleWaitableConsumer.
 type SingleWaitableResizingConsumerData<T> =
-    SingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>;
+    CommonSingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>;
 
 /// Resizing-variant of [`SingleWaitableConsumer`].
 struct SingleWaitableResizingConsumer<T> {
@@ -3271,15 +3274,11 @@ pub struct SinglePublisher<T, const N: usize, W> {
 }
 
 pub struct SharedConsumer<T, const N: usize, W> {
-    c: GenericSharedConsumer<
-        SingleWaitableConsumer<SinglePollableConsumer<RingBufferArc<T, N>>, W>,
-    >,
+    c: GenericSharedConsumer<SingleWaitableConsumer<RingBufferArc<T, N>, W>>,
 }
 
 pub struct SingleConsumer<T, const N: usize, W> {
-    c: GenericSingleConsumer<
-        SingleWaitableConsumer<SinglePollableConsumer<RingBufferArc<T, N>>, W>,
-    >,
+    c: GenericSingleConsumer<SingleWaitableConsumer<RingBufferArc<T, N>, W>>,
 }
 
 impl<T, const N: usize, W> SinglePublisher<T, N, W>
