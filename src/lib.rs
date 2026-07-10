@@ -820,6 +820,7 @@ impl PollableDependency for ConsumerDependencies {
 /// Separate struct definition for the reference to the publisher, which can only refer to a single
 /// SequenceReader, for now. This will be revisited when implementing support for concurrent
 /// publishing.
+#[derive(Clone)]
 struct PublisherAvailability {
     sequence: SequenceReader,
 }
@@ -1865,7 +1866,9 @@ where
             self.pollable.insert_single_consumer(),
             self.wait_strategy.clone(),
             // Our sequence is the publisher's sequence (aka the cursor)
-            self.pollable.sequence.clone_immut(),
+            PublisherAvailability {
+                sequence: self.pollable.sequence.clone_immut(),
+            },
         )
     }
 }
@@ -1875,30 +1878,28 @@ where
 /// implementation, there can be multiple stages of consumers waiting on each other in turn, reusing
 /// the same elements in the same buffer, which may be more efficient than implementing the same
 /// topology using multiple queues or channels.
-struct CommonSingleWaitableConsumer<P, W> {
+struct CommonSingleWaitableConsumer<P, D, W> {
     pollable: P,
     /// A reference to the publisher's sequence.
-    publisher_availability: PublisherAvailability,
+    publisher_availability: D,
     wait_strategy: W,
 }
 
-impl<P, W> CommonSingleWaitableConsumer<P, W> {
+impl<P, D, W> CommonSingleWaitableConsumer<P, D, W> {
     fn new(
         pollable: P,
         wait_strategy: W,
-        publisher_sequence: SequenceReader,
-    ) -> CommonSingleWaitableConsumer<P, W> {
+        publisher_availability: D,
+    ) -> CommonSingleWaitableConsumer<P, D, W> {
         CommonSingleWaitableConsumer {
             pollable,
-            publisher_availability: PublisherAvailability {
-                sequence: publisher_sequence,
-            },
+            publisher_availability,
             wait_strategy,
         }
     }
 }
 
-impl<P, W> AsPipelineRef for CommonSingleWaitableConsumer<P, W> {
+impl<P, D, W> AsPipelineRef for CommonSingleWaitableConsumer<P, D, W> {
     type T = P;
 
     fn as_pipeline_ref(&self) -> &Self::T {
@@ -1909,16 +1910,17 @@ impl<P, W> AsPipelineRef for CommonSingleWaitableConsumer<P, W> {
     }
 }
 
-impl<P, W> DelegateLenAvailable for CommonSingleWaitableConsumer<P, W> {}
-impl<P, W> DelegateReleaseSlots for CommonSingleWaitableConsumer<P, W> {}
-impl<P, W> DelegatePipelineAccess for CommonSingleWaitableConsumer<P, W> {}
-impl<P, W> DelegatePipelineAccessMut for CommonSingleWaitableConsumer<P, W> {}
-impl<P, W> DelegatePollable for CommonSingleWaitableConsumer<P, W> {}
+impl<P, D, W> DelegateLenAvailable for CommonSingleWaitableConsumer<P, D, W> {}
+impl<P, D, W> DelegateReleaseSlots for CommonSingleWaitableConsumer<P, D, W> {}
+impl<P, D, W> DelegatePipelineAccess for CommonSingleWaitableConsumer<P, D, W> {}
+impl<P, D, W> DelegatePipelineAccessMut for CommonSingleWaitableConsumer<P, D, W> {}
+impl<P, D, W> DelegatePollable for CommonSingleWaitableConsumer<P, D, W> {}
 
-impl<P, W> WaitForSlots for CommonSingleWaitableConsumer<P, W>
+impl<P, D, W> WaitForSlots for CommonSingleWaitableConsumer<P, D, W>
 where
-    W: NotificationWaitStrategy,
     P: Pollable + CurrentSequence + PipelineCapacity,
+    D: PollableDependency,
+    W: NotificationWaitStrategy,
 {
     fn wait_for_slots(&mut self, min_available: usize) {
         let current_sequence = self.current_sequence();
@@ -1933,7 +1935,7 @@ where
     }
 }
 
-impl<P, W> SequenceBarrierTake for CommonSingleWaitableConsumer<P, W>
+impl<P, D, W> SequenceBarrierTake for CommonSingleWaitableConsumer<P, D, W>
 where
     P: SequenceBarrierTake,
     W: NotificationWaitStrategy,
@@ -1943,10 +1945,11 @@ where
     }
 }
 
-impl<P, W> InsertSingleConsumer for CommonSingleWaitableConsumer<P, W>
+impl<P, D, W> InsertSingleConsumer for CommonSingleWaitableConsumer<P, D, W>
 where
-    W: Clone,
     P: InsertSingleConsumer<SingleConsumer = P>,
+    D: Clone,
+    W: Clone,
 {
     type SingleConsumer = Self;
 
@@ -1954,13 +1957,14 @@ where
         Self::new(
             self.pollable.insert_single_consumer(),
             self.wait_strategy.clone(),
-            self.publisher_availability.sequence.clone(),
+            self.publisher_availability.clone(),
         )
     }
 }
 
 /// Non-resizing specialization of CommonSingleWaitableConsumer.
-type SingleWaitableConsumer<RB, W> = CommonSingleWaitableConsumer<SinglePollableConsumer<RB>, W>;
+type SingleWaitableConsumer<RB, W> =
+    CommonSingleWaitableConsumer<SinglePollableConsumer<RB>, PublisherAvailability, W>;
 
 /// Allows callers to send items through a disruptor pipeline.
 pub trait Publisher<T> {
@@ -2851,7 +2855,9 @@ where
         Self::SingleConsumer::new(SingleWaitableResizingConsumerData::new(
             self.pollable.insert_single_consumer(),
             self.wait_strategy.clone(),
-            self.pollable.pollable.sequence.clone_immut(),
+            PublisherAvailability {
+                sequence: self.pollable.pollable.sequence.clone_immut(),
+            },
         ))
     }
 }
@@ -3079,8 +3085,11 @@ where
 }
 
 /// Reuses data and constructor from SingleWaitableConsumer.
-type SingleWaitableResizingConsumerData<T> =
-    CommonSingleWaitableConsumer<SinglePollableResizingConsumer<T>, TimeoutResizeWaitStrategy>;
+type SingleWaitableResizingConsumerData<T> = CommonSingleWaitableConsumer<
+    SinglePollableResizingConsumer<T>,
+    PublisherAvailability,
+    TimeoutResizeWaitStrategy,
+>;
 
 /// Resizing-variant of [`SingleWaitableConsumer`].
 struct SingleWaitableResizingConsumer<T> {
