@@ -644,13 +644,23 @@ impl SequenceOwner {
     }
 
     /// Like unwrap, but for standalone SequenceNumber values.
+    ///
+    /// # See also
+    /// * [`SinglePollableResizingPublisher::reallocate`]
+    /// * [`SinglePollableResizingConsumer::poll`]
     fn unwrap_number(sn: SequenceNumber, buffer_size: usize) -> SequenceNumber {
         let SequenceNumber(value) = sn;
         assert!(value < wrap_boundary(buffer_size));
-        // We know the sequence value is in the interval [0, 4*buffer_size). This expression
-        // ensures that it will be within [4*buffer_size, 5*buffer_size) instead.
-        let buffer_size_mask = buffer_size - 1;
-        let new_value = (value & buffer_size_mask) + wrap_boundary(buffer_size);
+        // If the value is within 0..buffer_size, unwrap it to be between
+        // 4*buffer_size..5*buffer_size instead, otherwise leave it as-is. Importantly, this will
+        // only be triggered once if the publisher reallocates multiple buffers before consumers
+        // have transitioned to the current buffer, so it becomes possible to account for it
+        // precisely in calculate_available_consumer_resizing with a very.
+        let new_value = if value < buffer_size {
+            value + wrap_boundary(buffer_size)
+        } else {
+            value
+        };
         SequenceNumber(new_value)
     }
 }
@@ -2975,27 +2985,45 @@ impl<T> AsPipelineRef for SinglePollableResizingConsumer<T> {
     }
 }
 
-impl<T> LenAvailable for SinglePollableResizingConsumer<T> {
-    fn len_available(&self) -> usize {
-        // For now, until smarter transition handling is implemented, force callers to access and
-        // release slots one at a time.
-        cmp::min(self.common_ref.len_available(), 1)
-    }
-}
+impl<T> DelegateLenAvailable for SinglePollableResizingConsumer<T> {}
 
 impl<T> Pollable for SinglePollableResizingConsumer<T>
 where
     T: 'static,
 {
     fn poll(&mut self) {
-        // If `cached_available` was manually set during a reallocation, calls to this function
-        // shouldn't overwrite it with a lower value.
-        self.common_ref.cached_available = cmp::max(
-            self.common_ref.cached_available,
-            self.common_ref
-                .dependencies
-                .calculate_available(self.current_sequence(), self.capacity()),
-        );
+        self.common_ref.poll();
+
+        let current_sequence = self.current_sequence();
+        let buffer_size = self.capacity();
+        let mut available = self.len_available();
+
+        // If there are more available slots than the current buffer size, the publisher has
+        // allocated a larger buffer.
+        //
+        // If the current sequence number is less than the current buffer size, then the publisher
+        // _may_ have reallocated while its sequence was less than buffer size, resulting in an
+        // adjustment of its sequence. In that case, the calculated number of available slots will
+        // be inflated by the size of the buffer.
+        //
+        // To fix that, this loop searches for a reallocation flag in the slots in
+        // current_sequence..buffer_size, and adjust the calculated availability as applicable. See
+        // the availability_across_reallocation test for more detail about this.
+        if available > buffer_size && current_sequence.value() < buffer_size {
+            for i in current_sequence.value()..buffer_size {
+                // SAFETY: available > buffer_size implies that a reallocation happened, and that
+                // any slots from current_sequence to the one containing the availability flag are
+                // available.
+                if unsafe { self.is_flag_unchecked(SequenceNumber(i)) } {
+                    available -= wrap_boundary(buffer_size);
+                    break;
+                }
+            }
+
+            // Setting this also ensures that the above search won't need to be repeated, unless poll is
+            // unecessarily called again.
+            self.common_ref.set_cached_available(available);
+        }
     }
 }
 
@@ -3074,70 +3102,33 @@ impl<T> SinglePollableResizingConsumer<T>
 where
     T: 'static,
 {
-    /// Alters this barrier's sequence to follow the same path that the publisher's took when it
-    /// allocated a new buffer. This is necessary when following buffer reallocations to ensure
-    /// that downstream consumers take from the same slots that the publisher has written to.
-    ///
-    /// # Arguments
-    ///
-    /// * old_buffer_size - The ring buffer's size before the reallocation occurred.
-    ///
-    fn unwrap_sequence(&mut self, old_buffer_size: usize) {
-        let original_sequence = self.current_sequence().value();
-
-        self.common_ref.sequence.unwrap(old_buffer_size);
-
-        // The cached availability number has been artificially inflated, at this point, by the
-        // publisher's sequence number being unwrapped. It needs to be adjusted to compensate for
-        // this.
-        let unwrapped_sequence = self.current_sequence().value();
-        // Use the real availability value, including the reserved slot
-        let current_available = self.common_ref.len_available();
-        let unwrap_difference = unwrapped_sequence - original_sequence;
-        let mut actual_cached_available = current_available.wrapping_sub(unwrap_difference);
-        // The current cached availability value may be less than the difference if the consumer's
-        // sequence has wrapped since it last re-checked availability: the consumer's sequence value
-        // is closer to the publisher's before the wrapping occurs, which results in a less inflated
-        // availability value. In this case, the value is reset to 1, which forces the actual number
-        // of available slots to be refreshed before the next item is processed.
-        if current_available <= unwrap_difference {
-            actual_cached_available = 1;
-        }
-        debug!(
-            "Adjusting available by {}, from {} to {}. Original sequence: {}, unwrapped: {}",
-            unwrap_difference,
-            self.len_available(),
-            actual_cached_available,
-            original_sequence,
-            unwrapped_sequence
-        );
-        self.common_ref
-            .set_cached_available(actual_cached_available);
-    }
-
     /// Check for a reallocation flag in the slot pointed to by `offset`, and transition to the new
     /// buffer, if applicable.
     ///
     /// # Safety
     ///
     /// The caller promises that `offset` is less than number of available slots returned by
-    /// [`Self::len_available`], otherwise [undefined behaviour] will result.
+    /// [`len_available`](LenAvailable::len_available), otherwise [undefined behaviour] will result.
     ///
     /// [undefined behaviour]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
     unsafe fn try_switch_next_unchecked(&mut self, offset: usize) {
         let sequence = self.current_sequence() + offset;
         // SAFETY: the caller promises that offset points at an available slot.
+        let reallocation_occurred = unsafe { self.is_flag_unchecked(sequence) };
+        if reallocation_occurred {
+            // SAFETY: established by finding a reallocation flag above.
+            unsafe { self.switch_next_unchecked() };
+        }
+    }
+
+    unsafe fn is_flag_unchecked(&self, sequence: SequenceNumber) -> bool {
         let flag = unsafe {
             <ResizableRingBufferArc<ReallocationFlag<T>> as UnsafeRingBufferOps>::get(
                 &self.common_ref.ring_buffer,
                 sequence,
             )
         };
-        let reallocation_occurred = !flag.is_item();
-        if reallocation_occurred {
-            // SAFETY: established by finding a reallocation flag above.
-            unsafe { self.switch_next_unchecked() };
-        }
+        !flag.is_item()
     }
 
     /// Handle a transition to a reallocated buffer.
@@ -3162,7 +3153,7 @@ where
         self.common_ref.ring_buffer = unsafe { self.common_ref.ring_buffer.get_next() };
         // This is necessary to dereference the same slots that the publisher has written to.
         // In other words, downstream consumers must retrace the publisher's steps.
-        self.unwrap_sequence(old_buffer_size);
+        self.common_ref.sequence.unwrap(old_buffer_size);
         debug!(
             "Following switch, sequence: {:?}, unwrapped_sequence: {:?}",
             old_sequence,
@@ -3602,8 +3593,11 @@ where
 
 #[cfg(test)]
 mod resizing_tests {
+    use std::cmp::max;
+
     use crate::{
-        Consumer, ConsumerMut, InsertSingleConsumer, LenAvailable, Publisher,
+        Consumer, ConsumerMut, DEFAULT_MAX_SPIN_TRIES_CONSUMER, DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+        InsertSingleConsumer, LenAvailable, Pollable, Publisher, SingleResizingConsumer,
         SingleResizingPublisher, wrap_boundary,
     };
 
@@ -3681,6 +3675,107 @@ mod resizing_tests {
             });
             assert!(next_item_take == final_consumer.take());
             next_item_take += 1;
+        }
+    }
+
+    fn assert_publisher_availability<T>(
+        publisher: &mut SingleResizingPublisher<T>,
+        expected_availability: usize,
+    ) where
+        T: 'static,
+    {
+        publisher.p.waitable_ref.get_mut().poll();
+        assert!(publisher.p.waitable_ref.get_mut().len_available() == expected_availability);
+    }
+
+    fn assert_consumer_availability<T>(
+        consumer: &mut SingleResizingConsumer<T>,
+        expected_availability: usize,
+    ) where
+        T: 'static,
+    {
+        consumer.c.shared_consumer.waitable_ref.get_mut().poll();
+        assert!(
+            consumer
+                .c
+                .shared_consumer
+                .waitable_ref
+                .get_mut()
+                .len_available()
+                == expected_availability
+        );
+    }
+
+    #[test_log::test]
+    fn availability_across_reallocation() {
+        const CAPACITY: usize = 8;
+
+        // Run the same test for every possible starting SequenceNumber value, to catch any bugs
+        // that depend on interactions with wrapping.
+        for starting_offset in 0..wrap_boundary(CAPACITY) {
+            debug!("Running availability_across_reallocation test with offset {starting_offset}");
+            let mut publisher = SingleResizingPublisher::new_resize_after_timeout_with_params(
+                CAPACITY,
+                10,
+                DEFAULT_MAX_SPIN_TRIES_CONSUMER,
+                DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+            );
+            let mut consumer = publisher.insert_single_consumer();
+
+            let mut next_item_publish = 1;
+            let mut next_item_consume = 1;
+
+            for _ in 0..starting_offset {
+                publisher.publish(next_item_publish);
+                next_item_publish += 1;
+
+                publisher.p.waitable_ref.get_mut().poll();
+                assert!(publisher.p.waitable_ref.get_mut().len_available() == CAPACITY - 2);
+
+                assert!(next_item_consume == consumer.take());
+                next_item_consume += 1;
+            }
+
+            // Test several simultaneously pending reallocations
+            const MAX_CAPACITY: usize = 2 * 2 * 2 * CAPACITY;
+            // Just enough to force allocation of the largest buffer
+            const ITEMS_IN_FLIGHT: usize = CAPACITY + 2 * CAPACITY + 4 * CAPACITY - 3 + 1;
+
+            // Force several reallocations
+            for _ in 0..ITEMS_IN_FLIGHT {
+                publisher.publish(next_item_publish);
+                next_item_publish += 1;
+
+                // availability calculation should be accurate throughout, in spite of the publisher
+                // possibly adjusting its sequence.
+                assert_consumer_availability(&mut consumer, next_item_publish - next_item_consume);
+            }
+
+            // Run in lockstep while processing reallocations and testing availiability
+            // calculations.
+
+            // This is the total size of all of the buffers, minus pending slots, minus a slot
+            // reserved for the flag in each of the four buffers.
+            let mut expected_publisher_availability: usize =
+                MAX_CAPACITY + 4 * CAPACITY + 2 * CAPACITY + CAPACITY - ITEMS_IN_FLIGHT - 4;
+            // Run until the consumer catches up, as well as until some wrapping occurs
+            for _ in 0..ITEMS_IN_FLIGHT + wrap_boundary(MAX_CAPACITY) {
+                assert_publisher_availability(&mut publisher, expected_publisher_availability);
+
+                publisher.publish(next_item_publish);
+                next_item_publish += 1;
+                // The number of available slots will drop until the consumer catches up, at which
+                // point it'll stabilize at the expression below.
+                expected_publisher_availability = max(
+                    expected_publisher_availability - 1,
+                    MAX_CAPACITY - ITEMS_IN_FLIGHT - 1,
+                );
+
+                assert!(next_item_consume == consumer.take());
+                next_item_consume += 1;
+                // test availability calculations throughout
+                assert_consumer_availability(&mut consumer, next_item_publish - next_item_consume);
+            }
         }
     }
 }
