@@ -2966,11 +2966,16 @@ impl<T> InsertSingleConsumer for SinglePollableResizingConsumerData<T> {
 /// Resizing variant of [`SinglePollableConsumer`].
 struct SinglePollableResizingConsumer<T> {
     common_ref: SinglePollableResizingConsumerData<T>,
+    /// Tracks which slots have been checked for a reallocation flag.
+    next_flag_check: usize,
 }
 
 impl<T> SinglePollableResizingConsumer<T> {
     fn new(common_ref: SinglePollableResizingConsumerData<T>) -> Self {
-        Self { common_ref }
+        Self {
+            common_ref,
+            next_flag_check: 0,
+        }
     }
 }
 
@@ -3010,13 +3015,17 @@ where
         // current_sequence..buffer_size, and adjust the calculated availability as applicable. See
         // the availability_across_reallocation test for more detail about this.
         if available > buffer_size && current_sequence.value() < buffer_size {
-            for i in current_sequence.value()..buffer_size {
+            for i in current_sequence.value() + self.next_flag_check..buffer_size {
                 // SAFETY: available > buffer_size implies that a reallocation happened, and that
                 // any slots from current_sequence to the one containing the availability flag are
                 // available.
                 if unsafe { self.is_flag_unchecked(SequenceNumber(i)) } {
                     available -= wrap_boundary(buffer_size);
                     break;
+                    // Don't increment self.next_flag_check over the flag before
+                    // self.current_sequence() catches up, otherwise the transition will be skipped.
+                } else {
+                    self.next_flag_check += 1
                 }
             }
 
@@ -3032,9 +3041,27 @@ where
     T: 'static,
 {
     unsafe fn release_slots_unchecked(&mut self, n: usize) {
-        debug_assert!(n <= self.len_available());
+        let mut to_release = n;
+        while self.next_flag_check < n {
+            // SAFETY: caller has promised that n slots are available, and this loop has established
+            // that self.next_flag_check is less than n.
+            let switched = unsafe { self.try_switch_next_unchecked(self.next_flag_check) };
+            if switched {
+                // switch_next_unchecked has released the slots corresponding to the old buffer
+                to_release -= self.next_flag_check;
+                // the corresponding slot in the new buffer isn't going to have another reallocation
+                // flag in it, so skip checking it.
+                self.next_flag_check = 1;
+            } else {
+                self.next_flag_check += 1;
+            }
+        }
+
+        debug_assert!(to_release <= self.len_available());
         // SAFETY: delegated to the caller.
-        unsafe { self.common_ref.release_slots_unchecked(n) };
+        unsafe { self.common_ref.release_slots_unchecked(to_release) };
+
+        self.next_flag_check -= to_release;
     }
 }
 
@@ -3049,14 +3076,14 @@ where
     // that occurred at the time of reallocation.
 
     unsafe fn get(&mut self) -> &T {
-        // SAFETY: the caller has established that at least one slot is available.
-        unsafe {
-            self.try_switch_next_unchecked(0);
+        if self.next_flag_check < 1 {
+            // SAFETY: the caller has promised that at least one slot is available.
+            unsafe { self.try_switch_next_unchecked(0) };
+            self.next_flag_check += 1;
         }
-
-        // Retrieve the value a second time here, to satisfy the borrow checker.
-        // SAFETY: same as the first time.
+        // SAFETY: the caller has promised that at least one slot is available.
         let flag = unsafe { self.common_ref.get() };
+        // The call to try_switch_next_unchecked has established that this holds an item.
         flag.as_ref().unwrap()
     }
 }
@@ -3075,10 +3102,12 @@ where
     T: Default + 'static,
 {
     unsafe fn take(&mut self) -> T {
-        // SAFETY: caller has established that at least one item is available.
-        unsafe {
-            self.try_switch_next_unchecked(0);
+        if self.next_flag_check < 1 {
+            // SAFETY: the caller has promised that at least one slot is available.
+            unsafe { self.try_switch_next_unchecked(0) };
+            self.next_flag_check += 1;
         }
+
         // SAFETY: caller has established that at least one item is available, and this type doesn't
         // allow shared access to slots at its pipeline stage.
         let flag = unsafe { self.common_ref.take() };
@@ -3094,6 +3123,7 @@ impl<T> InsertSingleConsumer for SinglePollableResizingConsumer<T> {
     fn insert_single_consumer(&mut self) -> Self {
         Self {
             common_ref: self.common_ref.insert_single_consumer(),
+            next_flag_check: self.next_flag_check,
         }
     }
 }
@@ -3111,14 +3141,15 @@ where
     /// [`len_available`](LenAvailable::len_available), otherwise [undefined behaviour] will result.
     ///
     /// [undefined behaviour]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    unsafe fn try_switch_next_unchecked(&mut self, offset: usize) {
+    unsafe fn try_switch_next_unchecked(&mut self, offset: usize) -> bool {
         let sequence = self.current_sequence() + offset;
         // SAFETY: the caller promises that offset points at an available slot.
         let reallocation_occurred = unsafe { self.is_flag_unchecked(sequence) };
         if reallocation_occurred {
             // SAFETY: established by finding a reallocation flag above.
-            unsafe { self.switch_next_unchecked() };
+            unsafe { self.switch_next_unchecked(offset) };
         }
+        reallocation_occurred
     }
 
     unsafe fn is_flag_unchecked(&self, sequence: SequenceNumber) -> bool {
@@ -3138,18 +3169,24 @@ where
     ///
     /// # Safety
     ///
-    /// The caller promises to call this only after finding a ReallocationFlag in one of the
-    /// available slots in the buffer.
+    /// 1. The caller promises to call this only after finding a ReallocationFlag in one of the
+    ///    available slots in the buffer.
     ///
     /// This establishes the needed happens-before relationship with the reallocation, which has
     /// written a pointer to the new buffer into
     /// [`ResizableRingBufferData::next`], a non-atomic option.
+    ///
+    /// 2. `flag_offset` must point to the slot that contained the flag, so the sequence can be
+    ///    correctly adjusted in the same way the publisher did while reallocating.
     #[cold]
-    unsafe fn switch_next_unchecked(&mut self) {
+    unsafe fn switch_next_unchecked(&mut self, flag_offset: usize) {
+        // SAFETY: this slot must be available, or the caller has already violated an invariant.
+        unsafe { self.common_ref.release_slots_unchecked(flag_offset) };
+
         let old_buffer_size = self.capacity();
         let old_sequence = self.current_sequence();
         // SAFETY: The caller promises that a happens-before relationship has been established
-        // correctly, as described above.
+        // correctly, as described in invariant 1.
         self.common_ref.ring_buffer = unsafe { self.common_ref.ring_buffer.get_next() };
         // This is necessary to dereference the same slots that the publisher has written to.
         // In other words, downstream consumers must retrace the publisher's steps.
@@ -3597,8 +3634,8 @@ mod resizing_tests {
 
     use crate::{
         Consumer, ConsumerMut, DEFAULT_MAX_SPIN_TRIES_CONSUMER, DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
-        InsertSingleConsumer, LenAvailable, Pollable, Publisher, SingleResizingConsumer,
-        SingleResizingPublisher, wrap_boundary,
+        InsertSingleConsumer, LenAvailable, Pollable, Publisher, ReleaseSlots,
+        SingleResizingConsumer, SingleResizingPublisher, wrap_boundary,
     };
 
     #[test_log::test]
@@ -3706,6 +3743,24 @@ mod resizing_tests {
         );
     }
 
+    fn assert_consumer_availability_before_after_poll<T>(
+        consumer: &mut SingleResizingConsumer<T>,
+        expected_availability: usize,
+    ) where
+        T: 'static,
+    {
+        assert!(
+            consumer
+                .c
+                .shared_consumer
+                .waitable_ref
+                .get_mut()
+                .len_available()
+                == expected_availability
+        );
+        assert_consumer_availability(consumer, expected_availability);
+    }
+
     #[test_log::test]
     fn availability_across_reallocation() {
         const CAPACITY: usize = 8;
@@ -3775,6 +3830,72 @@ mod resizing_tests {
                 next_item_consume += 1;
                 // test availability calculations throughout
                 assert_consumer_availability(&mut consumer, next_item_publish - next_item_consume);
+            }
+        }
+    }
+
+    #[test_log::test]
+    fn release_without_access() {
+        const CAPACITY: usize = 8;
+
+        // Run the same test for every possible starting SequenceNumber value, to catch any bugs
+        // that depend on interactions with wrapping.
+        for starting_offset in 0..wrap_boundary(CAPACITY) {
+            debug!("Running with offset {starting_offset}");
+            let mut publisher = SingleResizingPublisher::new_resize_after_timeout_with_params(
+                CAPACITY,
+                10,
+                DEFAULT_MAX_SPIN_TRIES_CONSUMER,
+                DEFAULT_MAX_SPIN_TRIES_PUBLISHER,
+            );
+            let mut consumer = publisher.insert_single_consumer();
+
+            let mut next_item_publish = 1;
+            let mut next_item_consume = 1;
+
+            const ITEMS_IN_FLIGHT: usize = CAPACITY + 2 * CAPACITY - 1;
+
+            for _ in 0..starting_offset {
+                publisher.publish(next_item_publish);
+                next_item_publish += 1;
+                assert!(next_item_consume == consumer.take());
+                next_item_consume += 1;
+            }
+
+            for _ in 0..ITEMS_IN_FLIGHT {
+                publisher.publish(next_item_publish);
+                next_item_publish += 1;
+            }
+
+            assert_consumer_availability(&mut consumer, ITEMS_IN_FLIGHT);
+
+            // Release enough slots to skip over the resize, without accessing them.
+            let to_skip = CAPACITY + 1;
+            // SAFETY: we know this is less than what's really available (ITEMS_IN_FLIGHT)
+            unsafe {
+                consumer
+                    .c
+                    .shared_consumer
+                    .waitable_ref
+                    .get_mut()
+                    .waitable_consumer
+                    .pollable
+                    .release_slots_unchecked(to_skip);
+            }
+            next_item_consume += to_skip;
+            assert_consumer_availability_before_after_poll(
+                &mut consumer,
+                ITEMS_IN_FLIGHT - to_skip,
+            );
+
+            // Confirm the transition was followed correctly by checking the remaining items.
+            for i in 1..ITEMS_IN_FLIGHT - to_skip + 1 {
+                assert!(next_item_consume == consumer.take());
+                next_item_consume += 1;
+                assert_consumer_availability_before_after_poll(
+                    &mut consumer,
+                    ITEMS_IN_FLIGHT - to_skip - i,
+                );
             }
         }
     }
